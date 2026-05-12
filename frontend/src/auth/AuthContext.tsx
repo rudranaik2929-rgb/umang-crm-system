@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { View, Text, Pressable } from 'react-native';
 import { api, setToken } from '../lib/api';
 
 export interface User {

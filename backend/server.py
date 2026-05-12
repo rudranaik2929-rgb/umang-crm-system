@@ -196,7 +196,7 @@ async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
     return User(**updated).model_dump(mode="json")
 
 # ---- Activity Logger ----
-def log_activity(actor, type_, text, lead_id=None):
+def log_activity(actor, type_, text, lead_id=None): 
     user_id_to_log = None
     actor_name = "System"
     
