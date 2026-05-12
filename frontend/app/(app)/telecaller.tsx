@@ -29,40 +29,18 @@ export default function Telecaller() {
   useEffect(() => { load(); }, [load]);
 
   const filtered = leads.filter((l) => {
-    if (l.status === 'negative') return filter === 'negative';
-    if (filter === 'queue') return QUEUE_STAGES.includes(l.stage);
-    if (filter === 'all') return true;
-    if (filter === 'negative') return l.status === 'negative';
-    return l.stage === filter;
+    return l.status === 'active' && QUEUE_STAGES.includes(l.stage);
   });
 
   return (
     <View style={{ flex: 1 }}>
       <TopBar title="Telecaller Workspace" subtitle="Incoming enquiries & follow-ups" />
       <ScrollView contentContainerStyle={styles.content}>
-        {/* Filter chips */}
-        <View style={styles.filters}>
-          {[
-            { key: 'queue', label: 'My Queue' },
-            { key: 'all', label: 'All' },
-            { key: 'positive', label: 'Positive' },
-            { key: 'negative', label: 'Negative' },
-          ].map((f) => (
-            <Pressable
-              key={f.key}
-              testID={`telecaller-filter-${f.key}`}
-              onPress={() => setFilter(f.key)}
-              style={[styles.chip, {
-                borderColor: filter === f.key ? colors.primary : colors.border,
-                backgroundColor: filter === f.key ? colors.primary + '20' : colors.surface,
-              }]}
-            >
-              <Text style={{
-                fontSize: 12, fontWeight: '600',
-                color: filter === f.key ? colors.primary : colors.textSecondary,
-              }}>{f.label}</Text>
-            </Pressable>
-          ))}
+        {/* Queue instructions */}
+        <View style={{ marginBottom: 16 }}>
+          <Text style={{ color: colors.textSecondary, fontSize: 13 }}>
+            Showing only <Text style={{ fontWeight: '700', color: colors.primary }}>New Enquiries</Text>. Once you take an action, the lead will move to the next department.
+          </Text>
         </View>
 
         {loading ? (
