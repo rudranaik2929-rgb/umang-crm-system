@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
@@ -19,6 +19,19 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged }: Props) 
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const subAnim = React.useRef(new Animated.Value(0)).current;
+
+  const selectCategory = (cat: string) => {
+    if (activeCategory === cat) {
+      setActiveCategory(null);
+      Animated.timing(subAnim, { toValue: 0, duration: 200, useNativeDriver: true }).start();
+    } else {
+      setActiveCategory(cat);
+      subAnim.setValue(0);
+      Animated.spring(subAnim, { toValue: 1, tension: 50, friction: 8, useNativeDriver: true }).start();
+    }
+  };
 
   const load = useCallback(async () => {
     if (!leadId) return;
@@ -126,75 +139,107 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged }: Props) 
                   <DetailRow label="Notes" value={lead.notes} colors={colors} />
                 </View>
 
-                {/* Quick actions */}
-                <View style={[styles.block, { borderColor: colors.border }]}>
-                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>QUICK ACTIONS</Text>
-                  <View style={styles.actionsGrid}>
-                    <ActionBtn
-                      label="Mark Positive"
-                      icon="thumbs-up-outline"
+                {/* Quick actions Refactored */}
+                <View style={[styles.block, { borderColor: colors.border, overflow: 'hidden' }]}>
+                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>LEAD UPDATE</Text>
+                  
+                  <View style={styles.categoryRow}>
+                    <CategoryBtn 
+                      label="Positive" 
+                      icon="heart-outline" 
+                      active={activeCategory === 'positive'} 
+                      onPress={() => selectCategory('positive')}
                       color={colors.positive}
-                      onPress={() => updateLead({ stage: 'positive', status: 'active' }, 'positive')}
-                      busy={busy === 'positive'}
-                      testID="action-positive"
                     />
-                    <ActionBtn
-                      label="Mark Negative"
-                      icon="thumbs-down-outline"
+                    <CategoryBtn 
+                      label="Visited" 
+                      icon="location-outline" 
+                      active={activeCategory === 'visited'} 
+                      onPress={() => selectCategory('visited')}
+                      color={colors.info}
+                    />
+                    <CategoryBtn 
+                      label="Not Interested" 
+                      icon="close-circle-outline" 
+                      active={activeCategory === 'negative'} 
+                      onPress={() => selectCategory('negative')}
                       color={colors.negative}
-                      onPress={() => updateLead({ status: 'negative' }, 'negative')}
-                      busy={busy === 'negative'}
-                      testID="action-negative"
-                    />
-                    <ActionBtn
-                      label="Follow-up"
-                      icon="time-outline"
-                      color={colors.warning}
-                      onPress={() => updateLead({ stage: 'contacted' }, 'followup')}
-                      busy={busy === 'followup'}
-                      testID="action-followup"
-                    />
-                    <ActionBtn
-                      label="Schedule Site Visit"
-                      icon="location-outline"
-                      color={colors.info}
-                      onPress={scheduleVisit}
-                      busy={busy === 'site_visit'}
-                      testID="action-site-visit"
-                    />
-                    <ActionBtn
-                      label="Move Stage → Booking"
-                      icon="document-text-outline"
-                      color={colors.primary}
-                      onPress={() => updateLead({ stage: 'booking' }, 'booking')}
-                      busy={busy === 'booking'}
-                      testID="action-booking"
-                    />
-                    <ActionBtn
-                      label="Move Stage → Loan"
-                      icon="business-outline"
-                      color={'#7C3AED'}
-                      onPress={() => updateLead({ stage: 'loan' }, 'loan')}
-                      busy={busy === 'loan'}
-                      testID="action-loan"
-                    />
-                    <ActionBtn
-                      label="Advance Stage"
-                      icon="arrow-forward-circle-outline"
-                      color={colors.accent}
-                      onPress={advance}
-                      busy={busy === 'advance'}
-                      testID="action-advance"
-                    />
-                    <ActionBtn
-                      label="Reactivate"
-                      icon="refresh-outline"
-                      color={colors.info}
-                      onPress={() => updateLead({ status: 'active' }, 'reactivate')}
-                      busy={busy === 'reactivate'}
-                      testID="action-reactivate"
                     />
                   </View>
+
+                  {activeCategory && (
+                    <Animated.View style={[styles.subOptions, { 
+                      opacity: subAnim,
+                      transform: [{ translateY: subAnim.interpolate({ inputRange: [0, 1], outputRange: [20, 0] }) }] 
+                    }]}>
+                      <View style={[styles.subDivider, { backgroundColor: colors.border }]} />
+                      
+                      {activeCategory === 'positive' && (
+                        <View style={styles.subGrid}>
+                          <SubActionBtn 
+                            label="Cold Lead" 
+                            sub="Interested but not urgent"
+                            onPress={() => updateLead({ stage: 'contacted' }, 'cold')}
+                            busy={busy === 'cold'}
+                            color={colors.positive}
+                          />
+                          <SubActionBtn 
+                            label="Hot Lead" 
+                            sub="Active with Urgent requirement"
+                            onPress={() => updateLead({ stage: 'positive' }, 'hot')}
+                            busy={busy === 'hot'}
+                            color="#E11D48"
+                          />
+                        </View>
+                      )}
+
+                      {activeCategory === 'negative' && (
+                        <View style={styles.subGrid}>
+                          <SubActionBtn 
+                            label="Low Budget" 
+                            onPress={() => updateLead({ status: 'negative' }, 'low_budget')}
+                            busy={busy === 'low_budget'}
+                            color={colors.negative}
+                          />
+                          <SubActionBtn 
+                            label="Other Location" 
+                            onPress={() => updateLead({ status: 'negative' }, 'other_loc')}
+                            busy={busy === 'other_loc'}
+                            color={colors.negative}
+                          />
+                          <SubActionBtn 
+                            label="Already Purchased" 
+                            onPress={() => updateLead({ status: 'negative' }, 'purchased')}
+                            busy={busy === 'purchased'}
+                            color={colors.negative}
+                          />
+                        </View>
+                      )}
+
+                      {activeCategory === 'visited' && (
+                        <View style={styles.subGrid}>
+                          <SubActionBtn 
+                            label="Site Visit Done" 
+                            onPress={() => updateLead({ stage: 'site_visit' }, 'visit_done')}
+                            busy={busy === 'visit_done'}
+                            color={colors.info}
+                          />
+                          <SubActionBtn 
+                            label="Ready for Booking" 
+                            onPress={() => updateLead({ stage: 'booking' }, 'ready_booking')}
+                            busy={busy === 'ready_booking'}
+                            color={colors.primary}
+                          />
+                          <SubActionBtn 
+                            label="Need Loan Info" 
+                            onPress={() => updateLead({ stage: 'loan' }, 'need_loan')}
+                            busy={busy === 'need_loan'}
+                            color="#7C3AED"
+                          />
+                        </View>
+                      )}
+                    </Animated.View>
+                  )}
                 </View>
 
                 {/* Add note */}
@@ -263,6 +308,40 @@ function DetailRow({ label, value, colors }: any) {
   );
 }
 
+function CategoryBtn({ label, icon, active, onPress, color }: any) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.catBtn,
+        {
+          borderColor: active ? color : 'transparent',
+          backgroundColor: active ? color + '15' : '#f8fafc10',
+        }
+      ]}
+    >
+      <Ionicons name={icon} size={18} color={active ? color : '#94a3b8'} />
+      <Text style={[styles.catLabel, { color: active ? color : '#94a3b8' }]}>{label}</Text>
+    </Pressable>
+  );
+}
+
+function SubActionBtn({ label, sub, onPress, busy, color }: any) {
+  return (
+    <Pressable
+      onPress={onPress}
+      disabled={busy}
+      style={[styles.subBtn, { backgroundColor: color + '10', borderColor: color + '30' }]}
+    >
+      <View style={{ flex: 1 }}>
+        <Text style={{ color, fontSize: 13, fontWeight: '700' }}>{label}</Text>
+        {sub && <Text style={{ color: color + '90', fontSize: 10, marginTop: 2 }}>{sub}</Text>}
+      </View>
+      {busy ? <ActivityIndicator size="small" color={color} /> : <Ionicons name="chevron-forward" size={14} color={color} />}
+    </Pressable>
+  );
+}
+
 function ActionBtn({ label, icon, color, onPress, busy, testID }: any) {
   return (
     <Pressable
@@ -297,6 +376,13 @@ const styles = StyleSheet.create({
   block: { padding: 16, borderRadius: 10, borderWidth: 1 },
   blockTitle: { fontSize: 10, fontWeight: '700', letterSpacing: 1.4, marginBottom: 6 },
   actionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
+  categoryRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
+  catBtn: { flex: 1, height: 70, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', gap: 6 },
+  catLabel: { fontSize: 11, fontWeight: '700' },
+  subOptions: { marginTop: 0 },
+  subDivider: { height: 1, marginVertical: 16 },
+  subGrid: { gap: 10 },
+  subBtn: { flexDirection: 'row', alignItems: 'center', padding: 12, borderRadius: 10, borderWidth: 1 },
   actionBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 12, height: 34, borderRadius: 8, borderWidth: 1,
