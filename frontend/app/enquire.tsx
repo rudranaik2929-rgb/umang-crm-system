@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, TextInput, Pressable, ScrollView, ActivityIndicator, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../src/theme/ThemeContext';
@@ -38,9 +38,11 @@ export default function Enquire() {
     <ScrollView style={{ flex: 1, backgroundColor: colors.background }} contentContainerStyle={styles.container}>
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.brandRow}>
-          <View style={[styles.logo, { backgroundColor: colors.primary }]}>
-            <Text style={styles.logoText}>UMANG</Text>
-          </View>
+          <Image 
+            source={require('../assets/images/logo.jpeg')} 
+            style={styles.logoImage} 
+            resizeMode="contain" 
+          />
           <View>
             <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Properties</Text>
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>New Property Enquiry</Text>
@@ -144,8 +146,7 @@ const styles = StyleSheet.create({
   container: { padding: 24, alignItems: 'center', justifyContent: 'center', minHeight: '100%' },
   card: { width: '100%', maxWidth: 620, borderRadius: 16, borderWidth: 1, padding: 32 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24 },
-  logo: { paddingHorizontal: 12, height: 40, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  logoText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 1 },
+  logoImage: { width: 44, height: 44, borderRadius: 9 },
   brandTitle: { fontSize: 15, fontWeight: '700' },
   brandSub: { fontSize: 11, marginTop: 1 },
   title: { fontSize: 22, fontWeight: '700', letterSpacing: -0.4 },

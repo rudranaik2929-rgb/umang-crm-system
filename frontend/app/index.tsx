@@ -38,9 +38,11 @@ export default function Index() {
           <Image source={{ uri: HERO_IMG }} style={styles.heroImg} />
           <View style={styles.heroOverlay}>
             <View style={styles.heroBrand}>
-              <View style={[styles.logo, { backgroundColor: colors.accent }]}>
-                <Text style={styles.logoText}>UMANG</Text>
-              </View>
+              <Image 
+                source={require('../assets/images/logo.jpeg')} 
+                style={styles.logoImage} 
+                resizeMode="contain" 
+              />
               <Text style={styles.heroBrandTitle}>Umang Properties</Text>
             </View>
             <View style={{ flex: 1 }} />
@@ -64,9 +66,11 @@ export default function Index() {
         <View style={styles.rightInner}>
           <View style={styles.topRow}>
             <View style={styles.brandRow}>
-              <View style={[styles.logoSm, { backgroundColor: colors.primary }]}>
-                <Text style={styles.logoTextSm}>UMANG</Text>
-              </View>
+              <Image 
+                source={require('../assets/images/logo.jpeg')} 
+                style={styles.logoImageSm} 
+                resizeMode="contain" 
+              />
               <Text style={[styles.brandText, { color: colors.text }]}>Umang Properties</Text>
             </View>
             <Pressable
@@ -147,8 +151,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(2,6,23,0.55)',
   },
   heroBrand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logo: { paddingHorizontal: 12, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  logoText: { color: '#0F172A', fontSize: 16, fontWeight: '800', letterSpacing: 1 },
+  logoImage: { width: 44, height: 44, borderRadius: 8 },
   heroBrandTitle: { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 0.4 },
   heroTitle: { color: '#fff', fontSize: 38, fontWeight: '700', letterSpacing: -0.6, lineHeight: 46 },
   heroSub: { color: '#E2E8F0', fontSize: 14, marginTop: 12, lineHeight: 22, maxWidth: 460 },
@@ -160,8 +163,7 @@ const styles = StyleSheet.create({
   rightInner: { width: '100%', maxWidth: 460, padding: 48, flex: 1 },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logoSm: { paddingHorizontal: 10, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  logoTextSm: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: 1 },
+  logoImageSm: { width: 38, height: 38, borderRadius: 8 },
   brandText: { fontSize: 14, fontWeight: '700' },
   themeBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 

@@ -42,9 +42,11 @@ export function Sidebar({ collapsed, onToggle }: Props) {
     }]} testID="sidebar">
       {/* Brand */}
       <View style={[styles.brand, { borderBottomColor: colors.border }]}>
-        <View style={[styles.logo, { backgroundColor: colors.primary }]}>
-          <Text style={styles.logoText}>UMANG</Text>
-        </View>
+        <Image 
+          source={require('../../assets/images/logo.jpeg')} 
+          style={styles.logoImage} 
+          resizeMode="contain" 
+        />
         {!collapsed && (
           <View style={{ flex: 1 }}>
             <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Properties</Text>
@@ -140,14 +142,11 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     gap: 10,
   },
-  logo: {
-    paddingHorizontal: 12,
-    height: 38,
+  logoImage: {
+    width: 44,
+    height: 44,
     borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
-  logoText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 1 },
   brandTitle: { fontSize: 14, fontWeight: '700' },
   brandSub: { fontSize: 11, marginTop: 1 },
   collapseBtn: { padding: 4 },
