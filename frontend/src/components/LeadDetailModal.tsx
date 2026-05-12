@@ -179,14 +179,20 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged }: Props) 
                           <SubActionBtn 
                             label="Cold Lead" 
                             sub="Interested but not urgent"
-                            onPress={() => updateLead({ stage: 'contacted' }, 'cold')}
+                            onPress={() => {
+                              updateLead({ stage: 'positive', status: 'active' }, 'cold');
+                              onClose();
+                            }}
                             busy={busy === 'cold'}
                             color={colors.positive}
                           />
                           <SubActionBtn 
                             label="Hot Lead" 
                             sub="Active with Urgent requirement"
-                            onPress={() => updateLead({ stage: 'positive' }, 'hot')}
+                            onPress={() => {
+                              updateLead({ stage: 'positive', status: 'active' }, 'hot');
+                              onClose();
+                            }}
                             busy={busy === 'hot'}
                             color="#E11D48"
                           />
@@ -220,19 +226,31 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged }: Props) 
                         <View style={styles.subGrid}>
                           <SubActionBtn 
                             label="Site Visit Done" 
-                            onPress={() => updateLead({ stage: 'site_visit' }, 'visit_done')}
+                            sub="Move to negative for follow-up"
+                            onPress={() => {
+                              updateLead({ status: 'negative' }, 'visit_done');
+                              onClose();
+                            }}
                             busy={busy === 'visit_done'}
                             color={colors.info}
                           />
                           <SubActionBtn 
                             label="Ready for Booking" 
-                            onPress={() => updateLead({ stage: 'booking' }, 'ready_booking')}
+                            sub="Move to negative for follow-up"
+                            onPress={() => {
+                              updateLead({ status: 'negative' }, 'ready_booking');
+                              onClose();
+                            }}
                             busy={busy === 'ready_booking'}
                             color={colors.primary}
                           />
                           <SubActionBtn 
                             label="Need Loan Info" 
-                            onPress={() => updateLead({ stage: 'loan' }, 'need_loan')}
+                            sub="Move to negative for follow-up"
+                            onPress={() => {
+                              updateLead({ status: 'negative' }, 'need_loan');
+                              onClose();
+                            }}
                             busy={busy === 'need_loan'}
                             color="#7C3AED"
                           />

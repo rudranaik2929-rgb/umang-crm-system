@@ -8,7 +8,7 @@ import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { StageBadge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
 
-const QUEUE_STAGES = ['new', 'contacted', 'positive'];
+const QUEUE_STAGES = ['new'];
 
 export default function Telecaller() {
   const { colors } = useTheme();

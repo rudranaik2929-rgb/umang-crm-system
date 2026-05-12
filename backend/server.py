@@ -226,10 +226,26 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
 
 @api_router.patch("/leads/{lead_id}")
 async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_user)):
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
+    if not leads: raise HTTPException(404, "Lead not found")
+    old_lead = leads[0]
+    
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     data["updated_at"] = now_utc().isoformat()
     updated = sb_update("leads", "lead_id", lead_id, data)
     if not updated: raise HTTPException(404, "Lead not found")
+    
+    # Log activity for stage/status changes
+    if p.stage and p.stage != old_lead.get("stage"):
+        act_type = f"stage_change_{p.stage}"
+        if p.stage == "positive": act_type = "positive_response"
+        log_activity(cu, act_type, f"Moved lead stage from {old_lead.get('stage')} to {p.stage}", lead_id=lead_id)
+    
+    if p.status and p.status != old_lead.get("status"):
+        act_type = f"status_change_{p.status}"
+        if p.status == "negative": act_type = "negative_response"
+        log_activity(cu, act_type, f"Changed lead status from {old_lead.get('status')} to {p.status}", lead_id=lead_id)
+        
     return updated
 
 @api_router.post("/leads/{lead_id}/notes")
