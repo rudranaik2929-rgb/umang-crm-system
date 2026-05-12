@@ -21,8 +21,8 @@ export default function Index() {
     }
   }, [user, loading, router]);
 
-  const [email, setEmail] = useState('umang@admin');
-  const [password, setPassword] = useState('umang@admin');
+  const [email, setEmail] = useState('htshpatil13@gmail.com');
+  const [password, setPassword] = useState('UmangAdmin@2026');
 
   const onLogin = async () => {
     await exchangeSession({ email, password });

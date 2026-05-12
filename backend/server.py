@@ -62,7 +62,7 @@ DB = {"users":{},"sessions":{},"leads":{},"activities":{},"visits":{},"bookings"
 
 def _seed():
     uid = "user_admin001"
-    DB["users"][uid] = {"user_id":uid,"email":"umang@admin","name":"Umang Admin","picture":None,"role":"admin","acting_as_employee_id":None,"created_at":now_utc()}
+    DB["users"][uid] = {"user_id":uid,"email":"htshpatil13@gmail.com","name":"Umang Home Tech","picture":None,"role":"admin","acting_as_employee_id":None,"created_at":now_utc()}
     names = ["Rahul Sharma","Priya Patel","Amit Singh","Sneha Gupta","Vikram Joshi","Neha Reddy","Arjun Kumar","Kavita Nair"]
     stages = ["new","contacted","positive","site_visit","booking","loan","registration","closed"]
     for i,n in enumerate(names):
@@ -103,7 +103,7 @@ async def get_current_user(request: Request) -> User:
 async def auth_session(request: Request, response: Response):
     body = await request.json()
     email, password = body.get("email"), body.get("password")
-    if email == "umang@admin" and password == "umang@admin":
+    if email == "htshpatil13@gmail.com" and password == "UmangAdmin@2026":
         uid = "user_admin001"
     else:
         raise HTTPException(401, "Invalid credentials")
