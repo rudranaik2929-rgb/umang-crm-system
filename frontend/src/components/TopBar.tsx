@@ -22,6 +22,8 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const [employees, setEmployees] = useState<any[]>([]);
   const [actingEmployee, setActingEmployee] = useState<any | null>(null);
   const router = useRouter();
+  
+  const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
 
   const loadEmployees = useCallback(async () => {
     try { const r = await api.get('/employees'); setEmployees(r.data || []); } catch {}
@@ -65,7 +67,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
       <View style={styles.actions}>
         {rightAction}
 
-        {user?.role === 'admin' && (
+        {isAdminOrOwner ? (
           <>
             {/* Act as Employee — admin only */}
             <Pressable
@@ -94,14 +96,12 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
               </Text>
             </Pressable>
           </>
-        )}
-
-        {user?.role && user.role !== 'admin' && (
+        ) : user?.role ? (
           <View style={[styles.pill, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
             <Ionicons name="briefcase-outline" size={14} color={colors.textSecondary} />
             <Text style={[styles.pillText, { color: colors.text }]}>{roleLabel(user?.role)}</Text>
           </View>
-        )}
+        ) : null}
 
         {/* Theme toggle */}
         <Pressable
