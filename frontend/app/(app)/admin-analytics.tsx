@@ -7,6 +7,7 @@ import { StatCard } from '../../src/components/StatCard';
 import { StagePipelineChart, StatusDonut } from '../../src/components/Charts';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 
 const ADMIN_PIN = '9999';
 const SESSION_KEY = 'umang_admin_unlocked';
@@ -40,6 +41,7 @@ export default function AdminAnalytics() {
   const [activities, setActivities] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [sourceModalVisible, setSourceModalVisible] = useState(false);
 
   useEffect(() => {
     setUnlockedState(isUnlocked());
@@ -152,7 +154,7 @@ export default function AdminAnalytics() {
         ) : (
           <>
             <View style={styles.row}>
-              <StatCard label="Total Leads" value={stats.total_leads} icon="people-outline" accent={colors.primary} testID="stat-total-leads" />
+              <StatCard label="Total Leads" value={stats.total_leads} icon="people-outline" accent={colors.primary} testID="stat-total-leads" onPress={() => setSourceModalVisible(true)} />
               <StatCard label="Positive" value={stats.positive_leads} icon="trending-up-outline" accent={colors.positive} testID="stat-positive" />
               <StatCard label="Negative" value={stats.negative_leads} icon="trending-down-outline" accent={colors.negative} testID="stat-negative" />
               <StatCard label="Site Visits" value={stats.site_visits} icon="location-outline" accent={colors.info} testID="stat-visits" />
@@ -316,6 +318,7 @@ export default function AdminAnalytics() {
           </>
         )}
       </ScrollView>
+      <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
     </View>
   );
 }

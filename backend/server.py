@@ -441,6 +441,22 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         "stage_distribution": stage_dist,
     }
 
+@api_router.get("/stats/leads-by-source")
+async def stats_leads_by_source(cu: User=Depends(get_current_user)):
+    leads = sb_select("leads", {"select": "source,stage,status,created_at"})
+    source_map: dict = {}
+    for l in leads:
+        src = (l.get("source") or "direct").strip().lower()
+        if src not in source_map:
+            source_map[src] = {"source": src, "count": 0, "active": 0, "negative": 0}
+        source_map[src]["count"] += 1
+        if l.get("status") == "negative":
+            source_map[src]["negative"] += 1
+        else:
+            source_map[src]["active"] += 1
+    result = sorted(source_map.values(), key=lambda x: x["count"], reverse=True)
+    return {"total": len(leads), "sources": result}
+
 @api_router.get("/stats/dashboard/graph")
 async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     leads_by_day = []

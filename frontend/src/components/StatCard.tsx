@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -10,13 +10,16 @@ interface Props {
   icon?: any;
   accent?: string;
   testID?: string;
+  onPress?: () => void;
 }
 
-export function StatCard({ label, value, delta, icon = 'stats-chart-outline', accent, testID }: Props) {
+export function StatCard({ label, value, delta, icon = 'stats-chart-outline', accent, testID, onPress }: Props) {
   const { colors } = useTheme();
   const c = accent || colors.primary;
+  const Wrapper = onPress ? Pressable : View;
   return (
-    <View
+    <Wrapper
+      {...(onPress ? { onPress } : {})}
       style={[
         styles.wrap,
         {
@@ -41,7 +44,13 @@ export function StatCard({ label, value, delta, icon = 'stats-chart-outline', ac
       {delta ? (
         <Text style={[styles.delta, { color: colors.textMuted }]}>{delta}</Text>
       ) : null}
-    </View>
+      {onPress && (
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
+          <Text style={{ color: c, fontSize: 11, fontWeight: '600' }}>Tap for breakdown</Text>
+          <Ionicons name="chevron-forward" size={12} color={c} />
+        </View>
+      )}
+    </Wrapper>
   );
 }
 

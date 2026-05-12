@@ -5,6 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { api } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 
 const GOLD = '#D4A843';
 const GOLD_DIM = '#D4A84340';
@@ -18,6 +19,7 @@ export default function Dashboard() {
   const [graphData, setGraphData] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [sourceModalVisible, setSourceModalVisible] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -127,7 +129,9 @@ export default function Dashboard() {
 
         {/* ====== ROW 2: New Leads | Follow-ups | Site Visits ====== */}
         <View style={s.statRow}>
-          <MiniStat label="New Leads" sub="Today" value={newLeadsToday} color={GOLD} />
+          <Pressable onPress={() => setSourceModalVisible(true)}>
+            <MiniStat label="New Leads" sub="Today — Tap for breakdown" value={newLeadsToday} color={GOLD} />
+          </Pressable>
           <MiniStat label="Follow-ups" sub="Today" value={followupsToday} color={GOLD} />
           <MiniStat label="Site Visits" sub="Scheduled" value={visitsScheduled} color={GOLD} />
         </View>
@@ -218,6 +222,7 @@ export default function Dashboard() {
         </View>
 
       </ScrollView>
+      <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
     </View>
   );
 }
