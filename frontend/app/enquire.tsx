@@ -39,7 +39,7 @@ export default function Enquire() {
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.brandRow}>
           <View style={[styles.logo, { backgroundColor: colors.primary }]}>
-            <Text style={styles.logoText}>U</Text>
+            <Text style={styles.logoText}>UMANG</Text>
           </View>
           <View>
             <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Properties</Text>
@@ -144,8 +144,8 @@ const styles = StyleSheet.create({
   container: { padding: 24, alignItems: 'center', justifyContent: 'center', minHeight: '100%' },
   card: { width: '100%', maxWidth: 620, borderRadius: 16, borderWidth: 1, padding: 32 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 24 },
-  logo: { width: 40, height: 40, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
-  logoText: { color: '#fff', fontWeight: '800', fontSize: 18 },
+  logo: { paddingHorizontal: 12, height: 40, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  logoText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 1 },
   brandTitle: { fontSize: 15, fontWeight: '700' },
   brandSub: { fontSize: 11, marginTop: 1 },
   title: { fontSize: 22, fontWeight: '700', letterSpacing: -0.4 },

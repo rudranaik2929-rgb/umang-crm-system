@@ -43,7 +43,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
       {/* Brand */}
       <View style={[styles.brand, { borderBottomColor: colors.border }]}>
         <View style={[styles.logo, { backgroundColor: colors.primary }]}>
-          <Text style={styles.logoText}>U</Text>
+          <Text style={styles.logoText}>UMANG</Text>
         </View>
         {!collapsed && (
           <View style={{ flex: 1 }}>
@@ -141,10 +141,13 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   logo: {
-    width: 36, height: 36, borderRadius: 8,
-    alignItems: 'center', justifyContent: 'center',
+    paddingHorizontal: 12,
+    height: 38,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  logoText: { color: '#fff', fontWeight: '700', fontSize: 18 },
+  logoText: { color: '#fff', fontWeight: '800', fontSize: 16, letterSpacing: 1 },
   brandTitle: { fontSize: 14, fontWeight: '700' },
   brandSub: { fontSize: 11, marginTop: 1 },
   collapseBtn: { padding: 4 },

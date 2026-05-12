@@ -39,7 +39,7 @@ export default function Index() {
           <View style={styles.heroOverlay}>
             <View style={styles.heroBrand}>
               <View style={[styles.logo, { backgroundColor: colors.accent }]}>
-                <Text style={styles.logoText}>U</Text>
+                <Text style={styles.logoText}>UMANG</Text>
               </View>
               <Text style={styles.heroBrandTitle}>Umang Properties</Text>
             </View>
@@ -65,7 +65,7 @@ export default function Index() {
           <View style={styles.topRow}>
             <View style={styles.brandRow}>
               <View style={[styles.logoSm, { backgroundColor: colors.primary }]}>
-                <Text style={styles.logoTextSm}>U</Text>
+                <Text style={styles.logoTextSm}>UMANG</Text>
               </View>
               <Text style={[styles.brandText, { color: colors.text }]}>Umang Properties</Text>
             </View>
@@ -147,8 +147,8 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(2,6,23,0.55)',
   },
   heroBrand: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logo: { width: 36, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  logoText: { color: '#0F172A', fontSize: 18, fontWeight: '800' },
+  logo: { paddingHorizontal: 12, height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  logoText: { color: '#0F172A', fontSize: 16, fontWeight: '800', letterSpacing: 1 },
   heroBrandTitle: { color: '#fff', fontSize: 15, fontWeight: '700', letterSpacing: 0.4 },
   heroTitle: { color: '#fff', fontSize: 38, fontWeight: '700', letterSpacing: -0.6, lineHeight: 46 },
   heroSub: { color: '#E2E8F0', fontSize: 14, marginTop: 12, lineHeight: 22, maxWidth: 460 },
@@ -160,8 +160,8 @@ const styles = StyleSheet.create({
   rightInner: { width: '100%', maxWidth: 460, padding: 48, flex: 1 },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  logoSm: { width: 32, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  logoTextSm: { color: '#fff', fontSize: 16, fontWeight: '800' },
+  logoSm: { paddingHorizontal: 10, height: 32, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  logoTextSm: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: 1 },
   brandText: { fontSize: 14, fontWeight: '700' },
   themeBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 
