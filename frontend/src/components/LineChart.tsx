@@ -19,25 +19,31 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID }:
   const H = 180;
   const W_PADDING = 40;
 
-  // Build SVG path for web
+  // Build SVG path for web (using smooth cubic curves)
   const buildPath = () => {
     if (data.length < 2) return '';
     const stepX = 100 / (data.length - 1);
-    return data.map((d, i) => {
-      const x = i * stepX;
-      const y = 100 - (d.value / max) * 85;
-      return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
-    }).join(' ');
+    let path = `M 0 ${100 - (data[0].value / max) * 85}`;
+    
+    for (let i = 0; i < data.length - 1; i++) {
+      const x1 = i * stepX;
+      const y1 = 100 - (data[i].value / max) * 85;
+      const x2 = (i + 1) * stepX;
+      const y2 = 100 - (data[i+1].value / max) * 85;
+      
+      const cx1 = x1 + stepX / 2;
+      const cy1 = y1;
+      const cx2 = x2 - stepX / 2;
+      const cy2 = y2;
+      
+      path += ` C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}`;
+    }
+    return path;
   };
 
   const buildAreaPath = () => {
     if (data.length < 2) return '';
-    const stepX = 100 / (data.length - 1);
-    let path = data.map((d, i) => {
-      const x = i * stepX;
-      const y = 100 - (d.value / max) * 85;
-      return `${i === 0 ? 'M' : 'L'} ${x} ${y}`;
-    }).join(' ');
+    let path = buildPath();
     path += ` L 100 100 L 0 100 Z`;
     return path;
   };
@@ -78,12 +84,19 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID }:
               <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%' } as any}>
                 <defs>
                   <linearGradient id={`grad-${testID}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={c} stopOpacity="0.3" />
-                    <stop offset="100%" stopColor={c} stopOpacity="0.02" />
+                    <stop offset="0%" stopColor={c} stopOpacity="0.4" />
+                    <stop offset="60%" stopColor={c} stopOpacity="0.1" />
+                    <stop offset="100%" stopColor={c} stopOpacity="0" />
                   </linearGradient>
+                  <filter id={`glow-${testID}`}>
+                    <feGaussianBlur stdDeviation="1.5" result="coloredBlur"/>
+                    <feMerge>
+                      <feMergeNode in="coloredBlur"/><feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                  </filter>
                 </defs>
-                <path d={buildAreaPath()} fill={`url(#grad-${testID})`} />
-                <path d={buildPath()} fill="none" stroke={c} strokeWidth="1.5" vectorEffect="non-scaling-stroke" />
+                <path d={buildAreaPath()} fill={`url(#grad-${testID})`} style={{ transition: 'all 0.5s ease' } as any} />
+                <path d={buildPath()} fill="none" stroke={c} strokeWidth="2.5" filter={`url(#glow-${testID})`} vectorEffect="non-scaling-stroke" style={{ transition: 'all 0.5s ease' } as any} />
               </svg>
               {/* Dots */}
               {data.map((d, i) => {

@@ -333,12 +333,21 @@ function SVGLineChart({ data, color, height, formatY }: { data: { label: string;
   const yTicks = 5;
   const yVals = Array.from({ length: yTicks + 1 }, (_, i) => Math.round((max / yTicks) * i));
 
-  const points = data.map((d, i) => ({
-    x: (i / (data.length - 1)) * 100,
-    y: 100 - (d.value / max) * 90,
-  }));
+  const buildPath = () => {
+    if (data.length < 2) return '';
+    let p = `M 0 ${100 - (data[0].value / max) * 90}`;
+    const step = 100 / (data.length - 1);
+    for (let i = 0; i < data.length - 1; i++) {
+      const x1 = i * step;
+      const y1 = 100 - (data[i].value / max) * 90;
+      const x2 = (i + 1) * step;
+      const y2 = 100 - (data[i+1].value / max) * 90;
+      p += ` C ${x1 + step/2} ${y1}, ${x2 - step/2} ${y2}, ${x2} ${y2}`;
+    }
+    return p;
+  };
 
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
+  const linePath = buildPath();
   const areaPath = linePath + ` L 100 100 L 0 100 Z`;
 
   return (
@@ -361,26 +370,36 @@ function SVGLineChart({ data, color, height, formatY }: { data: { label: string;
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', position: 'absolute' } as any}>
             <defs>
               <linearGradient id={`area-${color}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity="0.25" />
-                <stop offset="100%" stopColor={color} stopOpacity="0.02" />
+                <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+                <stop offset="60%" stopColor={color} stopOpacity="0.1" />
+                <stop offset="100%" stopColor={color} stopOpacity="0" />
               </linearGradient>
+              <filter id="glow">
+                <feGaussianBlur stdDeviation="1.2" result="blur" />
+                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
             </defs>
-            <path d={areaPath} fill={`url(#area-${color})`} />
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+            <path d={areaPath} fill={`url(#area-${color})`} style={{ transition: 'all 0.4s' } as any} />
+            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" filter="url(#glow)" vectorEffect="non-scaling-stroke" style={{ transition: 'all 0.4s' } as any} />
           </svg>
           {/* Dots */}
-          {points.map((p, i) => (
-            <View key={i} style={{
-              position: 'absolute',
-              left: `${p.x}%`,
-              top: `${p.y}%`,
-              width: 7, height: 7, borderRadius: 4,
-              backgroundColor: color,
-              borderWidth: 2, borderColor: CARD_BG,
-              marginLeft: -3.5, marginTop: -3.5,
-              zIndex: 2,
-            }} />
-          ))}
+          {data.map((d, i) => {
+            const x = (i / (data.length - 1)) * 100;
+            const y = 100 - (d.value / max) * 90;
+            return (
+              <View key={i} style={{
+                position: 'absolute',
+                left: `${x}%`,
+                top: `${y}%`,
+                width: 8, height: 8, borderRadius: 4,
+                backgroundColor: color,
+                borderWidth: 2, borderColor: CARD_BG,
+                shadowColor: color, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 4,
+                marginLeft: -4, marginTop: -4,
+                zIndex: 2,
+              }} />
+            );
+          })}
         </View>
       </View>
       {/* X-axis */}

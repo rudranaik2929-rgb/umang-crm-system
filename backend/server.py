@@ -488,14 +488,42 @@ async def stats_leads_by_source(cu: User=Depends(get_current_user)):
 
 @api_router.get("/stats/dashboard/graph")
 async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
+    # 1. Real leads per day (last 30 days)
+    now = now_utc()
+    start_date = (now - timedelta(days=30)).isoformat()
+    leads = sb_select("leads", {"select": "created_at", "created_at": f"gte.{start_date}"})
+    
     leads_by_day = []
+    days_map = {}
     for i in range(30):
-        d = (now_utc() - timedelta(days=29 - i)).strftime("%Y-%m-%d")
-        leads_by_day.append({"date": d, "count": random.randint(0, 5)})
+        d = (now - timedelta(days=29 - i)).strftime("%Y-%m-%d")
+        days_map[d] = 0
+    
+    for l in leads:
+        d = l.get("created_at", "")[:10]
+        if d in days_map:
+            days_map[d] += 1
+            
+    for d, cnt in sorted(days_map.items()):
+        leads_by_day.append({"date": d, "count": cnt})
+
+    # 2. Real revenue by month (last 12 months)
+    bookings = sb_select("bookings", {"select": "booking_amount,created_at", "status": "eq.confirmed"})
     rev_by_month = []
+    months_map = {}
     for i in range(12):
-        d = (now_utc() - timedelta(days=(11 - i) * 30)).strftime("%Y-%m")
-        rev_by_month.append({"month": d, "revenue": random.randint(50, 500) * 10000})
+        d = (now - timedelta(days=(11 - i) * 30)).strftime("%Y-%m")
+        months_map[d] = 0.0
+        
+    for b in bookings:
+        d = b.get("created_at", "")[:7]
+        if d in months_map:
+            val = float(b.get("booking_amount", 0) or 0)
+            months_map[d] += val
+            
+    for d, rev in sorted(months_map.items()):
+        rev_by_month.append({"month": d, "revenue": rev})
+
     return {"leads_by_day": leads_by_day, "revenue_by_month": rev_by_month}
 
 @api_router.get("/activities")
