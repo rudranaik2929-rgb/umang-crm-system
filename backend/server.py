@@ -458,12 +458,40 @@ async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):
 
 @api_router.get("/stats/me")
 async def stats_me(cu: User=Depends(get_current_user)):
+    eid = cu.acting_as_employee_id or cu.user_id
+    
+    # Get personal stats
+    activities = sb_select("activities", {"user_id": f"eq.{eid}", "select": "*", "order": "created_at.desc"})
+    
+    positives = sum(1 for a in activities if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
+    visits = sum(1 for a in activities if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
+    bookings_done = sum(1 for a in activities if "booking" in str(a.get("type")))
+    loans_done = sum(1 for a in activities if "loan" in str(a.get("type")))
+    closed_deals = sum(1 for a in activities if "closed" in str(a.get("type")))
+    
+    # Calculate performance score (max 10)
+    score = min(10, positives * 1 + visits * 2 + bookings_done * 3 + loans_done * 2 + closed_deals * 4)
+    if not activities:
+        score = 0
+    
+    # Get all leads for pipeline counts
+    leads = sb_select("leads", {"select": "stage,status"})
+    hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])
+    warm = sum(1 for l in leads if l.get("stage") == "contacted")
+    cold = sum(1 for l in leads if l.get("stage") == "new")
+    negative = sum(1 for l in leads if l.get("status") == "negative")
+    closed = sum(1 for l in leads if l.get("stage") == "closed")
+
     return {
         "employee": None, "role": cu.role,
-        "personal": {"actions_total": 0, "positives": 0, "negatives": 0, "followups": 0,
-            "visits": 0, "bookings_done": 0, "loans_done": 0, "closed_deals": 0,
-            "call_notes": 0, "score_10": 0, "last_activity": None},
-        "leads": {"hot": 3, "warm": 2, "cold": 1, "negative": 0, "closed": 1},
+        "personal": {
+            "actions_total": len(activities), "positives": positives, "negatives": 0, "followups": 0,
+            "visits": visits, "bookings_done": bookings_done, "loans_done": loans_done, "closed_deals": closed_deals,
+            "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
+            "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
+        },
+        "leads": {"hot": hot, "warm": warm, "cold": cold, "negative": negative, "closed": closed},
+        "recent_activities": activities[:15]
     }
 
 @api_router.get("/stats/employees")
