@@ -1,0 +1,132 @@
+{
+  "identity": {
+    "brand_name": "Umang Properties",
+    "domain": "Real Estate CRM & Employee Workflow Management",
+    "theme_mode": "Both (Dark + Light with toggle)",
+    "archetype": "5 (Jewel & Luxury) + 4 (Swiss & High-Contrast)",
+    "vibe": "Premium, trustworthy, corporate SaaS, high-end real estate, clean and data-dense"
+  },
+  "colors": {
+    "light": {
+      "background": "#F8FAFC",
+      "surface": "#FFFFFF",
+      "sidebar": "#F1F5F9",
+      "primary": "#1E3A8A",
+      "primary_hover": "#1E40AF",
+      "accent_gold": "#D4AF37",
+      "text_primary": "#0F172A",
+      "text_secondary": "#475569",
+      "border": "#E2E8F0",
+      "status": {
+        "positive": "#059669",
+        "negative": "#E11D48",
+        "warning": "#D97706",
+        "info": "#0284C7"
+      }
+    },
+    "dark": {
+      "background": "#020617",
+      "surface": "#0F172A",
+      "sidebar": "#090E17",
+      "primary": "#3B82F6",
+      "primary_hover": "#60A5FA",
+      "accent_gold": "#FBBF24",
+      "text_primary": "#F8FAFC",
+      "text_secondary": "#94A3B8",
+      "border": "#1E293B",
+      "status": {
+        "positive": "#10B981",
+        "negative": "#FB7185",
+        "warning": "#F59E0B",
+        "info": "#38BDF8"
+      }
+    }
+  },
+  "typography": {
+    "font_strategy": "The 'Old Money Tech' strategy but modernized. Sharp, authoritative geometric sans for headings, clean humanist sans for body.",
+    "heading_font": "Outfit",
+    "body_font": "Manrope",
+    "scales": {
+      "h1": "text-4xl tracking-tight font-semibold",
+      "h2": "text-2xl tracking-tight font-semibold",
+      "h3": "text-xl font-medium",
+      "h4": "text-lg font-medium",
+      "body": "text-sm",
+      "small": "text-xs tracking-wider uppercase font-semibold text-text_secondary"
+    }
+  },
+  "layout_and_spacing": {
+    "container": "w-full max-w-full overflow-hidden flex h-screen",
+    "sidebar": "w-[260px] collapsed:w-[72px] h-full border-r border-border transition-all duration-300",
+    "main_content": "flex-1 flex flex-col h-full overflow-hidden",
+    "header": "h-16 border-b border-border flex items-center px-6 justify-between shrink-0",
+    "content_area": "flex-1 overflow-auto p-6 md:p-8 bg-background gap-6 flex flex-col",
+    "spacing_system": "Use generous padding in empty states (p-12), tight padding in data cards (p-4 or p-6)."
+  },
+  "components": {
+    "cards": {
+      "style": "Subtle border, flat appearance. No drop shadow in dark mode. 1px border is mandatory.",
+      "classes": "bg-surface border border-border rounded-lg"
+    },
+    "kanban": {
+      "board": "flex gap-4 overflow-x-auto h-full pb-4 items-start",
+      "column": "min-w-[300px] w-[300px] bg-slate-100/50 dark:bg-slate-800/20 rounded-lg p-3 flex flex-col gap-3",
+      "card": "bg-surface border border-border rounded-md p-4 shadow-sm cursor-grab hover:-translate-y-0.5 transition-transform"
+    },
+    "data_tables": {
+      "style": "Dense and scannable. Left align text. Badges for status.",
+      "header": "text-xs uppercase tracking-wider text-text_secondary border-b border-border pb-3",
+      "row": "border-b border-border/50 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors py-3"
+    },
+    "empty_states": {
+      "style": "Elegant, non-jarring. Central illustration, subtle text, primary action button.",
+      "classes": "flex flex-col items-center justify-center p-12 text-center h-full min-h-[400px] border border-dashed border-border rounded-xl"
+    },
+    "buttons": {
+      "primary": "bg-primary text-white hover:bg-primary_hover rounded-md px-4 py-2 font-medium transition-colors",
+      "secondary": "bg-surface border border-border hover:bg-slate-50 dark:hover:bg-slate-800 rounded-md px-4 py-2"
+    }
+  },
+  "modules": [
+    "Admin Dashboard",
+    "Telecaller Dashboard",
+    "Site Visit Management",
+    "Booking Management",
+    "Loan Department Panel",
+    "WhatsApp Outbound Campaign Panel",
+    "Employee Management",
+    "Lead Pipeline Kanban",
+    "Negative Leads"
+  ],
+  "image_urls": {
+    "login_background": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/35dda4ad3fda80d98d3e686fde61d9fcf2b36147d133e43a32eed389dcf53913.png",
+      "description": "Abstract architectural background with deep navy blue and gold accents, premium corporate feel. Used for the auth/login split screen."
+    },
+    "empty_state_leads": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/7f56f928d66ef4ddaa17ab0dc9e6c7ebc53ebb20ceb2c00b023cc10e89fd1a0d.png",
+      "description": "Minimalist 3D empty file folder with gold accents. Use in CRM lead panels, tables, and Kanban when no data is present."
+    },
+    "empty_state_whatsapp": {
+      "url": "https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/50693d7cf7936af2128b21e985ccab73e6ead92c3473b173b78c2a08a4e6eeef.png",
+      "description": "Minimalist smartphone with chat bubbles. Use in the WhatsApp Campaign Panel when no campaigns exist."
+    },
+    "real_estate_buildings": {
+      "url": "https://images.unsplash.com/photo-1548950308-69fac3b90a45?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxsdXh1cnklMjBtb2Rlcm4lMjBvZmZpY2UlMjBidWlsZGluZyUyMGV4dGVyaW9yfGVufDB8fHx8MTc3ODI2NDA2MXww&ixlib=rb-4.1.0&q=85",
+      "description": "High-rise modern building. Use for property thumbnails or site visit location placeholders."
+    },
+    "employee_team": {
+      "url": "https://images.pexels.com/photos/7433840/pexels-photo-7433840.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "description": "Professional business team meeting. Use for employee management header or onboarding."
+    }
+  },
+  "instructions_to_main_agent": [
+    "TECH STACK: Use standard React with Tailwind CSS, not React Native web styles unless strictly running in an Expo web environment. Given standard web context, use standard HTML divs.",
+    "Do NOT use 'Inter' for headings. Use 'Outfit' via Google Fonts (or similar system font like system-ui if Outfit fails to load).",
+    "Implement a seamless Dark/Light mode toggle. Default to Dark mode for the 'Jewel & Luxury' feel, but ensure light mode maps exactly to the provided colors.",
+    "The application starts completely empty (No fake data). ALL panels must gracefully handle empty states using the provided 'empty_state_leads' and 'empty_state_whatsapp' images.",
+    "Add 'data-testid' to every actionable button (e.g., data-testid='create-lead-btn', data-testid='toggle-theme-btn').",
+    "For charts (Pipeline Analytics, WhatsApp Stats, Revenue), use Recharts. Make sure chart grids and lines are subtle (border/10) and colors match the status hex codes provided.",
+    "Implement Emergent Google Auth. The login screen should be a 50/50 split layout using 'login_background' image on one side."
+  ]
+}

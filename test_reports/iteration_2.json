@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 2 — Re-test of two bug fixes in Umang Properties CRM (frontend-only, after E1 fix). VERIFIED BOTH FIXES PASS via UI + API. (1) action-site-visit in LeadDetailModal NOW creates a SiteVisit record (POST /api/visits with tomorrow 11:00 default) AND the new visit shows up on /visits page in 'SCHEDULED' status, with all 5 expected action buttons (Visit Completed / Reschedule / Interested / Not Interested / Booking Ready). Confirmed by selecting TEST_RETEST_E2E lead in /telecaller, clicking Mark Positive, then action-site-visit; /visits page then displays the visit card immediately. (2) /visits Schedule-Visit modal date field on web is now a real HTML <input type='datetime-local'> (verified attribute type='datetime-local' on data-testid=visit-date-input), with proper try/catch error feedback wiring. Smoke pass on /whatsapp, /employees, /negative-leads, /dashboard — all expected testIDs present. Pipeline kanban renders correctly with NEW LEAD and SITE VISIT columns populated. Booking/Loan modals & advance flow already verified end-to-end at backend level in iteration_1 (11/11 pytest). One residual issue from iteration_1 unchanged: TopBar still missing testID='user-menu' on the avatar.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TopBar", "issue": "data-testid='user-menu' STILL missing on user/avatar element (carried over from iteration_1).", "testID": "user-menu", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/test_reports/iteration_2.json",
+    "/app/test_reports/iteration_1.json",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(LOW) Add testID='user-menu' to user avatar in /app/frontend/src/components/TopBar.tsx (still pending from iteration_1)."
+  ],
+  "critical_code_review_comments": [
+    "LeadDetailModal.scheduleVisit() correctly POSTs /api/visits with tomorrow 11AM default (Date object setHours(11,0,0,0) → ISO). Good.",
+    "visits.tsx CreateVisitModal correctly branches on Platform.OS==='web' to render <input type='datetime-local'> with data-testid (lowercase data-testid is required for HTML element to be picked up by playwright; React Native testID would not apply to a raw HTML <input>). Correct implementation.",
+    "Error UX in CreateVisitModal: try/catch around new Date(date) parse + try/catch around api.post returning detail. Good defensive coverage."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100% (11/11 from iteration_1, no backend re-test needed)", "frontend": "100% on the two targeted bug fixes; remaining UI smoke pass"},
+  "seed_data_creation": "Created session retest_session_1778266015192 + admin user user_retest_1778266015192 via mongosh. Created TEST_RETEST_E2E_1778266021 lead via POST /api/leads/public, marked positive and scheduled visit via UI — visit appears on /visits with SCHEDULED status.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Bug fixes verified. Telecaller lead row testID is `telecaller-row-{lead_id}` (NOT lead-row- or tc-lead-). Click Telecaller 'All' filter first to see all leads regardless of stage. Use cookie session_token on domain umang-crm.preview.emergentagent.com (NOT Authorization header for SPA — though Bearer also works for /api). visit-date-input on WEB is an HTML <input type='datetime-local'> with data-testid (lowercase) attribute, on native it's a TextInput with testID. The /visits visit card shows tomorrow at 11:00 local when scheduled via LeadDetailModal action-site-visit.",
+  "rca_of_issue": "Original bug: action-site-visit in LeadDetailModal only patched lead.stage='site_visit' but did not call POST /api/visits, so /visits page stayed empty after the action. Fix applied by E1: added scheduleVisit() in LeadDetailModal that POSTs /api/visits with lead_id and scheduled_at = tomorrow 11AM ISO. Verified — visit card appears on /visits immediately after the action. Secondary fix: /visits Schedule-Visit modal now uses HTML <input type='datetime-local'> on web (Platform.OS==='web' branch) with data-testid='visit-date-input', and try/catch error display for invalid date / backend failure. Both fixes confirmed."
+}

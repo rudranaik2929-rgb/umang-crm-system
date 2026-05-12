@@ -1,0 +1,45 @@
+{
+  "summary": "First iteration full backend + frontend smoke test of Umang Properties CRM. Backend: 11/11 pytest tests pass — covers health, auth (session via Bearer), 401 protection on all gated endpoints, public lead enquiry, full lead lifecycle (create → patch stage → note → advance → site_visit → booking → loan → disbursed → registration), employees CRUD, templates/campaigns/simulated send, dashboard stats and activities feed. Frontend: landing page, /enquire submission, auth-gated dashboard shell with cookie session — all 8 navigation routes (dashboard, pipeline, telecaller, visits, bookings, loans, whatsapp, employees, negative-leads) load correctly with their key testIDs (stat-*, kanban-card-*, telecaller filters, wa-create-template, wa-create-campaign, create-visit/booking/loan-btn, add-employee-btn). Theme toggle works (light/dark), role-switcher renders, dashboard counts accurately reflect DB state created by backend tests (6 leads, 2 positive, 1 negative, 2 visits, 2 bookings, 2 loans, ₹160L pipeline, 2 in Registration stage from disbursed loan). Stage progression end-to-end is verified.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "TopBar", "issue": "data-testid=\"user-menu\" attribute is MISSING. Avatar/profile icon visually exists in top-right corner but the testID is not attached. role-switcher and toggle-theme-btn are present.", "testID": "user-menu", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [],
+    "react_native_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/conftest.py",
+    "/app/backend/tests/test_health_auth.py",
+    "/app/backend/tests/test_lead_workflow.py",
+    "/app/backend/tests/test_employees_campaigns_stats.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "(LOW) Add testID=\"user-menu\" to the user/avatar element in src/components/TopBar.tsx so the topbar exposes user-menu as required by the spec.",
+    "(INFO) Backend uvicorn reload watches the tests/ directory which can cause transient connection-reset errors during pytest runs; consider isolating tests outside /app/backend or disabling --reload in production. Not blocking — pytest passes on retry.",
+    "(INFO) Two duplicate 'TEST_Walkin Customer' leads remain in DB from re-running the workflow test; clean-up fixtures aren't implemented (test data prefixed with TEST_ as per guidelines)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 786 lines — within the 700-line guideline soft limit; consider splitting routers (auth/leads/visits/bookings/loans/campaigns) into separate modules as the app grows.",
+    "All endpoints correctly exclude MongoDB _id via projection, use async/await, validate via Pydantic, and return proper status codes (401/400/404). Good adherence to standards.",
+    "CORS uses allow_origins=[\"*\"] with allow_credentials=True — browsers will reject this combination for credentialed requests; works because the app is same-origin via ingress, but worth tightening to the actual frontend origin.",
+    "Lead listing uses 'status_' query param (trailing underscore) to avoid FastAPI reserved word collision — frontend must use this exact key; verified working."
+  ],
+  "updated_files": [
+    "/app/backend/tests/conftest.py (new)",
+    "/app/backend/tests/test_health_auth.py (new)",
+    "/app/backend/tests/test_lead_workflow.py (new)",
+    "/app/backend/tests/test_employees_campaigns_stats.py (new)"
+  ],
+  "success_rate": {"backend": "100% (11/11)", "frontend": "~95% (10/11 expected testIDs found; user-menu missing)"},
+  "seed_data_creation": "Created via pytest workflow: 1 admin user + session, 1 UI test session user, 6 leads, 2 visits, 2 bookings, 2 loans, 1 disbursed loan (lead in registration). All test rows are prefixed TEST_ in name fields. WhatsApp template + campaign created and deleted in test cleanup.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "Backend pytest suite is fully reusable: `cd /app/backend && pytest tests/ -v --junitxml=/app/test_reports/pytest/pytest_results.xml`. Use mongosh to mint sessions (see conftest._create_session_via_mongo). For UI testing, set the session_token cookie on domain umang-crm.preview.emergentagent.com before navigation. Backend reloads on file changes inside /app/backend so introduce a 2-3s wait if you write under tests/ during a run. The leads list query param is `status_` (with trailing underscore), not `status`. The kanban only renders leads with status != 'negative'.",
+  "rca_of_issue": "N/A — no functional bugs found. Only the missing user-menu testID, which is a one-line fix in TopBar.tsx."
+}

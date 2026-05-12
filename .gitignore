@@ -1,0 +1,9 @@
+node_modules/
+.metro-cache/
+.expo/
+web-build/
+dist/
+*.log
+.env
+__pycache__/
+*.pyc
