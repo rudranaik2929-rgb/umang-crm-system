@@ -206,6 +206,7 @@ async def create_lead_public(p: LeadCreatePublic):
         "assigned_to": None, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
     }
     result = sb_insert("leads", lead)
+    log_activity(None, "website_enquiry", f"New website enquiry received from {p.name}.", lead_id=lid)
     return result or lead
 
 @api_router.get("/leads")
