@@ -34,7 +34,22 @@ export default function Telecaller() {
 
   return (
     <View style={{ flex: 1 }}>
-      <TopBar title="Telecaller Workspace" subtitle="Incoming enquiries & follow-ups" />
+      <TopBar 
+        title="Telecaller Workspace" 
+        subtitle="Incoming enquiries & follow-ups" 
+        rightAction={
+          <Pressable 
+            onPress={load} 
+            disabled={loading}
+            style={({ pressed }) => [
+              styles.iconBtn, 
+              { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: pressed || loading ? 0.6 : 1 }
+            ]}
+          >
+            <Ionicons name="refresh" size={18} color={colors.primary} />
+          </Pressable>
+        }
+      />
       <ScrollView contentContainerStyle={styles.content}>
         {/* Queue instructions */}
         <View style={{ marginBottom: 16 }}>

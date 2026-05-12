@@ -209,6 +209,19 @@ async def create_lead_public(p: LeadCreatePublic):
     log_activity(None, "website_enquiry", f"New website enquiry received from {p.name}.", lead_id=lid)
     return result or lead
 
+@api_router.post("/leads")
+async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
+    lid = gen_id("lead")
+    lead = {
+        "lead_id": lid, "name": p.name, "phone": p.phone, "email": p.email,
+        "budget": p.budget, "location": p.location, "property_type": p.property_type,
+        "notes": p.notes, "source": "manual_entry", "stage": "new", "status": "active",
+        "assigned_to": None, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
+    }
+    result = sb_insert("leads", lead)
+    log_activity(cu, "manual_enquiry", f"Manual lead entry created for {p.name}.", lead_id=lid)
+    return result or lead
+
 @api_router.get("/leads")
 async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, assigned_to: Optional[str]=None, cu: User=Depends(get_current_user)):
     params = {"select": "*", "order": "created_at.desc"}
