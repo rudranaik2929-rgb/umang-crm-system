@@ -19,7 +19,7 @@ export default function Dashboard() {
   const [graphData, setGraphData] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sourceModalVisible, setSourceModalVisible] = useState(false);
+   const [sourceModalVisible, setSourceModalVisible] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -129,9 +129,8 @@ export default function Dashboard() {
 
         {/* ====== ROW 2: New Leads | Follow-ups | Site Visits ====== */}
         <View style={s.statRow}>
-          <Pressable onPress={() => setSourceModalVisible(true)}>
-            <MiniStat label="New Leads" sub="Today — Tap for breakdown" value={newLeadsToday} color={GOLD} />
-          </Pressable>
+          <MiniStat label="Total Leads" sub="Source Breakdown" value={totalLeads} color={GOLD} onPress={() => setSourceModalVisible(true)} />
+          <MiniStat label="New Leads" sub="Today" value={newLeadsToday} color={GOLD} />
           <MiniStat label="Follow-ups" sub="Today" value={followupsToday} color={GOLD} />
           <MiniStat label="Site Visits" sub="Scheduled" value={visitsScheduled} color={GOLD} />
         </View>
@@ -286,9 +285,13 @@ function LegendDot({ color, label }: { color: string; label: string }) {
 }
 
 /* ====== MINI STAT CARD ====== */
-function MiniStat({ label, sub, value, color }: { label: string; sub: string; value: number; color: string }) {
+function MiniStat({ label, sub, value, color, onPress }: { label: string; sub: string; value: number; color: string; onPress?: () => void }) {
+  const Wrapper = onPress ? Pressable : View;
   return (
-    <View style={[s.card, s.miniCard]}>
+    <Wrapper 
+      onPress={onPress}
+      style={[s.card, s.miniCard, onPress && { borderColor: color + '80', borderStyle: 'dashed' }]}
+    >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
         <View style={[s.miniDot, { backgroundColor: color }]} />
         <View>
@@ -296,8 +299,11 @@ function MiniStat({ label, sub, value, color }: { label: string; sub: string; va
           <Text style={s.miniSub}>{sub}</Text>
         </View>
       </View>
-      <Text style={[s.miniValue, { color }]}>{value}</Text>
-    </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={[s.miniValue, { color }]}>{value}</Text>
+        {onPress && <Text style={{ color: color, fontSize: 8, fontWeight: '700' }}>VIEW DETAILS</Text>}
+      </View>
+    </Wrapper>
   );
 }
 
