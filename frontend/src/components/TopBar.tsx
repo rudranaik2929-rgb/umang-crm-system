@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel } from '../lib/constants';
 import { api } from '../lib/api';
 import { useRouter } from 'expo-router';
+import { AddLeadModal } from './AddLeadModal';
 
 interface Props {
   title: string;
@@ -21,6 +22,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const [actAsOpen, setActAsOpen] = useState(false);
   const [employees, setEmployees] = useState<any[]>([]);
   const [actingEmployee, setActingEmployee] = useState<any | null>(null);
+  const [addLeadVisible, setAddLeadVisible] = useState(false);
   const router = useRouter();
   
   const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
@@ -66,6 +68,14 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
 
       <View style={styles.actions}>
         {rightAction}
+
+        <Pressable
+          onPress={() => setAddLeadVisible(true)}
+          testID="topbar-add-lead"
+          style={[styles.iconBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '15' }]}
+        >
+          <Ionicons name="add" size={20} color={colors.primary} />
+        </Pressable>
 
         {isAdminOrOwner ? (
           <>
@@ -225,6 +235,14 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <AddLeadModal
+        visible={addLeadVisible}
+        onClose={() => setAddLeadVisible(false)}
+        onSuccess={() => {
+          // Success!
+        }}
+      />
     </View>
   );
 }
