@@ -65,9 +65,9 @@ export default function Bookings() {
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.cardTitle, { color: colors.text }]}>{b.property_name}</Text>
                   <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
-                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
-                    <Badge text={`AGREEMENT: ${b.agreement_status.toUpperCase()}`} color={AGREEMENT_COLOR[b.agreement_status]} />
-                    <Badge text={`STATUS: ${b.status.toUpperCase()}`} color={b.status === 'confirmed' ? colors.positive : colors.info} />
+                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                    <Badge text={`AGREEMENT: ${b.agreement_status.toUpperCase()}`} color={AGREEMENT_COLOR[b.agreement_status] || colors.info} />
+                    <Badge text={`STATUS: ${b.status.toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
                   </View>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
@@ -87,29 +87,60 @@ export default function Bookings() {
               </View>
 
               <View style={styles.actions}>
-                <Pressable
-                  testID={`booking-token-${b.booking_id}`}
-                  onPress={() => update(b.booking_id, { token_received: b.token_received + b.booking_amount * 0.1 }, 'token')}
-                  style={[styles.act, { borderColor: colors.info + '60', backgroundColor: colors.info + '10' }]}
-                >
-                  <Ionicons name="cash-outline" size={13} color={colors.info} />
-                  <Text style={{ color: colors.info, fontSize: 11, fontWeight: '600' }}>Receive +10% Token</Text>
+                {/* 1. Login File */}
+                <Pressable testID={`booking-login-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'login file' }, 'login')} style={[styles.act, { borderColor: colors.info + '60', backgroundColor: colors.info + '10' }]}>
+                  {busy === `${b.booking_id}-login` ? <ActivityIndicator size="small" color={colors.info} /> : <>
+                    <Ionicons name="folder-open-outline" size={13} color={colors.info} />
+                    <Text style={{ color: colors.info, fontSize: 11, fontWeight: '600' }}>Login File</Text>
+                  </>}
                 </Pressable>
-                <Pressable
-                  testID={`booking-sign-${b.booking_id}`}
-                  onPress={() => update(b.booking_id, { agreement_status: 'signed' }, 'sign')}
-                  style={[styles.act, { borderColor: colors.positive + '60', backgroundColor: colors.positive + '10' }]}
-                >
-                  <Ionicons name="checkmark-circle-outline" size={13} color={colors.positive} />
-                  <Text style={{ color: colors.positive, fontSize: 11, fontWeight: '600' }}>Mark Agreement Signed</Text>
+
+                {/* 3. Sanctioned */}
+                <Pressable testID={`booking-sanc-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'sanctioned' }, 'sanc')} style={[styles.act, { borderColor: colors.primary + '60', backgroundColor: colors.primary + '10' }]}>
+                  {busy === `${b.booking_id}-sanc` ? <ActivityIndicator size="small" color={colors.primary} /> : <>
+                    <Ionicons name="checkmark-done-outline" size={13} color={colors.primary} />
+                    <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>Sanctioned</Text>
+                  </>}
                 </Pressable>
-                <Pressable
-                  testID={`booking-confirm-${b.booking_id}`}
-                  onPress={() => update(b.booking_id, { status: 'confirmed' }, 'confirm')}
-                  style={[styles.act, { borderColor: colors.primary + '60', backgroundColor: colors.primary + '10' }]}
-                >
-                  <Ionicons name="trophy-outline" size={13} color={colors.primary} />
-                  <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>Confirm Booking</Text>
+
+                {/* 4. Registration */}
+                <Pressable testID={`booking-reg-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'registration' }, 'reg')} style={[styles.act, { borderColor: '#7C3AED60', backgroundColor: '#7C3AED10' }]}>
+                  {busy === `${b.booking_id}-reg` ? <ActivityIndicator size="small" color="#7C3AED" /> : <>
+                    <Ionicons name="document-text-outline" size={13} color={'#7C3AED'} />
+                    <Text style={{ color: '#7C3AED', fontSize: 11, fontWeight: '600' }}>Registration</Text>
+                  </>}
+                </Pressable>
+
+                {/* 5. Disbursement */}
+                <Pressable testID={`booking-disb-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'disbursement' }, 'disb')} style={[styles.act, { borderColor: colors.positive + '60', backgroundColor: colors.positive + '10' }]}>
+                  {busy === `${b.booking_id}-disb` ? <ActivityIndicator size="small" color={colors.positive} /> : <>
+                    <Ionicons name="cash-outline" size={13} color={colors.positive} />
+                    <Text style={{ color: colors.positive, fontSize: 11, fontWeight: '600' }}>Disbursement</Text>
+                  </>}
+                </Pressable>
+
+                {/* 6. Bill Submitted */}
+                <Pressable testID={`booking-bill-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'bill submitted' }, 'bill')} style={[styles.act, { borderColor: colors.warning + '60', backgroundColor: colors.warning + '10' }]}>
+                  {busy === `${b.booking_id}-bill` ? <ActivityIndicator size="small" color={colors.warning} /> : <>
+                    <Ionicons name="receipt-outline" size={13} color={colors.warning} />
+                    <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '600' }}>Bill Submitted</Text>
+                  </>}
+                </Pressable>
+
+                {/* 7. Amt Recieved/Receipt */}
+                <Pressable testID={`booking-amt-${b.booking_id}`} onPress={() => update(b.booking_id, { token_received: b.token_received + (b.booking_amount * 0.1) }, 'amt')} style={[styles.act, { borderColor: '#10B98160', backgroundColor: '#10B98110' }]}>
+                  {busy === `${b.booking_id}-amt` ? <ActivityIndicator size="small" color="#10B981" /> : <>
+                    <Ionicons name="wallet-outline" size={13} color={'#10B981'} />
+                    <Text style={{ color: '#10B981', fontSize: 11, fontWeight: '600' }}>Amt Recieved / Receipt</Text>
+                  </>}
+                </Pressable>
+
+                {/* 2. Cancellation */}
+                <Pressable testID={`booking-cancel-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'cancellation' }, 'cancel')} style={[styles.act, { borderColor: colors.negative + '60', backgroundColor: colors.negative + '10' }]}>
+                  {busy === `${b.booking_id}-cancel` ? <ActivityIndicator size="small" color={colors.negative} /> : <>
+                    <Ionicons name="close-circle-outline" size={13} color={colors.negative} />
+                    <Text style={{ color: colors.negative, fontSize: 11, fontWeight: '600' }}>Cancellation</Text>
+                  </>}
                 </Pressable>
               </View>
             </View>
