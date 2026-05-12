@@ -38,6 +38,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [locationStatus, setLocationStatus] = useState<'checking' | 'granted' | 'denied'>('checking');
   const [coords, setCoords] = useState<{ lat: number, lng: number } | null>(null);
 
+  const refresh = useCallback(async () => {
+    try {
+      const r = await api.get('/auth/me');
+      setUser(r.data);
+    } catch {
+      setUser(null);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   const checkLocation = useCallback(() => {
     if (!navigator.geolocation) {
       setLocationStatus('denied');
