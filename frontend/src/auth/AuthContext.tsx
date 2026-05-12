@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { View, Text, Pressable } from 'react-native';
+import { View, Text, Pressable, ActivityIndicator } from 'react-native';
 import { api, setToken } from '../lib/api';
 
 export interface User {
@@ -120,6 +120,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const r = await api.post('/auth/act-as', { employee_id: employeeId });
     setUser(r.data);
   }, []);
+
+  if (locationStatus === 'checking') {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0A1628', alignItems: 'center', justifyContent: 'center' }}>
+        <ActivityIndicator size="large" color="#D4A843" />
+        <Text style={{ color: '#94A3B8', marginTop: 16, fontSize: 14 }}>Verifying GPS Status...</Text>
+      </View>
+    );
+  }
 
   if (locationStatus === 'denied') {
     return (
