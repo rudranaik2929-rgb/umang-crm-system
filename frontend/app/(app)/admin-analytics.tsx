@@ -268,7 +268,7 @@ export default function AdminAnalytics() {
                         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 }}>
                           <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: isActive ? colors.positive : colors.textMuted }} />
                           <Text style={{ color: isActive ? colors.positive : colors.textMuted, fontSize: 11, fontWeight: '600' }}>
-                            {isActive ? 'Active today' : (e.last_activity ? `Last active ${new Date(e.last_activity).toLocaleDateString()}` : 'No activity yet')}
+                            {e.last_activity ? `Last active: ${new Date(e.last_activity).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}` : 'No activity yet'}
                           </Text>
                         </View>
 

@@ -171,12 +171,25 @@ async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
 
 # ---- Activity Logger ----
 def log_activity(actor, type_, text, lead_id=None):
+    user_id_to_log = None
+    actor_name = "System"
+    
+    if actor:
+        user_id_to_log = actor.acting_as_employee_id or actor.user_id
+        actor_name = actor.name
+
+    # Check if they are acting as an employee
+    if actor and actor.acting_as_employee_id:
+        emps = sb_select("employees", {"employee_id": f"eq.{actor.acting_as_employee_id}", "select": "name"})
+        if emps:
+            actor_name = emps[0]["name"]
+
     act = {
         "activity_id": gen_id("act"),
         "lead_id": lead_id,
-        "user_id": actor.user_id if actor else None,
+        "user_id": user_id_to_log,
         "type": type_,
-        "text": text,
+        "text": f"[{actor_name}] {text}",
         "created_at": now_utc().isoformat(),
     }
     sb_insert("activities", act)
@@ -456,15 +469,33 @@ async def stats_me(cu: User=Depends(get_current_user)):
 @api_router.get("/stats/employees")
 async def stats_employees(cu: User=Depends(get_current_user)):
     employees = sb_select("employees", {"select": "*"})
-    return [{
-        "employee_id": e["employee_id"], "name": e["name"], "email": e["email"],
-        "role": e["role"], "department": e.get("department", ""),
-        "actions_total": random.randint(5, 50), "last_activity": now_utc().isoformat(),
-        "positives": random.randint(1, 10), "negatives": random.randint(0, 3),
-        "followups": random.randint(2, 15), "visits": random.randint(0, 8),
-        "bookings_done": random.randint(0, 5), "loans_done": random.randint(0, 3),
-        "closed_deals": random.randint(0, 2), "call_notes": random.randint(3, 20),
-    } for e in employees]
+    activities = sb_select("activities", {"select": "user_id,created_at,type"})
+    
+    # Calculate stats per employee
+    emp_stats = []
+    for e in employees:
+        eid = e["employee_id"]
+        emp_acts = [a for a in activities if a.get("user_id") == eid]
+        
+        last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
+        actions_total = len(emp_acts)
+        
+        # Simple counts based on activity types
+        positives = sum(1 for a in emp_acts if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
+        visits = sum(1 for a in emp_acts if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
+        
+        emp_stats.append({
+            "employee_id": eid, "name": e["name"], "email": e["email"],
+            "role": e["role"], "department": e.get("department", ""),
+            "actions_total": actions_total, "last_activity": last_activity,
+            "positives": positives, "negatives": 0,
+            "followups": 0, "visits": visits,
+            "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))), 
+            "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
+            "closed_deals": sum(1 for a in emp_acts if "closed" in str(a.get("type"))), 
+            "call_notes": sum(1 for a in emp_acts if "call" in str(a.get("type"))),
+        })
+    return emp_stats
 
 # ---- Health & Wiring ----
 @api_router.get("/")
