@@ -7,7 +7,18 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 
 app = FastAPI(title="Umang Properties CRM")
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://umang-home-tech.vercel.app",
+        "http://localhost:8081",
+        "http://localhost:19006",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 api_router = APIRouter(prefix="/api")
 
 STAGES = ["new","contacted","positive","site_visit","booking","loan","registration","closed"]
