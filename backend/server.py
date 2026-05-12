@@ -127,10 +127,17 @@ async def get_current_user(request: Request) -> User:
 async def auth_session(request: Request, response: Response):
     body = await request.json()
     email, password = body.get("email"), body.get("password")
-    if email == "htshpatil13@gmail.com" and password == "UmangAdmin@2026":
-        uid = "user_admin001"
-    else:
-        raise HTTPException(401, "Invalid credentials")
+    
+    # Query real users table
+    users = sb_select("users", {"email": f"eq.{email}", "select": "*"})
+    if not users:
+        raise HTTPException(401, "Invalid email or password")
+    
+    u = users[0]
+    if u.get("password") != password: # In production, use bcrypt/argon2 hashing
+        raise HTTPException(401, "Invalid email or password")
+    
+    uid = u["user_id"]
     token = gen_id("sess")
     sb_insert("sessions", {
         "session_token": token,
@@ -138,10 +145,14 @@ async def auth_session(request: Request, response: Response):
         "created_at": now_utc().isoformat(),
         "expires_at": (now_utc() + timedelta(days=7)).isoformat(),
     })
-    response.set_cookie(key="session_token", value=token, max_age=604800, httponly=True, samesite="none", path="/", secure=True)
-    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "*"})
-    if not users: raise HTTPException(500, "Admin user not found in database")
-    u = users[0]
+    
+    # Set secure cookie
+    response.set_cookie(
+        key="session_token", value=token, 
+        max_age=604800, httponly=True, 
+        samesite="none", path="/", secure=True
+    )
+    
     return {"user": User(**u).model_dump(mode="json"), "session_token": token}
 
 @api_router.get("/auth/me")
@@ -162,6 +173,21 @@ async def auth_set_role(payload: RoleSet, cu: User = Depends(get_current_user)):
     updated = sb_update("users", "user_id", cu.user_id, {"role": payload.role})
     if not updated: raise HTTPException(500, "Failed to update role")
     return User(**updated).model_dump(mode="json")
+
+@api_router.post("/auth/ping-location")
+async def ping_location(request: Request, cu: User=Depends(get_current_user)):
+    body = await request.json()
+    lat, lng = body.get("lat"), body.get("lng")
+    if lat is None or lng is None: return {"ok": False}
+    
+    # Update employee record if linked
+    if cu.employee_id:
+        sb_update("employees", "employee_id", cu.employee_id, {
+            "last_lat": lat,
+            "last_lng": lng,
+            "last_seen_at": now_utc().isoformat()
+        })
+    return {"ok": True}
 
 @api_router.post("/auth/act-as")
 async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):

@@ -12,6 +12,37 @@ HEADERS = {
 
 # Each SQL statement separately
 SQLS = [
+    # users
+    """CREATE TABLE IF NOT EXISTS users (
+        user_id TEXT PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        name TEXT,
+        role TEXT DEFAULT 'telecaller',
+        employee_id TEXT,
+        created_at TIMESTAMPTZ DEFAULT now()
+    );""",
+    # sessions
+    """CREATE TABLE IF NOT EXISTS sessions (
+        session_token TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        expires_at TIMESTAMPTZ
+    );""",
+    # employees
+    """CREATE TABLE IF NOT EXISTS employees (
+        employee_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        phone TEXT,
+        role TEXT,
+        department TEXT,
+        active BOOLEAN DEFAULT true,
+        last_lat NUMERIC,
+        last_lng NUMERIC,
+        last_seen_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT now()
+    );""",
     # leads
     """CREATE TABLE IF NOT EXISTS leads (
         lead_id TEXT PRIMARY KEY,
@@ -97,9 +128,9 @@ SQLS = [
         created_at TIMESTAMPTZ DEFAULT now()
     );""",
     # Seed admin user
-    """INSERT INTO users (user_id, email, name, role)
-       VALUES ('user_admin001', 'htshpatil13@gmail.com', 'Umang Home Tech', 'admin')
-       ON CONFLICT (user_id) DO NOTHING;""",
+    """INSERT INTO users (user_id, email, password, name, role)
+       VALUES ('user_admin001', 'htshpatil13@gmail.com', 'UmangAdmin@2026', 'Umang Home Tech', 'admin')
+       ON CONFLICT (user_id) DO UPDATE SET password = 'UmangAdmin@2026';""",
     # Seed demo employees
     """INSERT INTO employees (employee_id, name, email, phone, role, department)
        VALUES
@@ -110,7 +141,7 @@ SQLS = [
        ON CONFLICT (employee_id) DO NOTHING;""",
 ]
 
-TABLE_NAMES = ["leads", "activities", "visits", "bookings", "loans", "templates", "campaigns", "seed:users", "seed:employees"]
+TABLE_NAMES = ["users", "sessions", "employees", "leads", "activities", "visits", "bookings", "loans", "templates", "campaigns", "seed:users", "seed:employees"]
 
 client = httpx.Client(timeout=30)
 

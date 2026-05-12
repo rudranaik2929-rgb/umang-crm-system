@@ -12,6 +12,7 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
+  locationStatus: 'checking' | 'granted' | 'denied';
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
   exchangeSession: (credentials: any) => Promise<User | null>;
@@ -22,6 +23,7 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
+  locationStatus: 'checking',
   refresh: async () => {},
   logout: async () => {},
   exchangeSession: async () => null,
@@ -32,21 +34,48 @@ const AuthContext = createContext<AuthContextType>({
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
+  const [locationStatus, setLocationStatus] = useState<'checking' | 'granted' | 'denied'>('checking');
+  const [coords, setCoords] = useState<{ lat: number, lng: number } | null>(null);
 
-  const refresh = useCallback(async () => {
+  const checkLocation = useCallback(() => {
+    if (!navigator.geolocation) {
+      setLocationStatus('denied');
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocationStatus('granted');
+      },
+      () => setLocationStatus('denied'),
+      { enableHighAccuracy: true }
+    );
+  }, []);
+
+  const pingLocation = useCallback(async (lat: number, lng: number) => {
     try {
-      const r = await api.get('/auth/me');
-      setUser(r.data);
-    } catch {
-      setUser(null);
-    } finally {
-      setLoading(false);
+      await api.post('/auth/ping-location', { lat, lng });
+    } catch (e) {
+      console.warn('Failed to ping location', e);
     }
   }, []);
 
   useEffect(() => {
     refresh();
-  }, [refresh]);
+    checkLocation();
+  }, [refresh, checkLocation]);
+
+  useEffect(() => {
+    if (user && coords && locationStatus === 'granted') {
+      pingLocation(coords.lat, coords.lng);
+      const interval = setInterval(() => {
+        navigator.geolocation.getCurrentPosition((pos) => {
+          pingLocation(pos.coords.latitude, pos.coords.longitude);
+        });
+      }, 5 * 60 * 1000); // Ping every 5 minutes
+      return () => clearInterval(interval);
+    }
+  }, [user, coords, locationStatus, pingLocation]);
 
   const logout = useCallback(async () => {
     try {
@@ -80,8 +109,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(r.data);
   }, []);
 
+  if (locationStatus === 'denied') {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#0A1628', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
+        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: '#EF444420', alignItems: 'center', justifyContent: 'center', marginBottom: 24 }}>
+          <Text style={{ fontSize: 40 }}>📍</Text>
+        </View>
+        <Text style={{ color: '#fff', fontSize: 24, fontWeight: '700', textAlign: 'center', marginBottom: 12 }}>GPS Access Required</Text>
+        <Text style={{ color: '#94A3B8', fontSize: 16, textAlign: 'center', lineHeight: 24, marginBottom: 32 }}>
+          To ensure accountability for site visits and fieldwork, you must enable location services to use the Umang CRM.
+        </Text>
+        <Pressable 
+          onPress={checkLocation}
+          style={{ backgroundColor: '#D4A843', paddingHorizontal: 32, paddingVertical: 14, borderRadius: 12 }}
+        >
+          <Text style={{ color: '#000', fontWeight: '700' }}>Retry Permission</Text>
+        </Pressable>
+      </View>
+    );
+  }
+
   return (
-    <AuthContext.Provider value={{ user, loading, refresh, logout, exchangeSession, setRole: setRoleFn, actAs }}>
+    <AuthContext.Provider value={{ user, loading, locationStatus, refresh, logout, exchangeSession, setRole: setRoleFn, actAs }}>
       {children}
     </AuthContext.Provider>
   );

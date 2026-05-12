@@ -18,6 +18,7 @@ const ICON_MAP: Record<string, any> = {
   wa: 'logo-whatsapp',
   team: 'people-outline',
   archive: 'archive-outline',
+  tracking: 'map-outline',
 };
 
 interface Props {
