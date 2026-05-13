@@ -322,10 +322,9 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     if not leads: raise HTTPException(404, "Lead not found")
     vid = gen_id("vis")
     v = {
-        "visit_id": vid, "lead_id": p.lead_id, "lead_name": leads[0]["name"],
+        "visit_id": vid, "lead_id": p.lead_id,
         "scheduled_at": p.scheduled_at.isoformat(),
         "assigned_to": p.assigned_to or cu.acting_as_employee_id or cu.employee_id,
-        "assigned_name": cu.name if not p.assigned_to else "Assigned Staff",
         "status": "scheduled", "feedback": None,
         "interested": None, "created_at": now_utc().isoformat(),
     }
