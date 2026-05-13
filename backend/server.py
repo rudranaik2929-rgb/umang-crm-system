@@ -322,8 +322,11 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     if not leads: raise HTTPException(404, "Lead not found")
     vid = gen_id("vis")
     v = {
-        "visit_id": vid, "lead_id": p.lead_id, "scheduled_at": p.scheduled_at.isoformat(),
-        "assigned_to": p.assigned_to, "status": "scheduled", "feedback": None,
+        "visit_id": vid, "lead_id": p.lead_id, "lead_name": leads[0]["name"],
+        "scheduled_at": p.scheduled_at.isoformat(),
+        "assigned_to": p.assigned_to or cu.acting_as_employee_id or cu.employee_id,
+        "assigned_name": cu.name if not p.assigned_to else "Assigned Staff",
+        "status": "scheduled", "feedback": None,
         "interested": None, "created_at": now_utc().isoformat(),
     }
     result = sb_insert("visits", v)
@@ -334,7 +337,12 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
 
 @api_router.get("/visits")
 async def list_visits(cu: User=Depends(get_current_user)):
-    return sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
+    # Join with leads to ensure name is present even for legacy records
+    visits = sb_select("visits", {"select": "*,leads(name)", "order": "created_at.desc"})
+    for v in visits:
+        if not v.get("lead_name") and v.get("leads"):
+            v["lead_name"] = v["leads"].get("name")
+    return visits
 
 @api_router.patch("/visits/{visit_id}")
 async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_current_user)):

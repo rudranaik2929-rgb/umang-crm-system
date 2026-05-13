@@ -73,8 +73,10 @@ SQLS = [
     """CREATE TABLE IF NOT EXISTS visits (
         visit_id TEXT PRIMARY KEY,
         lead_id TEXT,
+        lead_name TEXT,
         scheduled_at TIMESTAMPTZ,
         assigned_to TEXT,
+        assigned_name TEXT,
         status TEXT DEFAULT 'scheduled',
         feedback TEXT,
         interested BOOLEAN,
