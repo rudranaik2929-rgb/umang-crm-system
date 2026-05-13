@@ -139,36 +139,9 @@ export default function MyDashboard() {
           </View>
         </View>
 
-        {/* Analytics Charts */}
-        <View>
-          <Text style={[styles.section, { color: colors.textMuted }]}>ANALYTICS</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
-            {graphData?.leads_by_day && (
-              <LineChart
-                title="Leads Per Day"
-                subtitle="New leads acquired daily — last 30 days"
-                data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(5), value: d.count }))}
-                color="#3B82F6"
-                testID="my-chart-leads"
-              />
-            )}
-            {graphData?.revenue_by_month && (
-              <LineChart
-                title="Revenue Pipeline"
-                subtitle="Monthly booking revenue — last 12 months"
-                data={graphData.revenue_by_month.map((d: any) => ({ label: d.month.slice(5), value: d.revenue }))}
-                color="#10B981"
-                formatValue={(v: number) => `₹${(v / 100000).toFixed(1)}L`}
-                testID="my-chart-revenue"
-              />
-            )}
-          </View>
-        </View>
-
         {/* Personal KPIs */}
-        {role !== 'admin' && (
-          <View>
-            <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
+        <View>
+          <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
             <View style={styles.kpiGrid}>
               <KPI label="Total Actions" value={personal.actions_total} icon="pulse-outline" color={accent} colors={colors} />
               <KPI label="Positive" value={personal.positives} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />

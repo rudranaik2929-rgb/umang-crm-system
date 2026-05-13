@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform, Dimensions } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { api } from '../../src/lib/api';
@@ -8,7 +8,6 @@ import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 
 const GOLD = '#D4A843';
-const GOLD_DIM = '#D4A84340';
 const CARD_BG = '#0D1B2A';
 const CARD_BORDER = '#1B2E45';
 
@@ -19,7 +18,7 @@ export default function Dashboard() {
   const [graphData, setGraphData] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-   const [sourceModalVisible, setSourceModalVisible] = useState(false);
+  const [sourceModalVisible, setSourceModalVisible] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -50,17 +49,14 @@ export default function Dashboard() {
   const hotCount = (sd.positive || 0) + (sd.site_visit || 0) + (sd.booking || 0) + (sd.loan || 0) + (sd.registration || 0) + (sd.closed || 0);
   const warmCount = sd.contacted || 0;
   const coldCount = sd.new || 0;
-  const totalTemp = hotCount + warmCount + coldCount || 1;
   const perfScore = totalLeads > 0 ? Math.min(100, Math.round((hotCount / totalLeads) * 100)) : 0;
   const revenue = stats?.revenue_pipeline || 0;
 
-  // Today leads count (simulate — leads created today)
   const todayStr = new Date().toISOString().slice(0, 10);
   const newLeadsToday = leads.filter(l => l.created_at?.slice(0, 10) === todayStr).length || sd.new || 0;
   const followupsToday = sd.contacted || 0;
   const visitsScheduled = stats?.site_visits || 0;
 
-  // Kanban
   const STAGES = ['new', 'contacted', 'positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
   const STAGE_LABELS: Record<string, string> = {
     new: 'New', contacted: 'Contacted', positive: 'Positive', site_visit: 'Site Visit',
@@ -73,74 +69,96 @@ export default function Dashboard() {
 
   return (
     <View style={{ flex: 1 }}>
-      <TopBar title="Dashboard" subtitle="Daily snapshot — what needs your attention right now" />
+      <TopBar title="Admin Control Center" subtitle="Full visibility across every department and pipeline" />
+      <View style={{ backgroundColor: CARD_BG, paddingHorizontal: 24, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: CARD_BORDER, flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 6 }}>
+        <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: '#10B981' }} />
+        <Text style={{ color: '#ffffff40', fontSize: 10, fontWeight: '600' }}>LIVE SYSTEM SYNC: {new Date().toLocaleTimeString()}</Text>
+      </View>
       <ScrollView contentContainerStyle={s.content}>
 
-        {/* ====== ROW 1: Performance Score | Lead Temperature | Total Revenue ====== */}
-        <View style={s.topRow}>
-          {/* Performance Score */}
-          <View style={[s.card, s.perfCard]}>
-            <Text style={s.cardTitle}>Performance Score</Text>
-            <View style={s.perfBody}>
-              <GaugeChart score={perfScore} />
-              <View style={s.perfLegend}>
-                <LegendDot color="#EF4444" label="Hot" />
-                <LegendDot color="#F59E0B" label="Warm" />
-                <LegendDot color="#3B82F6" label="Cold" />
-              </View>
+        {/* ====== HERO: System Overview ====== */}
+        <View style={[s.hero, { backgroundColor: '#0D1B2A', borderColor: GOLD + '40' }]}>
+          <View style={{ flex: 1 }}>
+            <Text style={s.kicker}>REAL-TIME OPERATIONS</Text>
+            <Text style={s.heroTitle}>Command Dashboard</Text>
+            <View style={s.heroPills}>
+              <View style={s.heroPill}><Text style={s.heroPillText}>{stats?.employees || 0} Employees Active</Text></View>
+              <View style={s.heroPill}><Text style={s.heroPillText}>{stats?.campaigns || 0} Campaigns Live</Text></View>
+            </View>
+            <Text style={s.heroDesc}>
+              You are viewing real-time data from all departments. Monitor performance, track lead flow, and oversee revenue growth from this cockpit.
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 12, marginTop: 20 }}>
+              <Pressable onPress={() => router.push('/(app)/admin-analytics' as any)} style={[s.ctaBtn, { backgroundColor: GOLD }]}>
+                <Text style={s.ctaText}>View Deep Analytics</Text>
+                <Ionicons name="analytics" size={14} color="#000" />
+              </Pressable>
+              <Pressable onPress={() => router.push('/(app)/employees' as any)} style={[s.ctaBtn, { backgroundColor: '#1B2E45' }]}>
+                <Text style={[s.ctaText, { color: '#fff' }]}>Manage Team</Text>
+              </Pressable>
             </View>
           </View>
 
-          {/* Lead Temperature */}
-          <View style={[s.card, { flex: 1.2 }]}>
-            <Text style={s.cardTitle}>Lead Temperature</Text>
-            <View style={s.tempBarRow}>
-              <Text style={[s.tempLabel, { color: '#EF4444' }]}>Hot</Text>
-              <View style={s.tempBarTrack}>
-                <View style={[s.tempBarSeg, { flex: hotCount / totalTemp, backgroundColor: '#EF4444' }]} />
-                <View style={[s.tempBarSeg, { flex: warmCount / totalTemp, backgroundColor: '#F59E0B' }]} />
-                <View style={[s.tempBarSeg, { flex: coldCount / totalTemp, backgroundColor: '#3B82F6' }]} />
-              </View>
-              <Text style={[s.tempLabel, { color: '#3B82F6' }]}>Cold</Text>
-            </View>
-            <View style={s.tempNumbers}>
-              <View style={s.tempNumItem}>
-                <View style={[s.tempDot, { backgroundColor: '#EF4444' }]} />
-                <Text style={s.tempNumText}>{hotCount} Hot</Text>
-              </View>
-              <View style={s.tempNumItem}>
-                <View style={[s.tempDot, { backgroundColor: '#F59E0B' }]} />
-                <Text style={s.tempNumText}>{warmCount} Warm</Text>
-              </View>
-              <View style={s.tempNumItem}>
-                <View style={[s.tempDot, { backgroundColor: '#3B82F6' }]} />
-                <Text style={s.tempNumText}>{coldCount} Cold</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Total Revenue */}
-          <View style={[s.card, { flex: 0.7, justifyContent: 'center' }]}>
-            <Text style={[s.cardTitle, { fontSize: 11 }]}>Total Revenue</Text>
-            <Text style={s.smallLabel}>This month</Text>
-            <Text style={s.revenueValue}>₹{revenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
+          <View style={s.gaugeWrap}>
+            <GaugeChart score={perfScore} />
+            <Text style={s.gaugeLabel}>CONVERSION EFFICIENCY</Text>
+            <Text style={s.gaugeSub}>{perfScore >= 70 ? 'Optimal Performance' : 'Action Required'}</Text>
           </View>
         </View>
 
-        {/* ====== ROW 2: New Leads | Follow-ups | Site Visits ====== */}
+        {/* ====== LEAD TEMPERATURE CARDS ====== */}
+        <View>
+          <Text style={s.sectionTitle}>LEAD TEMPERATURE</Text>
+          <View style={s.tempGrid}>
+            <TempCard icon="flame" label="Hot Leads" value={hotCount} color="#EF4444" desc="Booking Potential" />
+            <TempCard icon="sunny" label="Warm Leads" value={warmCount} color="#F59E0B" desc="Follow-up Queue" />
+            <TempCard icon="snow" label="Cold Leads" value={coldCount} color="#3B82F6" desc="New Enquiries" />
+            <TempCard icon="trophy" label="Revenue" value={`₹${(revenue / 100000).toFixed(1)}L`} color={GOLD} desc="This Month" />
+          </View>
+        </View>
+
+        {/* ====== MINI STATS ====== */}
         <View style={s.statRow}>
           <MiniStat label="Total Leads" sub="Source Breakdown" value={totalLeads} color={GOLD} onPress={() => setSourceModalVisible(true)} />
-          <MiniStat label="New Leads" sub="Today" value={newLeadsToday} color={GOLD} />
-          <MiniStat label="Follow-ups" sub="Today" value={followupsToday} color={GOLD} />
-          <MiniStat label="Site Visits" sub="Scheduled" value={visitsScheduled} color={GOLD} />
+          <MiniStat label="New Leads" sub="Today" value={newLeadsToday} color="#3B82F6" />
+          <MiniStat label="Follow-ups" sub="In Progress" value={followupsToday} color="#F59E0B" />
+          <MiniStat label="Site Visits" sub="Scheduled" value={visitsScheduled} color="#06B6D4" />
         </View>
 
-        {/* ====== KANBAN BOARD ====== */}
+        {/* ====== CHARTS ====== */}
+        <View style={s.chartRow}>
+          {graphData?.leads_by_day && (
+            <View style={[s.card, { flex: 1.2 }]}>
+              <Text style={s.cardTitle}>Acquisition Flow (30D)</Text>
+              <SVGLineChart
+                data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(8), value: d.count }))}
+                color="#3B82F6"
+                height={180}
+              />
+            </View>
+          )}
+          {graphData?.revenue_by_month && (
+            <View style={[s.card, { flex: 1 }]}>
+              <Text style={s.cardTitle}>Revenue Growth (12M)</Text>
+              <SVGLineChart
+                data={graphData.revenue_by_month.map((d: any) => ({
+                  label: new Date(d.month + '-01').toLocaleString('en', { month: 'short' }),
+                  value: d.revenue,
+                }))}
+                color={GOLD}
+                height={180}
+                formatY={(v: number) => `${Math.round(v / 100000)}L`}
+              />
+            </View>
+          )}
+        </View>
+
+        {/* ====== KANBAN PREVIEW ====== */}
         <View style={[s.card, { padding: 16 }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={s.cardTitle}>Kanban Board</Text>
+            <Text style={s.cardTitle}>Global Pipeline Preview</Text>
             <Pressable onPress={() => router.push('/(app)/pipeline' as any)}>
-              <Text style={{ color: GOLD, fontSize: 18 }}>⋯</Text>
+              <Text style={{ color: GOLD, fontSize: 13, fontWeight: '700' }}>VIEW FULL BOARD →</Text>
             </Pressable>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -154,24 +172,18 @@ export default function Dashboard() {
                       <Text style={[s.kanbanHeaderText, { color: stageColor }]}>{STAGE_LABELS[stage]}</Text>
                       <Text style={s.kanbanCount}>{stageLeads.length}</Text>
                     </View>
-                    {stageLeads.slice(0, 3).map(lead => (
+                    {stageLeads.slice(0, 2).map(lead => (
                       <Pressable
                         key={lead.lead_id}
                         style={s.kanbanCard}
                         onPress={() => router.push(`/(app)/lead/${lead.lead_id}` as any)}
                       >
                         <Text style={s.kanbanName} numberOfLines={1}>{lead.name}</Text>
-                        <Text style={s.kanbanDetail} numberOfLines={1}>
-                          {lead.property_type} · {lead.budget}
-                        </Text>
-                        <Text style={s.kanbanDetail} numberOfLines={1}>{lead.location}</Text>
+                        <Text style={s.kanbanDetail} numberOfLines={1}>{lead.property_type}</Text>
                       </Pressable>
                     ))}
-                    {stageLeads.length > 3 && (
-                      <Text style={s.kanbanMore}>+{stageLeads.length - 3} more</Text>
-                    )}
-                    {stageLeads.length === 0 && (
-                      <Text style={s.kanbanEmpty}>No leads</Text>
+                    {stageLeads.length > 2 && (
+                      <Text style={s.kanbanMore}>+{stageLeads.length - 2} more</Text>
                     )}
                   </View>
                 );
@@ -180,85 +192,37 @@ export default function Dashboard() {
           </ScrollView>
         </View>
 
-        {/* ====== ROW 3: Charts ====== */}
-        <View style={s.chartRow}>
-          {graphData?.leads_by_day && (
-            <View style={[s.card, { flex: 1 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <View>
-                  <Text style={s.cardTitle}>Leads per Day</Text>
-                  <Text style={s.smallLabel}>Last 30 days</Text>
-                </View>
-                <Text style={{ color: '#ffffff50', fontSize: 18 }}>⋯</Text>
-              </View>
-              <SVGLineChart
-                data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(8), value: d.count }))}
-                color="#3B82F6"
-                height={160}
-              />
-            </View>
-          )}
-          {graphData?.revenue_by_month && (
-            <View style={[s.card, { flex: 1 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <View>
-                  <Text style={s.cardTitle}>Revenue per Month</Text>
-                  <Text style={s.smallLabel}>Past 12 months</Text>
-                </View>
-                <Text style={{ color: '#ffffff50', fontSize: 18 }}>⋯</Text>
-              </View>
-              <SVGLineChart
-                data={graphData.revenue_by_month.map((d: any) => ({
-                  label: new Date(d.month + '-01').toLocaleString('en', { month: 'short' }),
-                  value: d.revenue,
-                }))}
-                color="#D4A843"
-                height={160}
-                formatY={(v: number) => `${Math.round(v / 1000000)}M`}
-              />
-            </View>
-          )}
-        </View>
-
       </ScrollView>
       <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
     </View>
   );
 }
 
-/* ====== GAUGE CHART COMPONENT ====== */
+function TempCard({ icon, label, value, color, desc }: any) {
+  return (
+    <View style={[s.tempCard, { borderColor: CARD_BORDER }]}>
+      <View style={[s.tempIcon, { backgroundColor: color + '15' }]}>
+        <Ionicons name={icon} size={22} color={color} />
+      </View>
+      <View>
+        <Text style={s.tempLabel}>{label.toUpperCase()}</Text>
+        <Text style={[s.tempVal, { color }]}>{value}</Text>
+        <Text style={s.tempDesc}>{desc}</Text>
+      </View>
+    </View>
+  );
+}
+
 function GaugeChart({ score }: { score: number }) {
   const angle = (score / 100) * 180;
   const isWeb = Platform.OS === 'web';
-
-  if (!isWeb) {
-    return (
-      <View style={{ alignItems: 'center', justifyContent: 'center', width: 120, height: 80 }}>
-        <Text style={{ color: '#fff', fontSize: 32, fontWeight: '700' }}>{score}%</Text>
-      </View>
-    );
-  }
-
+  if (!isWeb) return <View style={{ height: 80, justifyContent: 'center' }}><Text style={{ color: '#fff', fontSize: 24, fontWeight: '700' }}>{score}%</Text></View>;
   return (
     <View style={{ alignItems: 'center', width: 140, height: 90 }}>
       <svg viewBox="0 0 200 110" style={{ width: 140, height: 90 } as any}>
-        {/* Background arc */}
         <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#1B2E45" strokeWidth="14" strokeLinecap="round" />
-        {/* Score arc */}
-        <path
-          d={describeArc(100, 100, 80, 180, 180 + angle)}
-          fill="none"
-          stroke={GOLD}
-          strokeWidth="14"
-          strokeLinecap="round"
-        />
-        {/* Score text */}
-        <text x="100" y="90" textAnchor="middle" fill="#ffffff" fontSize="28" fontWeight="700" fontFamily="sans-serif">
-          {score}%
-        </text>
-        <text x="100" y="106" textAnchor="middle" fill="#ffffff80" fontSize="10" fontFamily="sans-serif">
-          {score}%
-        </text>
+        <path d={describeArc(100, 100, 80, 180, 180 + angle)} fill="none" stroke={GOLD} strokeWidth="14" strokeLinecap="round" />
+        <text x="100" y="90" textAnchor="middle" fill="#ffffff" fontSize="28" fontWeight="700">{score}%</text>
       </svg>
     </View>
   );
@@ -270,215 +234,94 @@ function describeArc(cx: number, cy: number, r: number, startAngle: number, endA
   const y1 = cy + r * Math.sin(rad(startAngle));
   const x2 = cx + r * Math.cos(rad(endAngle));
   const y2 = cy + r * Math.sin(rad(endAngle));
-  const large = endAngle - startAngle > 180 ? 1 : 0;
-  return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
+  return `M ${x1} ${y1} A ${r} ${r} 0 0 1 ${x2} ${y2}`;
 }
 
-/* ====== LEGEND DOT ====== */
-function LegendDot({ color, label }: { color: string; label: string }) {
-  return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
-      <Text style={{ color: '#ffffffB0', fontSize: 11 }}>{label}</Text>
-    </View>
-  );
-}
-
-/* ====== MINI STAT CARD ====== */
-function MiniStat({ label, sub, value, color, onPress }: { label: string; sub: string; value: number; color: string; onPress?: () => void }) {
+function MiniStat({ label, sub, value, color, onPress }: any) {
   const Wrapper = onPress ? Pressable : View;
   return (
-    <Wrapper 
-      onPress={onPress}
-      style={[s.card, s.miniCard, onPress && { borderColor: color + '80', borderStyle: 'dashed' }]}
-    >
+    <Wrapper onPress={onPress} style={[s.card, s.miniCard, onPress && { borderColor: color + '80', borderStyle: 'dashed' }]}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
         <View style={[s.miniDot, { backgroundColor: color }]} />
-        <View>
-          <Text style={s.miniLabel}>{label}</Text>
-          <Text style={s.miniSub}>{sub}</Text>
-        </View>
+        <View><Text style={s.miniLabel}>{label}</Text><Text style={s.miniSub}>{sub}</Text></View>
       </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Text style={[s.miniValue, { color }]}>{value}</Text>
-        {onPress && <Text style={{ color: color, fontSize: 8, fontWeight: '700' }}>VIEW DETAILS</Text>}
-      </View>
+      <View style={{ alignItems: 'flex-end' }}><Text style={[s.miniValue, { color }]}>{value}</Text></View>
     </Wrapper>
   );
 }
 
-/* ====== SVG LINE CHART ====== */
-function SVGLineChart({ data, color, height, formatY }: { data: { label: string; value: number }[]; color: string; height: number; formatY?: (v: number) => string }) {
+function SVGLineChart({ data, color, height, formatY }: any) {
   const isWeb = Platform.OS === 'web';
-  const max = Math.max(1, ...data.map(d => d.value));
-  const H = height;
-  const padL = 40;
-  const padB = 24;
-  const chartW = 100; // SVG viewBox width percentage
-  const chartH = 100;
-
-  if (!isWeb || data.length < 2) {
-    // Fallback bars
-    return (
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: H, gap: 2, marginTop: 16 }}>
-        {data.map((d, i) => (
-          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-            <View style={{ width: '60%', height: (d.value / max) * (H - 20), backgroundColor: color + '60', borderRadius: 3, borderTopWidth: 2, borderTopColor: color }} />
-          </View>
-        ))}
-      </View>
-    );
-  }
-
-  const yTicks = 5;
+  if (!isWeb || data.length < 2) return <View style={{ height, backgroundColor: '#ffffff05', borderRadius: 8 }} />;
+  const max = Math.max(1, ...data.map((d: any) => d.value));
+  const yTicks = 4;
   const yVals = Array.from({ length: yTicks + 1 }, (_, i) => Math.round((max / yTicks) * i));
-
   const buildPath = () => {
-    if (data.length < 2) return '';
     let p = `M 0 ${100 - (data[0].value / max) * 90}`;
     const step = 100 / (data.length - 1);
     for (let i = 0; i < data.length - 1; i++) {
-      const x1 = i * step;
-      const y1 = 100 - (data[i].value / max) * 90;
-      const x2 = (i + 1) * step;
-      const y2 = 100 - (data[i+1].value / max) * 90;
+      const x1 = i * step, y1 = 100 - (data[i].value / max) * 90;
+      const x2 = (i + 1) * step, y2 = 100 - (data[i+1].value / max) * 90;
       p += ` C ${x1 + step/2} ${y1}, ${x2 - step/2} ${y2}, ${x2} ${y2}`;
     }
     return p;
   };
-
   const linePath = buildPath();
   const areaPath = linePath + ` L 100 100 L 0 100 Z`;
-
   return (
     <View style={{ marginTop: 12 }}>
       <View style={{ flexDirection: 'row' }}>
-        {/* Y-axis */}
-        <View style={{ width: padL, justifyContent: 'space-between', height: H, paddingVertical: 2 }}>
-          {[...yVals].reverse().map((v, i) => (
-            <Text key={i} style={{ color: '#ffffff50', fontSize: 9, textAlign: 'right', paddingRight: 6 }}>
-              {formatY ? formatY(v) : v}
-            </Text>
-          ))}
+        <View style={{ width: 40, justifyContent: 'space-between', height }}>
+          {[...yVals].reverse().map((v, i) => <Text key={i} style={{ color: '#ffffff40', fontSize: 8, textAlign: 'right', paddingRight: 4 }}>{formatY ? formatY(v) : v}</Text>)}
         </View>
-        {/* Chart area */}
-        <View style={{ flex: 1, height: H }}>
-          {/* Grid lines */}
-          {yVals.map((_, i) => (
-            <View key={i} style={{ position: 'absolute', top: (i / yTicks) * H, left: 0, right: 0, height: 1, backgroundColor: '#ffffff0A' }} />
-          ))}
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', position: 'absolute' } as any}>
-            <defs>
-              <linearGradient id={`area-${color}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-                <stop offset="60%" stopColor={color} stopOpacity="0.1" />
-                <stop offset="100%" stopColor={color} stopOpacity="0" />
-              </linearGradient>
-              <filter id="glow">
-                <feGaussianBlur stdDeviation="1.2" result="blur" />
-                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-            </defs>
-            <path d={areaPath} fill={`url(#area-${color})`} style={{ transition: 'all 0.4s' } as any} />
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" filter="url(#glow)" vectorEffect="non-scaling-stroke" style={{ transition: 'all 0.4s' } as any} />
+        <View style={{ flex: 1, height }}>
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%' } as any}>
+            <defs><linearGradient id={`a-${color}`} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={color} stopOpacity="0.3" /><stop offset="100%" stopColor={color} stopOpacity="0" /></linearGradient></defs>
+            <path d={areaPath} fill={`url(#a-${color})`} /><path d={linePath} fill="none" stroke={color} strokeWidth="3" vectorEffect="non-scaling-stroke" />
           </svg>
-          {/* Dots */}
-          {data.map((d, i) => {
-            const x = (i / (data.length - 1)) * 100;
-            const y = 100 - (d.value / max) * 90;
-            return (
-              <View key={i} style={{
-                position: 'absolute',
-                left: `${x}%`,
-                top: `${y}%`,
-                width: 8, height: 8, borderRadius: 4,
-                backgroundColor: color,
-                borderWidth: 2, borderColor: CARD_BG,
-                shadowColor: color, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 4,
-                marginLeft: -4, marginTop: -4,
-                zIndex: 2,
-              }} />
-            );
-          })}
         </View>
-      </View>
-      {/* X-axis */}
-      <View style={{ flexDirection: 'row', marginLeft: padL, marginTop: 6 }}>
-        {data.map((d, i) => {
-          const every = data.length > 20 ? 5 : data.length > 12 ? 3 : 2;
-          if (i % every !== 0 && i !== data.length - 1) return <View key={i} style={{ flex: 1 }} />;
-          return (
-            <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ color: '#ffffff50', fontSize: 9 }}>{d.label}</Text>
-            </View>
-          );
-        })}
       </View>
     </View>
   );
 }
 
-/* ====== STYLES ====== */
 const s = StyleSheet.create({
-  content: { padding: 20, gap: 16 },
-
-  /* Cards */
-  card: {
-    backgroundColor: CARD_BG,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    padding: 20,
-  },
-  cardTitle: { color: '#ffffffE0', fontSize: 14, fontWeight: '700', letterSpacing: 0.3 },
-  smallLabel: { color: '#ffffff60', fontSize: 10, marginTop: 2 },
-
-  /* Top row */
-  topRow: { flexDirection: 'row', gap: 14 },
-  perfCard: { flex: 1 },
-  perfBody: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
-  perfLegend: { gap: 6 },
-
-  /* Temperature */
-  tempBarRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18 },
-  tempLabel: { fontSize: 10, fontWeight: '700' },
-  tempBarTrack: { flex: 1, height: 10, borderRadius: 5, flexDirection: 'row', overflow: 'hidden' },
-  tempBarSeg: { height: '100%' },
-  tempNumbers: { flexDirection: 'row', gap: 16, marginTop: 14 },
-  tempNumItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  tempDot: { width: 8, height: 8, borderRadius: 4 },
-  tempNumText: { color: '#ffffffB0', fontSize: 11 },
-
-  /* Revenue */
-  revenueValue: { color: GOLD, fontSize: 28, fontWeight: '700', letterSpacing: -0.5, marginTop: 8 },
-
-  /* Stat row */
-  statRow: { flexDirection: 'row', gap: 14 },
-  miniCard: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
+  content: { padding: 24, gap: 24 },
+  card: { backgroundColor: CARD_BG, borderRadius: 16, borderWidth: 1, borderColor: CARD_BORDER, padding: 24 },
+  cardTitle: { color: '#ffffffE0', fontSize: 12, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
+  sectionTitle: { color: '#ffffff60', fontSize: 10, fontWeight: '700', letterSpacing: 1.4, marginBottom: 12 },
+  hero: { flexDirection: 'row', padding: 32, borderRadius: 20, borderWidth: 1, alignItems: 'center', gap: 32 },
+  kicker: { color: GOLD, fontSize: 9, fontWeight: '700', letterSpacing: 2 },
+  heroTitle: { color: '#fff', fontSize: 32, fontWeight: '700', letterSpacing: -1, marginTop: 8 },
+  heroPills: { flexDirection: 'row', gap: 8, marginTop: 16 },
+  heroPill: { backgroundColor: '#1B2E45', paddingHorizontal: 10, height: 24, borderRadius: 99, justifyContent: 'center' },
+  heroPillText: { color: '#ffffffB0', fontSize: 10, fontWeight: '600' },
+  heroDesc: { color: '#ffffff80', fontSize: 14, lineHeight: 22, marginTop: 20, maxWidth: 500 },
+  ctaBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 20, height: 44, borderRadius: 12 },
+  ctaText: { fontSize: 13, fontWeight: '700' },
+  gaugeWrap: { alignItems: 'center', width: 200 },
+  gaugeLabel: { color: '#ffffff60', fontSize: 9, fontWeight: '700', marginTop: 12 },
+  gaugeSub: { color: GOLD, fontSize: 11, fontWeight: '600', marginTop: 4 },
+  tempGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  tempCard: { flex: 1, minWidth: 200, backgroundColor: CARD_BG, borderRadius: 16, borderWidth: 1, padding: 20, flexDirection: 'row', gap: 16, alignItems: 'center' },
+  tempIcon: { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  tempLabel: { color: '#ffffff60', fontSize: 9, fontWeight: '700' },
+  tempVal: { fontSize: 26, fontWeight: '700', color: '#fff' },
+  tempDesc: { color: '#ffffff40', fontSize: 10 },
+  statRow: { flexDirection: 'row', gap: 16 },
+  miniCard: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 20, paddingVertical: 18 },
   miniDot: { width: 6, height: 6, borderRadius: 3 },
   miniLabel: { color: '#ffffffD0', fontSize: 12, fontWeight: '600' },
   miniSub: { color: '#ffffff60', fontSize: 9 },
-  miniValue: { fontSize: 28, fontWeight: '700', letterSpacing: -0.5 },
-
-  /* Kanban */
-  kanbanRow: { flexDirection: 'row', gap: 10 },
-  kanbanCol: { width: 150, minHeight: 160 },
-  kanbanHeader: { borderBottomWidth: 2, paddingBottom: 8, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  kanbanHeaderText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-  kanbanCount: { color: '#ffffff50', fontSize: 10, fontWeight: '600' },
-  kanbanCard: {
-    backgroundColor: '#0A1628',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#1B2E4580',
-    padding: 10,
-    marginBottom: 6,
-  },
+  miniValue: { fontSize: 30, fontWeight: '700' },
+  chartRow: { flexDirection: 'row', gap: 16 },
+  kanbanRow: { flexDirection: 'row', gap: 12 },
+  kanbanCol: { width: 180 },
+  kanbanHeader: { borderBottomWidth: 2, paddingBottom: 10, marginBottom: 12, flexDirection: 'row', justifyContent: 'space-between' },
+  kanbanHeaderText: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase' },
+  kanbanCount: { color: '#ffffff40', fontSize: 10 },
+  kanbanCard: { backgroundColor: '#0A1628', borderRadius: 10, borderWidth: 1, borderColor: '#1B2E4580', padding: 12, marginBottom: 8 },
   kanbanName: { color: '#ffffffD0', fontSize: 11, fontWeight: '600' },
-  kanbanDetail: { color: '#ffffff60', fontSize: 9, marginTop: 2 },
-  kanbanMore: { color: GOLD, fontSize: 10, fontWeight: '600', marginTop: 4 },
-  kanbanEmpty: { color: '#ffffff30', fontSize: 10, fontStyle: 'italic' },
-
-  /* Charts */
-  chartRow: { flexDirection: 'row', gap: 14 },
+  kanbanDetail: { color: '#ffffff50', fontSize: 9, marginTop: 4 },
+  kanbanMore: { color: GOLD, fontSize: 10, fontWeight: '600' },
 });
