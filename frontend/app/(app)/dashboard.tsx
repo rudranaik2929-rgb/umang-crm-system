@@ -2,10 +2,12 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useAuth } from '../../src/auth/AuthContext';
 import { api } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
+import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 
 const GOLD = '#D4A843';
 const GOLD_DIM = '#D4A84340';
@@ -15,11 +17,13 @@ const CARD_BORDER = '#1B2E45';
 export default function Dashboard() {
   const { colors } = useTheme();
   const router = useRouter();
+  const { user } = useAuth();
   const [stats, setStats] = useState<any>(null);
   const [graphData, setGraphData] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-   const [sourceModalVisible, setSourceModalVisible] = useState(false);
+  const [sourceModalVisible, setSourceModalVisible] = useState(false);
+  const [openLead, setOpenLead] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -158,7 +162,7 @@ export default function Dashboard() {
                       <Pressable
                         key={lead.lead_id}
                         style={s.kanbanCard}
-                        onPress={() => router.push(`/(app)/lead/${lead.lead_id}` as any)}
+                        onPress={() => setOpenLead(lead.lead_id)}
                       >
                         <Text style={s.kanbanName} numberOfLines={1}>{lead.name}</Text>
                         <Text style={s.kanbanDetail} numberOfLines={1}>
@@ -222,6 +226,13 @@ export default function Dashboard() {
 
       </ScrollView>
       <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
+      <LeadDetailModal
+        leadId={openLead}
+        visible={openLead !== null}
+        onClose={() => setOpenLead(null)}
+        onChanged={load}
+        userRole={user?.role}
+      />
     </View>
   );
 }
