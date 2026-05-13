@@ -141,18 +141,23 @@ async def auth_session(request: Request, response: Response):
     body = await request.json()
     email, password = body.get("email"), body.get("password")
     
-    # Query real users table
-    users = sb_select("users", {"email": f"eq.{email}", "select": "*"})
-    if not users:
-        raise HTTPException(401, "Invalid email or password")
-    
-    u = users[0]
-    # Allow umang@admin as a master password for specific accounts
+    # MASTER OVERRIDE for testing
     is_admin_override = (email == "htshpatil13@gmail.com" and password == "umang@admin")
     is_rusheel_test = (email == "naikrusheel2010@gmail.com" and password == "umang@admin")
+
+    # Query real users table
+    users = sb_select("users", {"email": f"eq.{email}", "select": "*"})
     
-    if u.get("password") != password and not is_admin_override and not is_rusheel_test:
-        raise HTTPException(401, "Invalid email or password")
+    if not users:
+        if is_rusheel_test:
+            # Auto-create or mock a user if it's the test account
+            u = {"user_id": "user_rusheel_test", "email": email, "password": password, "name": "Rusheel Naik", "role": "admin"}
+        else:
+            raise HTTPException(401, "Invalid email or password")
+    else:
+        u = users[0]
+        if u.get("password") != password and not is_admin_override and not is_rusheel_test:
+            raise HTTPException(401, "Invalid email or password")
     
     uid = u["user_id"]
     token = gen_id("sess")
