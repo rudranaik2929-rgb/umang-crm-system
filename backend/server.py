@@ -328,19 +328,26 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
         "status": "scheduled", "feedback": None,
         "interested": None, "created_at": now_utc().isoformat(),
     }
-    result = sb_insert("visits", v)
+    result = sb_insert(table="visits", data=v)
+    if not result:
+        raise HTTPException(500, "Failed to schedule visit — database insert error")
     # Automatically move lead to site_visit stage
     sb_update("leads", "lead_id", p.lead_id, {"stage": "site_visit", "updated_at": now_utc().isoformat()})
     log_activity(cu, "site_visit_scheduled", f"Scheduled site visit for {leads[0]['name']}", lead_id=p.lead_id)
-    return result or v
+    return result
 
 @api_router.get("/visits")
 async def list_visits(cu: User=Depends(get_current_user)):
-    # Join with leads to ensure name is present even for legacy records
-    visits = sb_select("visits", {"select": "*,leads(name)", "order": "created_at.desc"})
+    visits = sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
+    # Enrich visits with lead names by looking up each lead
+    lead_ids = list(set(v.get("lead_id") for v in visits if v.get("lead_id")))
+    lead_map = {}
+    if lead_ids:
+        leads = sb_select("leads", {"select": "lead_id,name"})
+        lead_map = {l["lead_id"]: l["name"] for l in leads}
     for v in visits:
-        if not v.get("lead_name") and v.get("leads"):
-            v["lead_name"] = v["leads"].get("name")
+        if not v.get("lead_name"):
+            v["lead_name"] = lead_map.get(v.get("lead_id"), "Unknown Lead")
     return visits
 
 @api_router.patch("/visits/{visit_id}")
