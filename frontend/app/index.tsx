@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, ScrollView, Platform, Dimensions, TextInput } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, ScrollView, Platform, Dimensions, TextInput, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../src/theme/ThemeContext';
@@ -14,18 +14,45 @@ export default function Index() {
   const { width } = Dimensions.get('window');
   const isWide = width >= 900;
 
-  useEffect(() => {
-    if (!loading && user) {
+  // Remove auto-redirect to allow user to see the login screen
+  // useEffect(() => {
+  //   if (!loading && user) {
+  //     if (!user.role) router.replace('/select-role' as any);
+  //     else router.replace('/(app)/dashboard' as any);
+  //   }
+  // }, [user, loading, router]);
+
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const onLogin = async () => {
+    if (!email || !password) {
+      alert('Please enter both email and password');
+      return;
+    }
+    
+    setIsLoggingIn(true);
+    try {
+      const loggedInUser = await exchangeSession({ email, password });
+      if (loggedInUser) {
+        if (!loggedInUser.role) router.replace('/select-role' as any);
+        else router.replace('/(app)/dashboard' as any);
+      } else {
+        alert('Login failed. Please check your credentials.');
+      }
+    } catch (err) {
+      alert('An error occurred during login. Please try again.');
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const onContinue = () => {
+    if (user) {
       if (!user.role) router.replace('/select-role' as any);
       else router.replace('/(app)/dashboard' as any);
     }
-  }, [user, loading, router]);
-
-  const [email, setEmail] = useState('htshpatil13@gmail.com');
-  const [password, setPassword] = useState('UmangAdmin@2026');
-
-  const onLogin = async () => {
-    await exchangeSession({ email, password });
   };
 
   const onEnquiry = () => router.push('/enquire' as any);
@@ -62,7 +89,11 @@ export default function Index() {
       )}
 
       {/* RIGHT — AUTH PANEL */}
-      <ScrollView contentContainerStyle={styles.right} style={{ flex: 1 }}>
+      <ScrollView 
+        contentContainerStyle={styles.right} 
+        style={{ flex: 1 }}
+        keyboardShouldPersistTaps="handled"
+      >
         <View style={styles.rightInner}>
           <View style={styles.topRow}>
             <View style={styles.brandRow}>
@@ -82,7 +113,7 @@ export default function Index() {
             </Pressable>
           </View>
 
-          <View style={{ flex: 1 }} />
+          <View style={{ flex: 1, minHeight: 40 }} />
 
           <Text style={[styles.kicker, { color: colors.textMuted }]}>WELCOME BACK</Text>
           <Text style={[styles.headline, { color: colors.text }]}>Sign in to your CRM</Text>
@@ -98,6 +129,7 @@ export default function Index() {
               value={email}
               onChangeText={setEmail}
               autoCapitalize="none"
+              keyboardType="email-address"
             />
             <TextInput
               style={[styles.input, { borderColor: colors.border, color: colors.text }]}
@@ -109,13 +141,29 @@ export default function Index() {
             />
           </View>
 
-          <Pressable
-            onPress={onLogin}
-            testID="login-btn"
-            style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
-          >
-            <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to CRM</Text>
-          </Pressable>
+          {user ? (
+            <Pressable
+              onPress={onContinue}
+              disabled={isLoggingIn}
+              testID="continue-btn"
+              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
+            >
+              <Text style={[styles.primaryText, { color: '#fff' }]}>Continue as {user.name}</Text>
+            </Pressable>
+          ) : (
+            <Pressable
+              onPress={onLogin}
+              disabled={isLoggingIn}
+              testID="login-btn"
+              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
+            >
+              {isLoggingIn ? (
+                <ActivityIndicator color="#fff" size="small" />
+              ) : (
+                <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to CRM</Text>
+              )}
+            </Pressable>
+          )}
 
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
@@ -159,29 +207,31 @@ const styles = StyleSheet.create({
   heroPill: { paddingHorizontal: 12, height: 30, borderRadius: 99, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', justifyContent: 'center' },
   heroPillText: { color: '#fff', fontSize: 11, fontWeight: '600', letterSpacing: 0.6 },
 
-  right: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', minHeight: '100%' },
-  rightInner: { width: '100%', maxWidth: 460, padding: 48, flex: 1 },
-  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  right: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', minHeight: Platform.OS === 'web' ? '100vh' : '100%' },
+  rightInner: { width: '100%', maxWidth: 460, padding: Platform.OS === 'web' && Dimensions.get('window').width > 600 ? 48 : 24, flex: 1, justifyContent: 'center' },
+  topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   logoImageSm: { width: 38, height: 38, borderRadius: 8 },
   brandText: { fontSize: 14, fontWeight: '700' },
-  themeBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  themeBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center', cursor: 'pointer' } as any,
 
-  kicker: { fontSize: 11, fontWeight: '700', letterSpacing: 1.4, marginTop: 32 },
+  kicker: { fontSize: 11, fontWeight: '700', letterSpacing: 1.4, marginTop: 12 },
   headline: { fontSize: 30, fontWeight: '700', letterSpacing: -0.8, marginTop: 6 },
   subhead: { fontSize: 13, lineHeight: 20, marginTop: 10 },
 
   primaryBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 10, height: 48, borderRadius: 10, marginTop: 8,
-  },
+    cursor: 'pointer',
+  } as any,
   primaryText: { fontSize: 14, fontWeight: '600' },
   input: { height: 48, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, fontSize: 15 },
   divider: { height: 1, marginVertical: 28 },
   outlineBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, height: 44, borderRadius: 10, borderWidth: 1,
-  },
+    cursor: 'pointer',
+  } as any,
   outlineText: { fontSize: 13, fontWeight: '600' },
   footer: { fontSize: 11, marginTop: 24, textAlign: 'left' },
 });
