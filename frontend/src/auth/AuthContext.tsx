@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { View, Text, Pressable, ActivityIndicator } from 'react-native';
-import { api, setToken } from '../lib/api';
+import { api, setToken, setActAsId } from '../lib/api';
 
 export interface User {
   user_id: string;
@@ -117,6 +117,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const actAs = useCallback(async (employeeId: string | null) => {
+    // We save this locally to support multiple people on one account
+    await setActAsId(employeeId);
     const r = await api.post('/auth/act-as', { employee_id: employeeId });
     setUser(r.data);
   }, []);

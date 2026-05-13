@@ -123,9 +123,17 @@ async def get_current_user(request: Request) -> User:
     exp = sess.get("expires_at", "")
     if exp and datetime.fromisoformat(exp.replace("Z","+00:00")) <= now_utc():
         raise HTTPException(401, "Session expired")
+    
     users = sb_select("users", {"user_id": f"eq.{sess['user_id']}", "select": "*"})
     if not users: raise HTTPException(401, "User not found")
-    return User(**users[0])
+    
+    user_data = users[0]
+    # Override acting_as from header if provided (per-device tracking)
+    acting_as_header = request.headers.get("X-Acting-As")
+    if acting_as_header:
+        user_data["acting_as_employee_id"] = acting_as_header
+        
+    return User(**user_data)
 
 # ---- Auth Endpoints ----
 @api_router.post("/auth/session")
@@ -199,9 +207,11 @@ async def ping_location(request: Request, cu: User=Depends(get_current_user)):
 
 @api_router.post("/auth/act-as")
 async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
-    updated = sb_update("users", "user_id", cu.user_id, {"acting_as_employee_id": payload.employee_id})
-    if not updated: raise HTTPException(500, "Failed to update")
-    return User(**updated).model_dump(mode="json")
+    # We no longer save this to the DB to support multi-user shared accounts.
+    # The frontend will now store this in LocalStorage and send it via X-Acting-As header.
+    updated_user = cu.model_dump()
+    updated_user["acting_as_employee_id"] = payload.employee_id
+    return updated_user
 
 # ---- Activity Logger ----
 def log_activity(actor, type_, text, lead_id=None): 
