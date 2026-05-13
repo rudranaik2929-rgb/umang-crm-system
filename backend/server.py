@@ -315,6 +315,23 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     log_activity(cu, "stage_change", f"Stage moved {cur} → {new_stage}", lead_id=lead_id)
     return updated or lead
 
+@api_router.delete("/leads/{lead_id}")
+async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
+    if cu.role != "admin":
+        raise HTTPException(403, "Only admins can delete leads")
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id,name"})
+    if not leads: raise HTTPException(404, "Lead not found")
+    lead_name = leads[0].get("name", "Unknown")
+    # Clean up related records
+    sb_delete("activities", "lead_id", lead_id)
+    sb_delete("visits", "lead_id", lead_id)
+    sb_delete("bookings", "lead_id", lead_id)
+    sb_delete("loans", "lead_id", lead_id)
+    # Delete the lead itself
+    sb_delete("leads", "lead_id", lead_id)
+    log_activity(cu, "lead_deleted", f"Deleted lead: {lead_name}")
+    return {"ok": True, "deleted": lead_id}
+
 # ---- Visits ----
 @api_router.post("/visits")
 async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):

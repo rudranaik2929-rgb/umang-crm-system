@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useAuth } from '../../src/auth/AuthContext';
 import { api } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
@@ -10,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 export default function NegativeLeads() {
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [openLead, setOpenLead] = useState<string | null>(null);
@@ -68,7 +70,7 @@ export default function NegativeLeads() {
             </View>
           )}
       </ScrollView>
-      <LeadDetailModal leadId={openLead} visible={openLead !== null} onClose={() => setOpenLead(null)} onChanged={load} />
+      <LeadDetailModal leadId={openLead} visible={openLead !== null} onClose={() => setOpenLead(null)} onChanged={load} userRole={user?.role} />
     </View>
   );
 }

@@ -11,15 +11,17 @@ interface Props {
   visible: boolean;
   onClose: () => void;
   onChanged?: () => void;
+  userRole?: string | null;
 }
 
-export function LeadDetailModal({ leadId, visible, onClose, onChanged }: Props) {
+export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole }: Props) {
   const { colors } = useTheme();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
   const [busy, setBusy] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const subAnim = React.useRef(new Animated.Value(0)).current;
 
   const selectCategory = (cat: string) => {
@@ -100,6 +102,21 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged }: Props) 
     }
   };
 
+  const deleteLead = async () => {
+    if (!leadId) return;
+    setBusy('delete');
+    try {
+      await api.delete(`/leads/${leadId}`);
+      setShowDeleteConfirm(false);
+      onChanged?.();
+      onClose();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Failed to delete lead');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const lead = data?.lead;
   const timeline = data?.timeline || [];
 
@@ -123,10 +140,68 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged }: Props) 
                     {lead.status === 'negative' ? <Badge text="NEGATIVE" color={colors.negative} /> : null}
                   </View>
                 </View>
-                <Pressable testID="lead-modal-close" onPress={onClose} hitSlop={12}>
-                  <Ionicons name="close" size={20} color={colors.textSecondary} />
-                </Pressable>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                  {userRole === 'admin' && (
+                    <Pressable
+                      testID="lead-delete-btn"
+                      onPress={() => setShowDeleteConfirm(true)}
+                      hitSlop={12}
+                      style={{
+                        width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+                        borderColor: colors.negative + '60', backgroundColor: colors.negative + '12',
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Ionicons name="trash-outline" size={16} color={colors.negative} />
+                    </Pressable>
+                  )}
+                  <Pressable testID="lead-modal-close" onPress={onClose} hitSlop={12}>
+                    <Ionicons name="close" size={20} color={colors.textSecondary} />
+                  </Pressable>
+                </View>
               </View>
+
+              {/* Delete Confirmation */}
+              {showDeleteConfirm && (
+                <View style={{
+                  padding: 16, marginHorizontal: 20, marginTop: 12, borderRadius: 10, borderWidth: 1,
+                  borderColor: colors.negative, backgroundColor: colors.negative + '10',
+                }}>
+                  <Text style={{ color: colors.negative, fontWeight: '700', fontSize: 14 }}>
+                    ⚠️ Delete "{lead.name}" permanently?
+                  </Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 4 }}>
+                    This will also remove all visits, bookings, loans, and activity history for this lead. This action cannot be undone.
+                  </Text>
+                  <View style={{ flexDirection: 'row', gap: 10, marginTop: 12 }}>
+                    <Pressable
+                      testID="lead-delete-confirm"
+                      onPress={deleteLead}
+                      disabled={busy === 'delete'}
+                      style={{
+                        flex: 1, height: 38, borderRadius: 8, backgroundColor: colors.negative,
+                        alignItems: 'center', justifyContent: 'center', opacity: busy === 'delete' ? 0.6 : 1,
+                      }}
+                    >
+                      {busy === 'delete' ? (
+                        <ActivityIndicator color="#fff" size="small" />
+                      ) : (
+                        <Text style={{ color: '#fff', fontWeight: '700', fontSize: 13 }}>Yes, Delete Forever</Text>
+                      )}
+                    </Pressable>
+                    <Pressable
+                      testID="lead-delete-cancel"
+                      onPress={() => setShowDeleteConfirm(false)}
+                      style={{
+                        flex: 1, height: 38, borderRadius: 8, borderWidth: 1, borderColor: colors.border,
+                        alignItems: 'center', justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>Cancel</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              )}
 
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, gap: 16 }}>
                 {/* Details */}
