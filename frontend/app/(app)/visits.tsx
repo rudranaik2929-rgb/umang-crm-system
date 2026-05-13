@@ -112,19 +112,18 @@ export default function Visits() {
                     busy={busy === `${v.visit_id}-completed`}
                     onPress={() => update(v.visit_id, { status: 'completed' }, 'completed')}
                     testID={`visit-complete-${v.visit_id}`} />
-                  <ActBtn label="Reschedule" icon="time-outline" color={colors.warning}
+                  
+                  <ActBtn label="Follow up" icon="calendar-outline" color={colors.warning}
                     busy={busy === `${v.visit_id}-rescheduled`}
                     onPress={() => update(v.visit_id, { status: 'rescheduled' }, 'rescheduled')}
                     testID={`visit-reschedule-${v.visit_id}`} />
-                  <ActBtn label="Interested" icon="heart-outline" color={colors.positive}
-                    busy={busy === `${v.visit_id}-interested`}
-                    onPress={() => update(v.visit_id, { interested: true }, 'interested')}
-                    testID={`visit-interested-${v.visit_id}`} />
-                  <ActBtn label="Not Interested" icon="close-circle-outline" color={colors.negative}
+
+                  <ActBtn label="Not interested" icon="close-circle-outline" color={colors.negative}
                     busy={busy === `${v.visit_id}-notinterested`}
                     onPress={() => update(v.visit_id, { interested: false }, 'notinterested')}
                     testID={`visit-notinterested-${v.visit_id}`} />
-                  <ActBtn label="Booking Ready" icon="document-text-outline" color={colors.primary}
+
+                  <ActBtn label="Booking done" icon="cash-outline" color={colors.primary}
                     busy={busy === `${v.visit_id}-booking`}
                     onPress={async () => {
                       setBusy(`${v.visit_id}-booking`);
