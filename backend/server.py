@@ -150,8 +150,16 @@ async def auth_session(request: Request, response: Response):
     
     if not users:
         if is_rusheel_test:
-            # Auto-create or mock a user if it's the test account
-            u = {"user_id": "user_rusheel_test", "email": email, "password": password, "name": "Rusheel Naik", "role": "admin"}
+            # Auto-provision the user in the database so session creation works
+            u = {
+                "user_id": "user_rusheel_001", 
+                "email": email, 
+                "password": password, 
+                "name": "Rusheel Naik", 
+                "role": "admin",
+                "created_at": now_utc().isoformat()
+            }
+            sb_insert("users", u)
         else:
             raise HTTPException(401, "Invalid email or password")
     else:
