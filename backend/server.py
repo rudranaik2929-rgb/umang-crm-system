@@ -7,6 +7,11 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 
 app = FastAPI(title="Umang Properties CRM")
+
+@app.get("/")
+async def root_health():
+    return {"status": "online", "message": "Umang CRM Backend is running", "timestamp": datetime.now().isoformat()}
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
