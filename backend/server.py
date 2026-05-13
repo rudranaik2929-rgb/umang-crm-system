@@ -337,6 +337,14 @@ async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
 async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{p.lead_id}", "select": "lead_id,name"})
     if not leads: raise HTTPException(404, "Lead not found")
+    # Prevent duplicate: check if an active visit already exists for this lead
+    existing = sb_select("visits", {
+        "lead_id": f"eq.{p.lead_id}",
+        "status": "in.(scheduled,rescheduled)",
+        "select": "visit_id",
+    })
+    if existing:
+        raise HTTPException(409, f"A site visit is already scheduled for {leads[0]['name']}. Complete or cancel the existing visit first.")
     vid = gen_id("vis")
     v = {
         "visit_id": vid, "lead_id": p.lead_id,

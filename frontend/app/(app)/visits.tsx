@@ -25,8 +25,17 @@ export default function Visits() {
   const load = useCallback(async () => {
     try {
       const [v, l] = await Promise.all([api.get('/visits'), api.get('/leads')]);
-      setVisits(v.data || []);
-      setLeads((l.data || []).filter((x: any) => x.status !== 'negative'));
+      const visitData = v.data || [];
+      setVisits(visitData);
+      // Filter out leads that already have an active visit (scheduled or rescheduled)
+      const activeVisitLeadIds = new Set(
+        visitData
+          .filter((x: any) => x.status === 'scheduled' || x.status === 'rescheduled')
+          .map((x: any) => x.lead_id)
+      );
+      setLeads(
+        (l.data || []).filter((x: any) => x.status !== 'negative' && !activeVisitLeadIds.has(x.lead_id))
+      );
     } finally { setLoading(false); }
   }, []);
 
