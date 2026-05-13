@@ -34,7 +34,10 @@ export default function Index() {
     
     setIsLoggingIn(true);
     try {
-      const loggedInUser = await exchangeSession({ email, password });
+      const loggedInUser = await exchangeSession({ 
+        email: email.trim(), 
+        password: password.trim() 
+      });
       if (loggedInUser) {
         if (!loggedInUser.role) router.replace('/select-role' as any);
         else router.replace('/(app)/dashboard' as any);
@@ -124,7 +127,7 @@ export default function Index() {
           <View style={{ width: '100%', gap: 12, marginBottom: 12 }}>
             <TextInput
               style={[styles.input, { borderColor: colors.border, color: colors.text }]}
-              placeholder="Username"
+              placeholder="Email Address"
               placeholderTextColor={colors.textMuted}
               value={email}
               onChangeText={setEmail}

@@ -113,23 +113,32 @@ export default function Visits() {
                     onPress={() => update(v.visit_id, { status: 'completed' }, 'completed')}
                     testID={`visit-complete-${v.visit_id}`} />
                   
-                  <ActBtn label="Follow up" icon="calendar-outline" color={colors.warning}
-                    busy={busy === `${v.visit_id}-rescheduled`}
-                    onPress={() => update(v.visit_id, { status: 'rescheduled' }, 'rescheduled')}
-                    testID={`visit-reschedule-${v.visit_id}`} />
+                  <ActBtn label="Follow Up" icon="calendar-outline" color={colors.warning}
+                    busy={busy === `${v.visit_id}-followup`}
+                    onPress={() => update(v.visit_id, { status: 'rescheduled' }, 'followup')}
+                    testID={`visit-followup-${v.visit_id}`} />
 
-                  <ActBtn label="Not interested" icon="close-circle-outline" color={colors.negative}
+                  <ActBtn label="Not Interested" icon="close-circle-outline" color={colors.negative}
                     busy={busy === `${v.visit_id}-notinterested`}
-                    onPress={() => update(v.visit_id, { interested: false }, 'notinterested')}
+                    onPress={async () => {
+                      setBusy(`${v.visit_id}-notinterested`);
+                      try {
+                        await api.patch(`/visits/${v.visit_id}`, { status: 'cancelled', interested: false });
+                        await api.patch(`/leads/${v.lead_id}`, { status: 'negative' });
+                        await load();
+                      } finally { setBusy(null); }
+                    }}
                     testID={`visit-notinterested-${v.visit_id}`} />
 
-                  <ActBtn label="Booking done" icon="cash-outline" color={colors.primary}
+                  <ActBtn label="Booking Done" icon="cash-outline" color={colors.primary}
                     busy={busy === `${v.visit_id}-booking`}
                     onPress={async () => {
                       setBusy(`${v.visit_id}-booking`);
                       try {
                         await api.patch(`/visits/${v.visit_id}`, { status: 'completed', interested: true });
                         await api.patch(`/leads/${v.lead_id}`, { stage: 'booking' });
+                        // Create a skeleton booking record
+                        await api.post('/bookings', { lead_id: v.lead_id, property_name: 'Selected Property', booking_amount: 0 });
                         await load();
                       } finally { setBusy(null); }
                     }}

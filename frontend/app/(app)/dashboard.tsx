@@ -214,7 +214,7 @@ export default function Dashboard() {
                 }))}
                 color="#D4A843"
                 height={160}
-                formatY={(v: number) => `${Math.round(v / 1000000)}M`}
+                formatY={(v: number) => v >= 100000 ? `${(v / 100000).toFixed(1)}L` : `${Math.round(v / 1000)}K`}
               />
             </View>
           )}
