@@ -1,14 +1,14 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { api } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
-import { roleLabel } from '../../src/lib/constants';
 
 const GOLD = '#D4A843';
+const GOLD_DIM = '#D4A84340';
 const CARD_BG = '#0D1B2A';
 const CARD_BORDER = '#1B2E45';
 
@@ -16,24 +16,21 @@ export default function Dashboard() {
   const { colors } = useTheme();
   const router = useRouter();
   const [stats, setStats] = useState<any>(null);
+  const [graphData, setGraphData] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [activities, setActivities] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
-  const [sourceModalVisible, setSourceModalVisible] = useState(false);
+   const [sourceModalVisible, setSourceModalVisible] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [s, l, e, a] = await Promise.all([
+      const [s, g, l] = await Promise.all([
         api.get('/stats/dashboard'),
+        api.get('/stats/dashboard/graph'),
         api.get('/leads'),
-        api.get('/stats/employees'),
-        api.get('/activities?limit=10'),
       ]);
       setStats(s.data);
+      setGraphData(g.data);
       setLeads(Array.isArray(l.data) ? l.data : []);
-      setEmployees(e.data || []);
-      setActivities(a.data || []);
     } finally { setLoading(false); }
   }, []);
 
@@ -50,12 +47,20 @@ export default function Dashboard() {
 
   const sd = stats?.stage_distribution || {};
   const totalLeads = stats?.total_leads || 0;
-  
+  const hotCount = (sd.positive || 0) + (sd.site_visit || 0) + (sd.booking || 0) + (sd.loan || 0) + (sd.registration || 0) + (sd.closed || 0);
+  const warmCount = sd.contacted || 0;
+  const coldCount = sd.new || 0;
+  const totalTemp = hotCount + warmCount + coldCount || 1;
+  const perfScore = totalLeads > 0 ? Math.min(100, Math.round((hotCount / totalLeads) * 100)) : 0;
+  const revenue = stats?.revenue_pipeline || 0;
+
+  // Today leads count (simulate — leads created today)
   const todayStr = new Date().toISOString().slice(0, 10);
   const newLeadsToday = leads.filter(l => l.created_at?.slice(0, 10) === todayStr).length || sd.new || 0;
   const followupsToday = sd.contacted || 0;
   const visitsScheduled = stats?.site_visits || 0;
 
+  // Kanban
   const STAGES = ['new', 'contacted', 'positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
   const STAGE_LABELS: Record<string, string> = {
     new: 'New', contacted: 'Contacted', positive: 'Positive', site_visit: 'Site Visit',
@@ -68,101 +73,74 @@ export default function Dashboard() {
 
   return (
     <View style={{ flex: 1 }}>
-      <TopBar title="Admin Dashboard" subtitle="System-wide overview & lead flow" />
+      <TopBar title="Dashboard" subtitle="Daily snapshot — what needs your attention right now" />
       <ScrollView contentContainerStyle={s.content}>
 
-        {/* ====== BASIC STATS ====== */}
-        <View style={s.statRow}>
-          <MiniStat label="Total Leads" sub="Full Database" value={totalLeads} color={GOLD} onPress={() => setSourceModalVisible(true)} />
-          <MiniStat label="New Leads" sub="Today" value={newLeadsToday} color="#3B82F6" />
-          <MiniStat label="Follow-ups" sub="Pending" value={followupsToday} color="#F59E0B" />
-          <MiniStat label="Site Visits" sub="Today" value={visitsScheduled} color="#06B6D4" />
-        </View>
-
-        <View style={{ flexDirection: 'row', gap: 20 }}>
-          {/* ====== LEADS BREAKDOWN ====== */}
-          <View style={[s.card, { flex: 1 }]}>
-            <Text style={s.cardTitle}>Leads Breakdown</Text>
-            <View style={{ marginTop: 16, gap: 12 }}>
-              {STAGES.map(stage => {
-                const count = sd[stage] || 0;
-                const pct = totalLeads > 0 ? (count / totalLeads) * 100 : 0;
-                const color = STAGE_COLORS[stage] || '#888';
-                return (
-                  <View key={stage} style={{ gap: 4 }}>
-                    <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <Text style={{ color: '#fff', fontSize: 11, fontWeight: '600' }}>{STAGE_LABELS[stage]}</Text>
-                      <Text style={{ color: '#ffffff60', fontSize: 10 }}>{count} leads</Text>
-                    </View>
-                    <View style={{ height: 4, backgroundColor: '#1B2E45', borderRadius: 2, overflow: 'hidden' }}>
-                      <View style={{ width: `${pct}%`, height: '100%', backgroundColor: color }} />
-                    </View>
-                  </View>
-                );
-              })}
-            </View>
-          </View>
-
-          {/* ====== TEAM STATUS ====== */}
-          <View style={[s.card, { flex: 1.2 }]}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <Text style={s.cardTitle}>Live Team Status</Text>
-              <Pressable onPress={() => router.push('/(app)/employees' as any)}>
-                <Text style={{ color: GOLD, fontSize: 10, fontWeight: '700' }}>MANAGE TEAM →</Text>
-              </Pressable>
-            </View>
-            <ScrollView style={{ maxHeight: 300 }}>
-              {employees.length === 0 ? (
-                <Text style={{ color: '#ffffff40', fontSize: 12 }}>No employees added yet.</Text>
-              ) : employees.map(e => {
-                const isActive = e.last_activity && (Date.now() - new Date(e.last_activity).getTime()) < 10 * 60 * 1000;
-                return (
-                  <View key={e.employee_id} style={s.empRow}>
-                    <View style={[s.empAvatar, { backgroundColor: colors.primary }]}>
-                      <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>{e.name[0]}</Text>
-                      {isActive && <View style={s.activeDot} />}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: '#fff', fontSize: 13, fontWeight: '600' }}>{e.name}</Text>
-                      <Text style={{ color: '#ffffff40', fontSize: 10 }}>{roleLabel(e.role)} · {e.department}</Text>
-                    </View>
-                    <View style={{ alignItems: 'flex-end' }}>
-                      <Text style={{ color: '#ffffff60', fontSize: 9 }}>{e.last_activity ? new Date(e.last_activity).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Never'}</Text>
-                      <Text style={{ color: isActive ? '#10B981' : '#ffffff20', fontSize: 8, fontWeight: '700' }}>{isActive ? 'ACTIVE NOW' : 'OFFLINE'}</Text>
-                    </View>
-                  </View>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </View>
-
-        {/* ====== LIVE ACTIVITY FEED ====== */}
-        <View style={s.card}>
-          <Text style={s.cardTitle}>Global Activity Stream</Text>
-          <View style={{ marginTop: 16 }}>
-            {activities.length === 0 ? (
-              <Text style={{ color: '#ffffff40', fontSize: 12 }}>No recent activity.</Text>
-            ) : activities.map(a => (
-              <View key={a.entry_id} style={s.actRow}>
-                <Ionicons name="flash" size={14} color={GOLD} style={{ marginTop: 2 }} />
-                <View style={{ flex: 1 }}>
-                  <Text style={{ color: '#ffffffE0', fontSize: 12 }}>
-                    <Text style={{ fontWeight: '700' }}>{a.actor_name || 'System'}</Text> {a.text}
-                  </Text>
-                  <Text style={{ color: '#ffffff40', fontSize: 10, marginTop: 2 }}>{new Date(a.created_at).toLocaleString()}</Text>
-                </View>
+        {/* ====== ROW 1: Performance Score | Lead Temperature | Total Revenue ====== */}
+        <View style={s.topRow}>
+          {/* Performance Score */}
+          <View style={[s.card, s.perfCard]}>
+            <Text style={s.cardTitle}>Performance Score</Text>
+            <View style={s.perfBody}>
+              <GaugeChart score={perfScore} />
+              <View style={s.perfLegend}>
+                <LegendDot color="#EF4444" label="Hot" />
+                <LegendDot color="#F59E0B" label="Warm" />
+                <LegendDot color="#3B82F6" label="Cold" />
               </View>
-            ))}
+            </View>
+          </View>
+
+          {/* Lead Temperature */}
+          <View style={[s.card, { flex: 1.2 }]}>
+            <Text style={s.cardTitle}>Lead Temperature</Text>
+            <View style={s.tempBarRow}>
+              <Text style={[s.tempLabel, { color: '#EF4444' }]}>Hot</Text>
+              <View style={s.tempBarTrack}>
+                <View style={[s.tempBarSeg, { flex: hotCount / totalTemp, backgroundColor: '#EF4444' }]} />
+                <View style={[s.tempBarSeg, { flex: warmCount / totalTemp, backgroundColor: '#F59E0B' }]} />
+                <View style={[s.tempBarSeg, { flex: coldCount / totalTemp, backgroundColor: '#3B82F6' }]} />
+              </View>
+              <Text style={[s.tempLabel, { color: '#3B82F6' }]}>Cold</Text>
+            </View>
+            <View style={s.tempNumbers}>
+              <View style={s.tempNumItem}>
+                <View style={[s.tempDot, { backgroundColor: '#EF4444' }]} />
+                <Text style={s.tempNumText}>{hotCount} Hot</Text>
+              </View>
+              <View style={s.tempNumItem}>
+                <View style={[s.tempDot, { backgroundColor: '#F59E0B' }]} />
+                <Text style={s.tempNumText}>{warmCount} Warm</Text>
+              </View>
+              <View style={s.tempNumItem}>
+                <View style={[s.tempDot, { backgroundColor: '#3B82F6' }]} />
+                <Text style={s.tempNumText}>{coldCount} Cold</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Total Revenue */}
+          <View style={[s.card, { flex: 0.7, justifyContent: 'center' }]}>
+            <Text style={[s.cardTitle, { fontSize: 11 }]}>Total Revenue</Text>
+            <Text style={s.smallLabel}>This month</Text>
+            <Text style={s.revenueValue}>₹{revenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
           </View>
         </View>
 
-        {/* ====== KANBAN PREVIEW ====== */}
+        {/* ====== ROW 2: New Leads | Follow-ups | Site Visits ====== */}
+        <View style={s.statRow}>
+          <MiniStat label="Total Leads" sub="Source Breakdown" value={totalLeads} color={GOLD} onPress={() => setSourceModalVisible(true)} />
+          <MiniStat label="New Leads" sub="Today" value={newLeadsToday} color={GOLD} />
+          <MiniStat label="Follow-ups" sub="Today" value={followupsToday} color={GOLD} />
+          <MiniStat label="Site Visits" sub="Scheduled" value={visitsScheduled} color={GOLD} />
+        </View>
+
+        {/* ====== KANBAN BOARD ====== */}
         <View style={[s.card, { padding: 16 }]}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={s.cardTitle}>Pipeline Overview</Text>
+            <Text style={s.cardTitle}>Kanban Board</Text>
             <Pressable onPress={() => router.push('/(app)/pipeline' as any)}>
-              <Text style={{ color: GOLD, fontSize: 10, fontWeight: '700' }}>VIEW FULL BOARD →</Text>
+              <Text style={{ color: GOLD, fontSize: 18 }}>⋯</Text>
             </Pressable>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
@@ -176,16 +154,25 @@ export default function Dashboard() {
                       <Text style={[s.kanbanHeaderText, { color: stageColor }]}>{STAGE_LABELS[stage]}</Text>
                       <Text style={s.kanbanCount}>{stageLeads.length}</Text>
                     </View>
-                    {stageLeads.slice(0, 2).map(lead => (
+                    {stageLeads.slice(0, 3).map(lead => (
                       <Pressable
                         key={lead.lead_id}
                         style={s.kanbanCard}
                         onPress={() => router.push(`/(app)/lead/${lead.lead_id}` as any)}
                       >
                         <Text style={s.kanbanName} numberOfLines={1}>{lead.name}</Text>
-                        <Text style={s.kanbanDetail} numberOfLines={1}>{lead.property_type}</Text>
+                        <Text style={s.kanbanDetail} numberOfLines={1}>
+                          {lead.property_type} · {lead.budget}
+                        </Text>
+                        <Text style={s.kanbanDetail} numberOfLines={1}>{lead.location}</Text>
                       </Pressable>
                     ))}
+                    {stageLeads.length > 3 && (
+                      <Text style={s.kanbanMore}>+{stageLeads.length - 3} more</Text>
+                    )}
+                    {stageLeads.length === 0 && (
+                      <Text style={s.kanbanEmpty}>No leads</Text>
+                    )}
                   </View>
                 );
               })}
@@ -193,17 +180,45 @@ export default function Dashboard() {
           </ScrollView>
         </View>
 
-        {/* CTA TO ANALYTICS */}
-        <Pressable 
-          onPress={() => router.push('/(app)/admin-analytics' as any)}
-          style={s.analyticsCta}
-        >
-          <View style={{ flex: 1, gap: 4 }}>
-            <Text style={{ color: GOLD, fontSize: 14, fontWeight: '700' }}>Open Secure Analytics</Text>
-            <Text style={{ color: '#ffffff60', fontSize: 11 }}>Revenue tracking, performance scores, and growth charts (PIN required)</Text>
-          </View>
-          <Ionicons name="chevron-forward" size={20} color={GOLD} />
-        </Pressable>
+        {/* ====== ROW 3: Charts ====== */}
+        <View style={s.chartRow}>
+          {graphData?.leads_by_day && (
+            <View style={[s.card, { flex: 1 }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View>
+                  <Text style={s.cardTitle}>Leads per Day</Text>
+                  <Text style={s.smallLabel}>Last 30 days</Text>
+                </View>
+                <Text style={{ color: '#ffffff50', fontSize: 18 }}>⋯</Text>
+              </View>
+              <SVGLineChart
+                data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(8), value: d.count }))}
+                color="#3B82F6"
+                height={160}
+              />
+            </View>
+          )}
+          {graphData?.revenue_by_month && (
+            <View style={[s.card, { flex: 1 }]}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <View>
+                  <Text style={s.cardTitle}>Revenue per Month</Text>
+                  <Text style={s.smallLabel}>Past 12 months</Text>
+                </View>
+                <Text style={{ color: '#ffffff50', fontSize: 18 }}>⋯</Text>
+              </View>
+              <SVGLineChart
+                data={graphData.revenue_by_month.map((d: any) => ({
+                  label: new Date(d.month + '-01').toLocaleString('en', { month: 'short' }),
+                  value: d.revenue,
+                }))}
+                color="#D4A843"
+                height={160}
+                formatY={(v: number) => `${Math.round(v / 1000000)}M`}
+              />
+            </View>
+          )}
+        </View>
 
       </ScrollView>
       <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
@@ -211,40 +226,259 @@ export default function Dashboard() {
   );
 }
 
-function MiniStat({ label, sub, value, color, onPress }: any) {
+/* ====== GAUGE CHART COMPONENT ====== */
+function GaugeChart({ score }: { score: number }) {
+  const angle = (score / 100) * 180;
+  const isWeb = Platform.OS === 'web';
+
+  if (!isWeb) {
+    return (
+      <View style={{ alignItems: 'center', justifyContent: 'center', width: 120, height: 80 }}>
+        <Text style={{ color: '#fff', fontSize: 32, fontWeight: '700' }}>{score}%</Text>
+      </View>
+    );
+  }
+
+  return (
+    <View style={{ alignItems: 'center', width: 140, height: 90 }}>
+      <svg viewBox="0 0 200 110" style={{ width: 140, height: 90 } as any}>
+        {/* Background arc */}
+        <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#1B2E45" strokeWidth="14" strokeLinecap="round" />
+        {/* Score arc */}
+        <path
+          d={describeArc(100, 100, 80, 180, 180 + angle)}
+          fill="none"
+          stroke={GOLD}
+          strokeWidth="14"
+          strokeLinecap="round"
+        />
+        {/* Score text */}
+        <text x="100" y="90" textAnchor="middle" fill="#ffffff" fontSize="28" fontWeight="700" fontFamily="sans-serif">
+          {score}%
+        </text>
+        <text x="100" y="106" textAnchor="middle" fill="#ffffff80" fontSize="10" fontFamily="sans-serif">
+          {score}%
+        </text>
+      </svg>
+    </View>
+  );
+}
+
+function describeArc(cx: number, cy: number, r: number, startAngle: number, endAngle: number) {
+  const rad = (a: number) => (a * Math.PI) / 180;
+  const x1 = cx + r * Math.cos(rad(startAngle));
+  const y1 = cy + r * Math.sin(rad(startAngle));
+  const x2 = cx + r * Math.cos(rad(endAngle));
+  const y2 = cy + r * Math.sin(rad(endAngle));
+  const large = endAngle - startAngle > 180 ? 1 : 0;
+  return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
+}
+
+/* ====== LEGEND DOT ====== */
+function LegendDot({ color, label }: { color: string; label: string }) {
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
+      <Text style={{ color: '#ffffffB0', fontSize: 11 }}>{label}</Text>
+    </View>
+  );
+}
+
+/* ====== MINI STAT CARD ====== */
+function MiniStat({ label, sub, value, color, onPress }: { label: string; sub: string; value: number; color: string; onPress?: () => void }) {
   const Wrapper = onPress ? Pressable : View;
   return (
-    <Wrapper onPress={onPress} style={[s.card, s.miniCard, onPress && { borderColor: color + '80', borderStyle: 'dashed' }]}>
+    <Wrapper 
+      onPress={onPress}
+      style={[s.card, s.miniCard, onPress && { borderColor: color + '80', borderStyle: 'dashed' }]}
+    >
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
         <View style={[s.miniDot, { backgroundColor: color }]} />
-        <View><Text style={s.miniLabel}>{label}</Text><Text style={s.miniSub}>{sub}</Text></View>
+        <View>
+          <Text style={s.miniLabel}>{label}</Text>
+          <Text style={s.miniSub}>{sub}</Text>
+        </View>
       </View>
-      <View style={{ alignItems: 'flex-end' }}><Text style={[s.miniValue, { color }]}>{value}</Text></View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={[s.miniValue, { color }]}>{value}</Text>
+        {onPress && <Text style={{ color: color, fontSize: 8, fontWeight: '700' }}>VIEW DETAILS</Text>}
+      </View>
     </Wrapper>
   );
 }
 
+/* ====== SVG LINE CHART ====== */
+function SVGLineChart({ data, color, height, formatY }: { data: { label: string; value: number }[]; color: string; height: number; formatY?: (v: number) => string }) {
+  const isWeb = Platform.OS === 'web';
+  const max = Math.max(1, ...data.map(d => d.value));
+  const H = height;
+  const padL = 40;
+  const padB = 24;
+  const chartW = 100; // SVG viewBox width percentage
+  const chartH = 100;
+
+  if (!isWeb || data.length < 2) {
+    // Fallback bars
+    return (
+      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: H, gap: 2, marginTop: 16 }}>
+        {data.map((d, i) => (
+          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+            <View style={{ width: '60%', height: (d.value / max) * (H - 20), backgroundColor: color + '60', borderRadius: 3, borderTopWidth: 2, borderTopColor: color }} />
+          </View>
+        ))}
+      </View>
+    );
+  }
+
+  const yTicks = 5;
+  const yVals = Array.from({ length: yTicks + 1 }, (_, i) => Math.round((max / yTicks) * i));
+
+  const buildPath = () => {
+    if (data.length < 2) return '';
+    let p = `M 0 ${100 - (data[0].value / max) * 90}`;
+    const step = 100 / (data.length - 1);
+    for (let i = 0; i < data.length - 1; i++) {
+      const x1 = i * step;
+      const y1 = 100 - (data[i].value / max) * 90;
+      const x2 = (i + 1) * step;
+      const y2 = 100 - (data[i+1].value / max) * 90;
+      p += ` C ${x1 + step/2} ${y1}, ${x2 - step/2} ${y2}, ${x2} ${y2}`;
+    }
+    return p;
+  };
+
+  const linePath = buildPath();
+  const areaPath = linePath + ` L 100 100 L 0 100 Z`;
+
+  return (
+    <View style={{ marginTop: 12 }}>
+      <View style={{ flexDirection: 'row' }}>
+        {/* Y-axis */}
+        <View style={{ width: padL, justifyContent: 'space-between', height: H, paddingVertical: 2 }}>
+          {[...yVals].reverse().map((v, i) => (
+            <Text key={i} style={{ color: '#ffffff50', fontSize: 9, textAlign: 'right', paddingRight: 6 }}>
+              {formatY ? formatY(v) : v}
+            </Text>
+          ))}
+        </View>
+        {/* Chart area */}
+        <View style={{ flex: 1, height: H }}>
+          {/* Grid lines */}
+          {yVals.map((_, i) => (
+            <View key={i} style={{ position: 'absolute', top: (i / yTicks) * H, left: 0, right: 0, height: 1, backgroundColor: '#ffffff0A' }} />
+          ))}
+          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', position: 'absolute' } as any}>
+            <defs>
+              <linearGradient id={`area-${color}`} x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity="0.35" />
+                <stop offset="60%" stopColor={color} stopOpacity="0.1" />
+                <stop offset="100%" stopColor={color} stopOpacity="0" />
+              </linearGradient>
+              <filter id="glow">
+                <feGaussianBlur stdDeviation="1.2" result="blur" />
+                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
+            </defs>
+            <path d={areaPath} fill={`url(#area-${color})`} style={{ transition: 'all 0.4s' } as any} />
+            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" filter="url(#glow)" vectorEffect="non-scaling-stroke" style={{ transition: 'all 0.4s' } as any} />
+          </svg>
+          {/* Dots */}
+          {data.map((d, i) => {
+            const x = (i / (data.length - 1)) * 100;
+            const y = 100 - (d.value / max) * 90;
+            return (
+              <View key={i} style={{
+                position: 'absolute',
+                left: `${x}%`,
+                top: `${y}%`,
+                width: 8, height: 8, borderRadius: 4,
+                backgroundColor: color,
+                borderWidth: 2, borderColor: CARD_BG,
+                shadowColor: color, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 4,
+                marginLeft: -4, marginTop: -4,
+                zIndex: 2,
+              }} />
+            );
+          })}
+        </View>
+      </View>
+      {/* X-axis */}
+      <View style={{ flexDirection: 'row', marginLeft: padL, marginTop: 6 }}>
+        {data.map((d, i) => {
+          const every = data.length > 20 ? 5 : data.length > 12 ? 3 : 2;
+          if (i % every !== 0 && i !== data.length - 1) return <View key={i} style={{ flex: 1 }} />;
+          return (
+            <View key={i} style={{ flex: 1, alignItems: 'center' }}>
+              <Text style={{ color: '#ffffff50', fontSize: 9 }}>{d.label}</Text>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+}
+
+/* ====== STYLES ====== */
 const s = StyleSheet.create({
-  content: { padding: 24, gap: 20 },
-  card: { backgroundColor: CARD_BG, borderRadius: 16, borderWidth: 1, borderColor: CARD_BORDER, padding: 20 },
-  cardTitle: { color: '#ffffffE0', fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
-  statRow: { flexDirection: 'row', gap: 14, flexWrap: 'wrap' },
-  miniCard: { flex: 1, minWidth: 160, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
+  content: { padding: 20, gap: 16 },
+
+  /* Cards */
+  card: {
+    backgroundColor: CARD_BG,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: CARD_BORDER,
+    padding: 20,
+  },
+  cardTitle: { color: '#ffffffE0', fontSize: 14, fontWeight: '700', letterSpacing: 0.3 },
+  smallLabel: { color: '#ffffff60', fontSize: 10, marginTop: 2 },
+
+  /* Top row */
+  topRow: { flexDirection: 'row', gap: 14 },
+  perfCard: { flex: 1 },
+  perfBody: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
+  perfLegend: { gap: 6 },
+
+  /* Temperature */
+  tempBarRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18 },
+  tempLabel: { fontSize: 10, fontWeight: '700' },
+  tempBarTrack: { flex: 1, height: 10, borderRadius: 5, flexDirection: 'row', overflow: 'hidden' },
+  tempBarSeg: { height: '100%' },
+  tempNumbers: { flexDirection: 'row', gap: 16, marginTop: 14 },
+  tempNumItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  tempDot: { width: 8, height: 8, borderRadius: 4 },
+  tempNumText: { color: '#ffffffB0', fontSize: 11 },
+
+  /* Revenue */
+  revenueValue: { color: GOLD, fontSize: 28, fontWeight: '700', letterSpacing: -0.5, marginTop: 8 },
+
+  /* Stat row */
+  statRow: { flexDirection: 'row', gap: 14 },
+  miniCard: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
   miniDot: { width: 6, height: 6, borderRadius: 3 },
   miniLabel: { color: '#ffffffD0', fontSize: 12, fontWeight: '600' },
   miniSub: { color: '#ffffff60', fontSize: 9 },
-  miniValue: { fontSize: 26, fontWeight: '700' },
-  empRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#1B2E4580' },
-  empAvatar: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-  activeDot: { position: 'absolute', bottom: 0, right: 0, width: 8, height: 8, borderRadius: 4, backgroundColor: '#10B981', borderWidth: 1, borderColor: CARD_BG },
-  actRow: { flexDirection: 'row', gap: 12, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#1B2E4540' },
-  kanbanRow: { flexDirection: 'row', gap: 12 },
-  kanbanCol: { width: 140 },
-  kanbanHeader: { borderBottomWidth: 2, paddingBottom: 8, marginBottom: 10, flexDirection: 'row', justifyContent: 'space-between' },
-  kanbanHeaderText: { fontSize: 9, fontWeight: '700', textTransform: 'uppercase' },
-  kanbanCount: { color: '#ffffff40', fontSize: 9 },
-  kanbanCard: { backgroundColor: '#0A1628', borderRadius: 8, borderWidth: 1, borderColor: '#1B2E4580', padding: 10, marginBottom: 6 },
+  miniValue: { fontSize: 28, fontWeight: '700', letterSpacing: -0.5 },
+
+  /* Kanban */
+  kanbanRow: { flexDirection: 'row', gap: 10 },
+  kanbanCol: { width: 150, minHeight: 160 },
+  kanbanHeader: { borderBottomWidth: 2, paddingBottom: 8, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  kanbanHeaderText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  kanbanCount: { color: '#ffffff50', fontSize: 10, fontWeight: '600' },
+  kanbanCard: {
+    backgroundColor: '#0A1628',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#1B2E4580',
+    padding: 10,
+    marginBottom: 6,
+  },
   kanbanName: { color: '#ffffffD0', fontSize: 11, fontWeight: '600' },
-  kanbanDetail: { color: '#ffffff50', fontSize: 9, marginTop: 4 },
-  analyticsCta: { backgroundColor: GOLD + '10', padding: 18, borderRadius: 16, borderWidth: 1, borderColor: GOLD + '30', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  kanbanDetail: { color: '#ffffff60', fontSize: 9, marginTop: 2 },
+  kanbanMore: { color: GOLD, fontSize: 10, fontWeight: '600', marginTop: 4 },
+  kanbanEmpty: { color: '#ffffff30', fontSize: 10, fontStyle: 'italic' },
+
+  /* Charts */
+  chartRow: { flexDirection: 'row', gap: 14 },
 });

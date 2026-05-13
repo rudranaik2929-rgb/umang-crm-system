@@ -6,6 +6,7 @@ import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api } from '../../src/lib/api';
+import { LineChart } from '../../src/components/LineChart';
 import { roleLabel } from '../../src/lib/constants';
 
 const ROLE_ACCENT: Record<string, string> = {
@@ -39,12 +40,17 @@ export default function MyDashboard() {
   const { user } = useAuth();
   const router = useRouter();
   const [data, setData] = useState<any>(null);
+  const [graphData, setGraphData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/stats/me');
+      const [r, g] = await Promise.all([
+        api.get('/stats/me'),
+        api.get('/stats/dashboard/graph'),
+      ]);
       setData(r.data);
+      setGraphData(g.data);
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
@@ -96,6 +102,7 @@ export default function MyDashboard() {
                 : 'Run WhatsApp campaigns and re-engage negative leads.'}
             </Text>
             <Pressable
+              testID="my-dashboard-cta"
               onPress={() => router.push(cta.route as any)}
               style={[styles.ctaBtn, { backgroundColor: accent }]}
             >
@@ -114,6 +121,9 @@ export default function MyDashboard() {
               </View>
             </View>
             <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>PERFORMANCE SCORE</Text>
+            <Text style={[styles.scoreSub, { color: colors.text }]}>
+              {score >= 8 ? 'Outstanding 🔥' : score >= 5 ? 'Doing well 👍' : score >= 2 ? 'Getting started' : 'Make your first move'}
+            </Text>
           </View>
         </View>
 
@@ -121,57 +131,85 @@ export default function MyDashboard() {
         <View>
           <Text style={[styles.section, { color: colors.textMuted }]}>LEAD TEMPERATURE</Text>
           <View style={styles.tempGrid}>
-            <TempCard icon="flame" label="Hot Leads" value={leads.hot} color="#EF4444" desc="Positive · Visit · Booking · Loan" colors={colors} />
-            <TempCard icon="sunny" label="Warm Leads" value={leads.warm} color="#F59E0B" desc="Contacted, awaiting follow-up" colors={colors} />
-            <TempCard icon="snow" label="Cold Leads" value={leads.cold} color="#0EA5E9" desc="New enquiries in queue" colors={colors} />
-            <TempCard icon="close-circle" label="Negative" value={leads.negative} color={colors.negative} desc="Reservoir for re-engagement" colors={colors} />
-            <TempCard icon="trophy" label="Closed Won" value={leads.closed} color="#10B981" desc="Customers onboarded" colors={colors} />
+            <TempCard testID="temp-hot" icon="flame" label="Hot Leads" value={leads.hot} color="#EF4444" desc="Positive · Visit · Booking · Loan" colors={colors} />
+            <TempCard testID="temp-warm" icon="sunny" label="Warm Leads" value={leads.warm} color="#F59E0B" desc="Contacted, awaiting follow-up" colors={colors} />
+            <TempCard testID="temp-cold" icon="snow" label="Cold Leads" value={leads.cold} color="#0EA5E9" desc="New enquiries in queue" colors={colors} />
+            <TempCard testID="temp-neg" icon="close-circle" label="Negative" value={leads.negative} color={colors.negative} desc="Reservoir for re-engagement" colors={colors} />
+            <TempCard testID="temp-closed" icon="trophy" label="Closed Won" value={leads.closed} color="#10B981" desc="Customers onboarded" colors={colors} />
+          </View>
+        </View>
+
+        {/* Analytics Charts */}
+        <View>
+          <Text style={[styles.section, { color: colors.textMuted }]}>ANALYTICS</Text>
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
+            {graphData?.leads_by_day && (
+              <LineChart
+                title="Leads Per Day"
+                subtitle="New leads acquired daily — last 30 days"
+                data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(5), value: d.count }))}
+                color="#3B82F6"
+                testID="my-chart-leads"
+              />
+            )}
+            {graphData?.revenue_by_month && (
+              <LineChart
+                title="Revenue Pipeline"
+                subtitle="Monthly booking revenue — last 12 months"
+                data={graphData.revenue_by_month.map((d: any) => ({ label: d.month.slice(5), value: d.revenue }))}
+                color="#10B981"
+                formatValue={(v: number) => `₹${(v / 100000).toFixed(1)}L`}
+                testID="my-chart-revenue"
+              />
+            )}
           </View>
         </View>
 
         {/* Personal KPIs */}
-        <View>
-          <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
-          <View style={styles.kpiGrid}>
-            <KPI label="Total Actions" value={personal.actions_total} icon="pulse-outline" color={accent} colors={colors} />
-            <KPI label="Positive" value={personal.positives} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />
-            <KPI label="Negative" value={personal.negatives} icon="thumbs-down-outline" color={colors.negative} colors={colors} highlight={highlight.includes('negatives')} />
-            <KPI label="Follow-ups" value={personal.followups} icon="time-outline" color={colors.warning} colors={colors} highlight={highlight.includes('followups')} />
-            <KPI label="Call Notes" value={personal.call_notes} icon="document-text-outline" color={colors.info} colors={colors} highlight={highlight.includes('call_notes')} />
-            <KPI label="Visits" value={personal.visits} icon="location-outline" color={'#0EA5E9'} colors={colors} highlight={highlight.includes('visits')} />
-            <KPI label="Bookings" value={personal.bookings_done} icon="document-text-outline" color={colors.warning} colors={colors} highlight={highlight.includes('bookings_done')} />
-            <KPI label="Loans" value={personal.loans_done} icon="business-outline" color={'#7C3AED'} colors={colors} highlight={highlight.includes('loans_done')} />
-            <KPI label="Closed Deals" value={personal.closed_deals} icon="trophy-outline" color={colors.accent} colors={colors} highlight={highlight.includes('closed_deals')} />
-          </View>
-          
-          {/* Live Activity Feed */}
-          <View style={{ marginTop: 32 }}>
-            <Text style={[styles.section, { color: colors.textMuted }]}>MY RECENT ACTIONS</Text>
-            <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              {(!data.recent_activities || data.recent_activities.length === 0) ? (
-                <Text style={{ color: colors.textMuted, fontSize: 12 }}>No activity yet.</Text>
-              ) : data.recent_activities.map((a: any) => (
-                <View key={a.activity_id} style={[styles.actRow, { borderBottomColor: colors.border }]}>
-                  <Ionicons name="ellipse" size={6} color={accent} style={{ marginRight: 10, marginTop: 7 }} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={{ color: colors.text, fontSize: 13 }}>{a.text}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                      {new Date(a.created_at).toLocaleString()}
-                    </Text>
+        {role !== 'admin' && (
+          <View>
+            <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
+            <View style={styles.kpiGrid}>
+              <KPI label="Total Actions" value={personal.actions_total} icon="pulse-outline" color={accent} colors={colors} />
+              <KPI label="Positive" value={personal.positives} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />
+              <KPI label="Negative" value={personal.negatives} icon="thumbs-down-outline" color={colors.negative} colors={colors} highlight={highlight.includes('negatives')} />
+              <KPI label="Follow-ups" value={personal.followups} icon="time-outline" color={colors.warning} colors={colors} highlight={highlight.includes('followups')} />
+              <KPI label="Call Notes" value={personal.call_notes} icon="document-text-outline" color={colors.info} colors={colors} highlight={highlight.includes('call_notes')} />
+              <KPI label="Visits" value={personal.visits} icon="location-outline" color={'#0EA5E9'} colors={colors} highlight={highlight.includes('visits')} />
+              <KPI label="Bookings" value={personal.bookings_done} icon="document-text-outline" color={colors.warning} colors={colors} highlight={highlight.includes('bookings_done')} />
+              <KPI label="Loans" value={personal.loans_done} icon="business-outline" color={'#7C3AED'} colors={colors} highlight={highlight.includes('loans_done')} />
+              <KPI label="Closed Deals" value={personal.closed_deals} icon="trophy-outline" color={colors.accent} colors={colors} highlight={highlight.includes('closed_deals')} />
+            </View>
+            
+            {/* Live Activity Feed */}
+            <View style={{ marginTop: 32 }}>
+              <Text style={[styles.section, { color: colors.textMuted }]}>MY RECENT ACTIONS</Text>
+              <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                {(!data.recent_activities || data.recent_activities.length === 0) ? (
+                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>No activity yet.</Text>
+                ) : data.recent_activities.map((a: any) => (
+                  <View key={a.activity_id} style={[styles.actRow, { borderBottomColor: colors.border }]}>
+                    <Ionicons name="ellipse" size={6} color={accent} style={{ marginRight: 10, marginTop: 7 }} />
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontSize: 13 }}>{a.text}</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                        {new Date(a.created_at).toLocaleString()}
+                      </Text>
+                    </View>
                   </View>
-                </View>
-              ))}
+                ))}
+              </View>
             </View>
           </View>
-        </View>
+        )}
       </ScrollView>
     </View>
   );
 }
 
-function TempCard({ icon, label, value, color, desc, colors }: any) {
+function TempCard({ icon, label, value, color, desc, colors, testID }: any) {
   return (
-    <View style={[styles.tempCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+    <View testID={testID} style={[styles.tempCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <View style={[styles.tempIcon, { backgroundColor: color + '18' }]}>
         <Ionicons name={icon} size={20} color={color} />
       </View>
@@ -200,31 +238,60 @@ function KPI({ label, value, icon, color, colors, highlight }: any) {
 
 const styles = StyleSheet.create({
   content: { padding: 24, gap: 24 },
-  hero: { flexDirection: 'row', gap: 24, padding: 28, borderRadius: 16, borderWidth: 1, alignItems: 'center' },
+  hero: {
+    flexDirection: 'row', gap: 24,
+    padding: 28, borderRadius: 16, borderWidth: 1,
+    alignItems: 'center',
+  },
   greeting: { fontSize: 11, fontWeight: '700', letterSpacing: 1.4 },
   heroName: { fontSize: 32, fontWeight: '700', letterSpacing: -0.6, marginTop: 6 },
-  heroRoleChip: { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', paddingHorizontal: 10, height: 26, borderRadius: 99, borderWidth: 1, marginTop: 10 },
+  heroRoleChip: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    alignSelf: 'flex-start', paddingHorizontal: 10, height: 26,
+    borderRadius: 99, borderWidth: 1, marginTop: 10,
+  },
   heroDesc: { fontSize: 13, lineHeight: 20, marginTop: 14, maxWidth: 520 },
-  ctaBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, alignSelf: 'flex-start', paddingHorizontal: 18, height: 42, borderRadius: 10, marginTop: 18 },
+  ctaBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 18, height: 42, borderRadius: 10, marginTop: 18,
+  },
   ctaText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   scoreWrap: { alignItems: 'center', gap: 8, width: 200 },
-  scoreRing: { width: 160, height: 160, borderRadius: 80, borderWidth: 8, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-  scoreFill: { position: 'absolute', width: 160, height: 160, borderRadius: 80, borderWidth: 8 },
-  scoreInner: { width: 130, height: 130, borderRadius: 65, alignItems: 'center', justifyContent: 'center' },
+  scoreRing: {
+    width: 160, height: 160, borderRadius: 80,
+    borderWidth: 8, alignItems: 'center', justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  scoreFill: {
+    position: 'absolute', width: 160, height: 160, borderRadius: 80,
+    borderWidth: 8,
+  },
+  scoreInner: {
+    width: 130, height: 130, borderRadius: 65,
+    alignItems: 'center', justifyContent: 'center',
+  },
   scoreVal: { fontSize: 48, fontWeight: '700', letterSpacing: -1 },
   scoreMax: { fontSize: 12, marginTop: -6 },
   scoreLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.4, marginTop: 4 },
+  scoreSub: { fontSize: 13, fontWeight: '600' },
+
   section: { fontSize: 11, fontWeight: '700', letterSpacing: 1.4, marginBottom: 12 },
+
   tempGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  tempCard: { width: 220, padding: 18, borderRadius: 12, borderWidth: 1, gap: 6 },
+  tempCard: {
+    width: 220, padding: 18, borderRadius: 12, borderWidth: 1, gap: 6,
+  },
   tempIcon: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   tempLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginTop: 4 },
   tempVal: { fontSize: 30, fontWeight: '700', letterSpacing: -0.5 },
   tempDesc: { fontSize: 11 },
+
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   kpiCard: { width: 180, padding: 14, borderRadius: 10, gap: 6 },
   kpiLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
   kpiVal: { fontSize: 26, fontWeight: '700', letterSpacing: -0.5 },
+  
   activityCard: { padding: 20, borderRadius: 12, borderWidth: 1 },
   actRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1 },
 });

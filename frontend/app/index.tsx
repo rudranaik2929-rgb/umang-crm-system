@@ -146,37 +146,21 @@ export default function Index() {
               onPress={onContinue}
               disabled={isLoggingIn}
               testID="continue-btn"
-              style={({ hovered }: any) => [
-                styles.primaryBtn,
-                { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : (hovered ? 0.9 : 1) }
-              ]}
+              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
             >
-              <Text style={[styles.primaryText, { color: '#fff' }]}>Continue to Workspace →</Text>
+              <Text style={[styles.primaryText, { color: '#fff' }]}>Continue as {user.name}</Text>
             </Pressable>
           ) : (
             <Pressable
               onPress={onLogin}
               disabled={isLoggingIn}
               testID="login-btn"
-              style={({ hovered }: any) => [
-                styles.primaryBtn,
-                { 
-                  backgroundColor: colors.primary, 
-                  opacity: isLoggingIn ? 0.7 : (hovered ? 0.9 : 1),
-                  shadowColor: colors.primary,
-                  shadowOffset: { width: 0, height: 4 },
-                  shadowOpacity: 0.3,
-                  shadowRadius: 8,
-                }
-              ]}
+              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
             >
               {isLoggingIn ? (
                 <ActivityIndicator color="#fff" size="small" />
               ) : (
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                  <Text style={[styles.primaryText, { color: '#fff' }]}>ACCESS SYSTEM</Text>
-                  <Ionicons name="shield-checkmark" size={16} color="#fff" />
-                </View>
+                <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to CRM</Text>
               )}
             </Pressable>
           )}
