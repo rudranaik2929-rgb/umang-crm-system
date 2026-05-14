@@ -26,7 +26,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
   const subAnim = React.useRef(new Animated.Value(0)).current;
-  const confettiAnims = React.useRef([...Array(15)].map(() => new Animated.Value(0))).current;
+  const confettiAnims = React.useRef([...Array(50)].map(() => new Animated.Value(0))).current;
 
   const selectCategory = (cat: string) => {
     if (activeCategory === cat) {
@@ -78,11 +78,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
     Animated.parallel(
       confettiAnims.map((anim, i) => 
         Animated.sequence([
-          Animated.delay(Math.random() * 600), // Randomize start
+          Animated.delay(Math.random() * 200),
           Animated.timing(anim, {
             toValue: 1,
-            duration: 1500 + Math.random() * 1000,
-            easing: Easing.bezier(0.25, 0.1, 0.25, 1),
+            duration: 2000 + Math.random() * 1000,
+            easing: Easing.bezier(0.1, 0.5, 0.3, 1), // "Explosive" start, slow finish
             useNativeDriver: true
           })
         ])
@@ -471,26 +471,33 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
               {showConfetti && (
                 <View style={StyleSheet.absoluteFill} pointerEvents="none">
                   {confettiAnims.map((anim, i) => {
-                    const colors = ['#FFD700', '#FF4500', '#00FF7F', '#1E90FF', '#FF69B4', '#8A2BE2'];
-                    const left = Math.random() * 100;
+                    const colors = ['#FFD700', '#FF4500', '#00FF7F', '#1E90FF', '#FF69B4', '#8A2BE2', '#FFA500'];
+                    // Start from bottom center (Party Popper style)
+                    const startX = 50; 
+                    const targetX = Math.random() * 120 - 10; // Spread from -10% to 110%
+                    const size = 18 + Math.random() * 20;
+                    
                     return (
                       <Animated.Text
                         key={i}
                         style={{
                           position: 'absolute',
-                          left: `${left}%`,
-                          fontSize: 28,
+                          left: `${startX}%`,
+                          bottom: 0,
+                          fontSize: size,
                           color: colors[i % colors.length],
                           transform: [
-                            { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-100, 900] }) },
-                            { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '720deg'] }) },
-                            { scale: anim.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1.2, 0.5] }) },
-                            { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, (i % 2 === 0 ? 80 : -80)] }) }
+                            // Shoot UP first (-800) then fall down slightly (0)
+                            { translateY: anim.interpolate({ inputRange: [0, 0.3, 1], outputRange: [0, -700 - Math.random() * 200, 200] }) },
+                            // Spread OUT horizontally
+                            { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, (targetX - startX) * 10] }) },
+                            { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', `${360 + Math.random() * 1000}deg`] }) },
+                            { scale: anim.interpolate({ inputRange: [0, 0.1, 0.9, 1], outputRange: [0, 1.5, 1, 0] }) }
                           ],
-                          opacity: anim.interpolate({ inputRange: [0, 0.8, 1], outputRange: [1, 1, 0] })
+                          opacity: anim.interpolate({ inputRange: [0, 0.1, 0.8, 1], outputRange: [0, 1, 1, 0] })
                         }}
                       >
-                        {['🎉', '🎊', '✨', '⭐', '💎', '💰'][i % 6]}
+                        {['🎉', '🎊', '✨', '⭐', '💎', '💰', '🔥', '🚀'][i % 8]}
                       </Animated.Text>
                     );
                   })}
