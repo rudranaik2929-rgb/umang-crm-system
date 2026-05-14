@@ -174,10 +174,10 @@ async def auth_session(request: Request, response: Response):
     email, password = body.get("email"), body.get("password")
     
     # Hardcoded fallback for demo
-    if email == "umang@admin" and password == "umang@admin":
+    if email in ["umang@admin", "htshpatil13@gmail.com"] and password == "umang@admin":
         u = {
             "user_id": "user_admin001",
-            "email": "umang@admin",
+            "email": email,
             "name": "Umang Admin",
             "role": "admin",
             "created_at": now_utc().isoformat(),
