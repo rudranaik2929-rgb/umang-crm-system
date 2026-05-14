@@ -72,21 +72,23 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
 
   const triggerConfetti = () => {
     setShowConfetti(true);
+    // Reset all animations
+    confettiAnims.forEach(a => a.setValue(0));
+    
     Animated.parallel(
       confettiAnims.map((anim, i) => 
         Animated.sequence([
-          Animated.delay(i * 100),
+          Animated.delay(Math.random() * 600), // Randomize start
           Animated.timing(anim, {
             toValue: 1,
-            duration: 2000,
-            easing: Easing.out(Easing.quad),
+            duration: 1500 + Math.random() * 1000,
+            easing: Easing.bezier(0.25, 0.1, 0.25, 1),
             useNativeDriver: true
           })
         ])
       )
     ).start(() => {
       setShowConfetti(false);
-      confettiAnims.forEach(a => a.setValue(0));
     });
   };
 
@@ -340,15 +342,17 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                             busy={busy === 'hot'}
                             color="#E11D48"
                           />
-                          <SubActionBtn 
-                            label="🏆 Deal Won (Close)" 
-                            sub="Finalize and celebrate!"
-                            onPress={() => {
-                              updateLead({ stage: 'closed', status: 'active' }, 'deal_won');
-                            }}
-                            busy={busy === 'deal_won'}
-                            color="#D4AF37"
-                          />
+                          {(userRole === 'admin' || userRole === 'booking' || userRole === 'loan') && (
+                            <SubActionBtn 
+                              label="🏆 Deal Won (Close)" 
+                              sub="Finalize and celebrate!"
+                              onPress={() => {
+                                updateLead({ stage: 'closed', status: 'active' }, 'deal_won');
+                              }}
+                              busy={busy === 'deal_won'}
+                              color="#D4AF37"
+                            />
+                          )}
                         </View>
                       )}
 
@@ -466,24 +470,30 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
               {/* Confetti Celebration Overlay */}
               {showConfetti && (
                 <View style={StyleSheet.absoluteFill} pointerEvents="none">
-                  {confettiAnims.map((anim, i) => (
-                    <Animated.Text
-                      key={i}
-                      style={{
-                        position: 'absolute',
-                        left: `${(i / 15) * 100}%`,
-                        fontSize: 24,
-                        transform: [
-                          { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-50, 800] }) },
-                          { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) },
-                          { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, (i % 2 === 0 ? 50 : -50)] }) }
-                        ],
-                        opacity: anim.interpolate({ inputRange: [0, 0.8, 1], outputRange: [1, 1, 0] })
-                      }}
-                    >
-                      {['🎉', '🎊', '✨', '⭐', '🏠', '🔑'][i % 6]}
-                    </Animated.Text>
-                  ))}
+                  {confettiAnims.map((anim, i) => {
+                    const colors = ['#FFD700', '#FF4500', '#00FF7F', '#1E90FF', '#FF69B4', '#8A2BE2'];
+                    const left = Math.random() * 100;
+                    return (
+                      <Animated.Text
+                        key={i}
+                        style={{
+                          position: 'absolute',
+                          left: `${left}%`,
+                          fontSize: 28,
+                          color: colors[i % colors.length],
+                          transform: [
+                            { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-100, 900] }) },
+                            { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '720deg'] }) },
+                            { scale: anim.interpolate({ inputRange: [0, 0.2, 1], outputRange: [0, 1.2, 0.5] }) },
+                            { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, (i % 2 === 0 ? 80 : -80)] }) }
+                          ],
+                          opacity: anim.interpolate({ inputRange: [0, 0.8, 1], outputRange: [1, 1, 0] })
+                        }}
+                      >
+                        {['🎉', '🎊', '✨', '⭐', '💎', '💰'][i % 6]}
+                      </Animated.Text>
+                    );
+                  })}
                 </View>
               )}
             </>
