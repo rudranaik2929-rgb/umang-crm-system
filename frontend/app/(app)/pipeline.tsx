@@ -58,7 +58,6 @@ export default function Pipeline() {
                   </Text>
                 </View>
               </View>
-              </View>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 10, paddingBottom: 10 }}>
                 {grouped[s.key].map((l) => (
                   <KanbanCard key={l.lead_id} lead={l} colors={colors} onPress={() => setOpenLead(l.lead_id)} />
