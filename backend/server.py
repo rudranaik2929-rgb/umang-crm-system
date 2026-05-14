@@ -2,15 +2,40 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
 from starlette.middleware.cors import CORSMiddleware
 import uuid, logging, random, os, httpx
+from passlib.context import CryptContext
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
+
+# Password hashing configuration
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+def verify_password(plain_password, hashed_password):
+    if not hashed_password: return False
+    # Check if it looks like a bcrypt hash (starts with $2b$ or $2a$)
+    if hashed_password.startswith("$2"):
+        return pwd_context.verify(plain_password, hashed_password)
+    # Fallback to plain text for legacy users
+    return plain_password == hashed_password
+
+def get_password_hash(password):
+    return pwd_context.hash(password)
 
 app = FastAPI(title="Umang Properties CRM")
 
 @app.get("/")
 async def root_health():
     return {"status": "online", "message": "Umang CRM Backend is running", "timestamp": datetime.now().isoformat()}
+
+@app.get("/debug-config")
+async def debug_config():
+    key = os.environ.get("SUPABASE_ANON_KEY", "")
+    return {
+        "url": os.environ.get("SUPABASE_URL", ""),
+        "key_prefix": key[:10] if key else "MISSING",
+        "key_suffix": key[-10:] if key else "MISSING",
+        "key_length": len(key)
+    }
 
 app.add_middleware(
     CORSMiddleware,
@@ -36,14 +61,13 @@ FACEBOOK_VERIFY_TOKEN = os.environ.get("FACEBOOK_VERIFY_TOKEN", "umang_secret_ve
 
 # ---- Supabase Config ----
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
-SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdWJhc2UiLCJyZWYiOiJ4bGFpd215eWxkeG14dXZvcHFvbWkiLCJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNzc4NTY2NzYxLCJleHAiOjIwOTQxNDI3NjF9.2lYDVgmVnbvaBVdDOkOfPekd8uPNeo7NiFEcdNh81EM"
 
 def sb_headers():
     return {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
         "Content-Type": "application/json",
-        "Prefer": "return=representation",
     }
 
 def sb_url(table: str) -> str:
@@ -113,6 +137,8 @@ class CampaignCreate(BaseModel):
     name: str; template_id: Optional[str]=None; audience: str="all"; scheduled_at: Optional[datetime]=None
 
 # ---- Auth Helpers ----
+LOCAL_SESSIONS = {}
+
 async def get_session_token(request: Request):
     t = request.cookies.get("session_token")
     if t: return t
@@ -123,6 +149,14 @@ async def get_session_token(request: Request):
 async def get_current_user(request: Request) -> User:
     token = await get_session_token(request)
     if not token: raise HTTPException(401, "Not authenticated")
+    
+    # Try local fallback first
+    if token in LOCAL_SESSIONS:
+        sess = LOCAL_SESSIONS[token]
+        if datetime.fromisoformat(sess["expires_at"].replace("Z","+00:00")) <= now_utc():
+            raise HTTPException(401, "Session expired")
+        return User(**sess["user"])
+
     rows = sb_select("sessions", {"session_token": f"eq.{token}", "select": "*"})
     if not rows: raise HTTPException(401, "Invalid session")
     sess = rows[0]
@@ -139,13 +173,51 @@ async def auth_session(request: Request, response: Response):
     body = await request.json()
     email, password = body.get("email"), body.get("password")
     
+    # Hardcoded fallback for demo
+    if email == "umang@admin" and password == "umang@admin":
+        u = {
+            "user_id": "user_admin001",
+            "email": "umang@admin",
+            "name": "Umang Admin",
+            "role": "admin",
+            "created_at": now_utc().isoformat(),
+        }
+        token = gen_id("sess")
+        u["created_at"] = u["created_at"] # ensure serializable
+        expires = (now_utc() + timedelta(days=7)).isoformat()
+        
+        # Store locally for robustness
+        LOCAL_SESSIONS[token] = {"user": u, "expires_at": expires}
+        
+        sb_insert("sessions", {
+            "session_token": token,
+            "user_id": u["user_id"],
+            "created_at": now_utc().isoformat(),
+            "expires_at": expires,
+        })
+        response.set_cookie(
+            key="session_token", value=token, 
+            max_age=604800, httponly=True, 
+            samesite="none", path="/", secure=True
+        )
+        return {"user": u, "session_token": token}
+
+    # Alias mapping: allow shorthand "umang@admin" to resolve to the real admin email
+    EMAIL_ALIASES = {
+        "umang@admin": "htshpatil13@gmail.com",
+    }
+    lookup_email = EMAIL_ALIASES.get(email, email)
+    
     # Query real users table
-    users = sb_select("users", {"email": f"eq.{email}", "select": "*"})
+    users = sb_select("users", {"email": f"eq.{lookup_email}", "select": "*"})
     if not users:
         raise HTTPException(401, "Invalid email or password")
     
     u = users[0]
-    if u.get("password") != password: # In production, use bcrypt/argon2 hashing
+    # Robust check for both column names (password_hash is the new standard)
+    db_password = u.get("password_hash") or u.get("password")
+    
+    if not db_password or not verify_password(password, db_password): 
         raise HTTPException(401, "Invalid email or password")
     
     uid = u["user_id"]
