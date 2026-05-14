@@ -29,6 +29,11 @@ api_router = APIRouter(prefix="/api")
 STAGES = ["new","contacted","positive","site_visit","booking","loan","registration","closed"]
 ROLES = ["admin","telecaller","site_visit","booking","loan","marketing"]
 
+# ---- Integration Config (from .env) ----
+INTERAKT_API_KEY = os.environ.get("INTERAKT_API_KEY", "")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "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")
+FACEBOOK_VERIFY_TOKEN = os.environ.get("FACEBOOK_VERIFY_TOKEN", "umang_secret_verify_123")
+
 # ---- Supabase Config ----
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
 SUPABASE_KEY = os.environ.get("SUPABASE_ANON_KEY", "")
@@ -79,7 +84,8 @@ def gen_id(p="id"): return f"{p}_{uuid.uuid4().hex[:12]}"
 # ---- Pydantic Models ----
 class User(BaseModel):
     user_id: str; email: str; name: str; picture: Optional[str]=None
-    role: Optional[str]=None; employee_id: Optional[str]=None; acting_as_employee_id: Optional[str]=None; created_at: datetime
+    role: Optional[str]=None; acting_as_employee_id: Optional[str]=None; created_at: datetime
+    employee_id: Optional[str]=None
 class RoleSet(BaseModel): role: str
 class ActAs(BaseModel): employee_id: Optional[str]=None
 class LeadCreatePublic(BaseModel):
@@ -123,17 +129,9 @@ async def get_current_user(request: Request) -> User:
     exp = sess.get("expires_at", "")
     if exp and datetime.fromisoformat(exp.replace("Z","+00:00")) <= now_utc():
         raise HTTPException(401, "Session expired")
-    
     users = sb_select("users", {"user_id": f"eq.{sess['user_id']}", "select": "*"})
     if not users: raise HTTPException(401, "User not found")
-    
-    user_data = users[0]
-    # Override acting_as from header if provided (per-device tracking)
-    acting_as_header = request.headers.get("X-Acting-As")
-    if acting_as_header:
-        user_data["acting_as_employee_id"] = acting_as_header
-        
-    return User(**user_data)
+    return User(**users[0])
 
 # ---- Auth Endpoints ----
 @api_router.post("/auth/session")
@@ -141,31 +139,14 @@ async def auth_session(request: Request, response: Response):
     body = await request.json()
     email, password = body.get("email"), body.get("password")
     
-    # MASTER OVERRIDE for testing
-    is_admin_override = (email == "htshpatil13@gmail.com" and password == "umang@admin")
-    is_rusheel_test = (email == "naikrusheel2010@gmail.com" and password == "umang@admin")
-
     # Query real users table
     users = sb_select("users", {"email": f"eq.{email}", "select": "*"})
-    
     if not users:
-        if is_rusheel_test:
-            # Auto-provision the user in the database so session creation works
-            u = {
-                "user_id": "user_rusheel_001", 
-                "email": email, 
-                "password": password, 
-                "name": "Rusheel Naik", 
-                "role": "admin",
-                "created_at": now_utc().isoformat()
-            }
-            sb_insert("users", u)
-        else:
-            raise HTTPException(401, "Invalid email or password")
-    else:
-        u = users[0]
-        if u.get("password") != password and not is_admin_override and not is_rusheel_test:
-            raise HTTPException(401, "Invalid email or password")
+        raise HTTPException(401, "Invalid email or password")
+    
+    u = users[0]
+    if u.get("password") != password: # In production, use bcrypt/argon2 hashing
+        raise HTTPException(401, "Invalid email or password")
     
     uid = u["user_id"]
     token = gen_id("sess")
@@ -211,9 +192,8 @@ async def ping_location(request: Request, cu: User=Depends(get_current_user)):
     if lat is None or lng is None: return {"ok": False}
     
     # Update employee record if linked
-    target_emp_id = cu.acting_as_employee_id or cu.employee_id
-    if target_emp_id:
-        sb_update("employees", "employee_id", target_emp_id, {
+    if cu.employee_id:
+        sb_update("employees", "employee_id", cu.employee_id, {
             "last_lat": lat,
             "last_lng": lng,
             "last_seen_at": now_utc().isoformat()
@@ -222,11 +202,132 @@ async def ping_location(request: Request, cu: User=Depends(get_current_user)):
 
 @api_router.post("/auth/act-as")
 async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
-    # We no longer save this to the DB to support multi-user shared accounts.
-    # The frontend will now store this in LocalStorage and send it via X-Acting-As header.
-    updated_user = cu.model_dump()
-    updated_user["acting_as_employee_id"] = payload.employee_id
-    return updated_user
+    updated = sb_update("users", "user_id", cu.user_id, {"acting_as_employee_id": payload.employee_id})
+    if not updated: raise HTTPException(500, "Failed to update")
+    return User(**updated).model_dump(mode="json")
+
+# ---- WhatsApp Service Layer (Interakt) ----
+class WhatsAppService:
+    @staticmethod
+    def send_template(phone: str, template_name: str, values: List[str] = []):
+        """
+        Sends a WhatsApp template via Interakt API.
+        Values: List of strings to fill in the {{1}}, {{2}} placeholders.
+        """
+        if not INTERAKT_API_KEY:
+            logging.info(f"[SIMULATION] Interakt Template '{template_name}' would be sent to {phone} with values {values}")
+            return {"status": "simulated", "message": "No Interakt API Key"}
+        
+        url = "https://api.interakt.ai/v1/public/message/"
+        headers = {
+            "Authorization": f"Basic {INTERAKT_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        
+        # Format phone (must include country code, e.g., +91)
+        clean_phone = phone.strip().replace(" ", "").replace("-", "")
+        if not clean_phone.startswith("+"):
+            clean_phone = "+91" + clean_phone[-10:] # Default to India
+            
+        payload = {
+            "fullPhoneNumber": clean_phone,
+            "type": "Template",
+            "template": {
+                "name": template_name,
+                "languageCode": "en",
+                "bodyValues": values
+            }
+        }
+        
+        try:
+            r = httpx.post(url, headers=headers, json=payload, timeout=10)
+            logging.info(f"Interakt API Response: {r.status_code} {r.text}")
+            return r.json()
+        except Exception as e:
+            logging.error(f"Interakt API Connection Error: {e}")
+            return {"status": "error", "message": str(e)}
+
+# ---- AI Assistant Service (from umang.py) ----
+class AIService:
+    @staticmethod
+    def generate_reply(message_text: str):
+        if not OPENAI_API_KEY:
+            return "Hi! Thanks for your message. An agent will get back to you soon."
+        
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": """
+You are a professional real estate assistant for Umang Properties.
+Your goal:
+- Sound human and friendly
+- Ask about budget, location, requirement
+- Convert user into site visit
+Example: "Hi 😊 Are you looking for 2BHK or 3BHK? We have great options available 🔥"
+Always:
+- Ask questions
+- Engage user
+- Push for site visit
+"""
+                },
+                {"role": "user", "content": message_text}
+            ]
+        }
+        try:
+            r = httpx.post(url, headers=headers, json=payload, timeout=15)
+            data = r.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logging.error(f"OpenAI API Error: {e}")
+            return "Thank you for reaching out. We will assist you shortly."
+
+    @staticmethod
+    def generate_lead_summary(timeline: List[Dict[str, Any]]):
+        if not OPENAI_API_KEY:
+            return "No summary available."
+        
+        # Format the timeline for AI
+        history = "\n".join([f"- {a.get('created_at', '')[:10]}: {a.get('text', '')}" for a in timeline[:20]])
+        
+        url = "https://api.openai.com/v1/chat/completions"
+        headers = {"Authorization": f"Bearer {OPENAI_API_KEY}", "Content-Type": "application/json"}
+        payload = {
+            "model": "gpt-4o-mini",
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You are a senior real estate manager. Summarize the following lead activity into a single, punchy, professional sentence that tells the agent exactly what the current status is and what to do next. Be concise (max 20 words)."
+                },
+                {"role": "user", "content": f"Activity History:\n{history}"}
+            ]
+        }
+        try:
+            r = httpx.post(url, headers=headers, json=payload, timeout=15)
+            data = r.json()
+            return data["choices"][0]["message"]["content"]
+        except Exception as e:
+            logging.error(f"Lead Summary Error: {e}")
+            return "Could not generate summary."
+
+# ---- Assignment Engine (Round Robin) ----
+def assign_lead_round_robin():
+    """Finds the next active telecaller to assign a lead to."""
+    # 1. Get all active telecallers
+    emps = sb_select("employees", {"role": "eq.telecaller", "active": "eq.true", "order": "last_assigned_at.asc.nullslast"})
+    if not emps:
+        # Fallback to admins if no telecallers
+        emps = sb_select("employees", {"role": "eq.admin", "active": "eq.true", "order": "last_assigned_at.asc.nullslast"})
+    
+    if not emps: return None
+    
+    selected = emps[0]
+    # Update last_assigned_at
+    sb_update("employees", "employee_id", selected["employee_id"], {"last_assigned_at": now_utc().isoformat()})
+    return selected["employee_id"]
 
 # ---- Activity Logger ----
 def log_activity(actor, type_, text, lead_id=None): 
@@ -258,15 +359,93 @@ def log_activity(actor, type_, text, lead_id=None):
 @api_router.post("/leads/public")
 async def create_lead_public(p: LeadCreatePublic):
     lid = gen_id("lead")
+    assigned_to = assign_lead_round_robin()
     lead = {
         "lead_id": lid, "name": p.name, "phone": p.phone, "email": p.email,
         "budget": p.budget, "location": p.location, "property_type": p.property_type,
         "notes": p.notes, "source": "website", "stage": "new", "status": "active",
-        "assigned_to": None, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
+        "assigned_to": assigned_to, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
     }
     result = sb_insert("leads", lead)
     log_activity(None, "website_enquiry", f"New website enquiry received from {p.name}.", lead_id=lid)
+    
+    # Auto-responder (Real Interakt API if key exists)
+    WhatsAppService.send_template(p.phone, "welcome_enquiry", [p.name])
+    
     return result or lead
+
+# ---- Webhooks (MagicBricks, 99acres, Facebook) ----
+@api_router.get("/webhooks/facebook")
+async def verify_fb_webhook(request: Request):
+    # Meta requires this for initial verification
+    params = request.query_params
+    if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == FACEBOOK_VERIFY_TOKEN:
+        return int(params.get("hub.challenge"))
+    return "Invalid verify token"
+
+@api_router.post("/webhooks/{source}")
+async def incoming_webhook(source: str, request: Request):
+    """
+    Unified endpoint for MagicBricks, 99acres, and Facebook Lead Ads.
+    Usage: Set your portal's webhook URL to: https://your-backend.com/api/webhooks/[magicbricks|99acres|facebook]
+    """
+    try:
+        body = await request.json()
+    except:
+        body = await request.form()
+        body = dict(body)
+
+    logging.info(f"Incoming Lead from {source}: {body}")
+    
+    # Standardize data based on source (placeholders for portal mapping)
+    name = body.get("name") or body.get("customer_name") or body.get("full_name", "Valued Customer")
+    phone = body.get("phone") or body.get("mobile") or body.get("contact_number", "")
+    email = body.get("email") or ""
+    
+    if not phone:
+        return {"status": "ignored", "reason": "no phone number"}
+
+    lid = gen_id("lead")
+    assigned_to = assign_lead_round_robin()
+    
+    lead = {
+        "lead_id": lid, "name": name, "phone": phone, "email": email,
+        "source": source, "stage": "new", "status": "active",
+        "assigned_to": assigned_to, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
+    }
+    sb_insert("leads", lead)
+    log_activity(None, "webhook_enquiry", f"New lead from {source}: {name}", lead_id=lid)
+    
+    return {"status": "success", "lead_id": lid}
+
+@api_router.post("/webhooks/whatsapp/reply")
+async def inbound_whatsapp_reply(request: Request):
+    """
+    Handle incoming WhatsApp replies from Interakt.
+    """
+    body = await request.json()
+    # Interakt Webhook structure
+    msg_data = body.get("data", {})
+    message_text = msg_data.get("message", {}).get("text", "")
+    phone = msg_data.get("customer", {}).get("phoneNumber", "")
+    
+    if not message_text or not phone:
+        return {"status": "ignored"}
+        
+    # 1. Generate AI Response using your umang.py logic
+    ai_reply = AIService.generate_reply(message_text)
+    
+    # 2. Log activity in CRM
+    leads = sb_select("leads", {"phone": f"ilike.%{phone[-10:]}%", "select": "lead_id"})
+    if leads:
+        log_activity(None, "whatsapp_reply", f"Customer: {message_text}\nAI: {ai_reply}", lead_id=leads[0]["lead_id"])
+    
+    # 3. Send AI response back via Interakt
+    # Note: For inbound replies, Interakt uses a 'Regular Message' instead of a Template
+    # (Checking Interakt documentation for regular message structure)
+    WhatsAppService.send_template(phone, "ai_chat_response", [ai_reply]) # Fallback to template or use regular message API
+    
+    return {"status": "replied", "response": ai_reply}
 
 @api_router.post("/leads")
 async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
@@ -295,6 +474,14 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     if not leads: raise HTTPException(404, "Lead not found")
     timeline = sb_select("activities", {"lead_id": f"eq.{lead_id}", "select": "*", "order": "created_at.desc"})
     return {"lead": leads[0], "timeline": timeline}
+
+@api_router.get("/leads/{lead_id}/ai-summary")
+async def get_lead_ai_summary(lead_id: str, cu: User=Depends(get_current_user)):
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
+    if not leads: raise HTTPException(404, "Lead not found")
+    timeline = sb_select("activities", {"lead_id": f"eq.{lead_id}", "select": "*", "order": "created_at.desc", "limit": "20"})
+    summary = AIService.generate_lead_summary(timeline)
+    return {"summary": summary}
 
 @api_router.patch("/leads/{lead_id}")
 async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_user)):
@@ -340,77 +527,29 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     log_activity(cu, "stage_change", f"Stage moved {cur} → {new_stage}", lead_id=lead_id)
     return updated or lead
 
-@api_router.delete("/leads/{lead_id}")
-async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
-    if cu.role != "admin":
-        raise HTTPException(403, "Only admins can delete leads")
-    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id,name"})
-    if not leads: raise HTTPException(404, "Lead not found")
-    lead_name = leads[0].get("name", "Unknown")
-    # Clean up related records
-    sb_delete("activities", "lead_id", lead_id)
-    sb_delete("visits", "lead_id", lead_id)
-    sb_delete("bookings", "lead_id", lead_id)
-    sb_delete("loans", "lead_id", lead_id)
-    # Delete the lead itself
-    sb_delete("leads", "lead_id", lead_id)
-    log_activity(cu, "lead_deleted", f"Deleted lead: {lead_name}")
-    return {"ok": True, "deleted": lead_id}
-
 # ---- Visits ----
 @api_router.post("/visits")
 async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{p.lead_id}", "select": "lead_id,name"})
     if not leads: raise HTTPException(404, "Lead not found")
-    # Prevent duplicate: check if an active visit already exists for this lead
-    existing = sb_select("visits", {
-        "lead_id": f"eq.{p.lead_id}",
-        "status": "in.(scheduled,rescheduled)",
-        "select": "visit_id",
-    })
-    if existing:
-        raise HTTPException(409, f"A site visit is already scheduled for {leads[0]['name']}. Complete or cancel the existing visit first.")
     vid = gen_id("vis")
     v = {
-        "visit_id": vid, "lead_id": p.lead_id,
-        "scheduled_at": p.scheduled_at.isoformat(),
-        "assigned_to": p.assigned_to or cu.acting_as_employee_id or cu.employee_id,
-        "status": "scheduled", "feedback": None,
+        "visit_id": vid, "lead_id": p.lead_id, "scheduled_at": p.scheduled_at.isoformat(),
+        "assigned_to": p.assigned_to, "status": "scheduled", "feedback": None,
         "interested": None, "created_at": now_utc().isoformat(),
     }
-    result = sb_insert(table="visits", data=v)
-    if not result:
-        raise HTTPException(500, "Failed to schedule visit — database insert error")
-    # Automatically move lead to site_visit stage
-    sb_update("leads", "lead_id", p.lead_id, {"stage": "site_visit", "updated_at": now_utc().isoformat()})
-    log_activity(cu, "site_visit_scheduled", f"Scheduled site visit for {leads[0]['name']}", lead_id=p.lead_id)
-    return result
+    result = sb_insert("visits", v)
+    return result or v
 
 @api_router.get("/visits")
 async def list_visits(cu: User=Depends(get_current_user)):
-    visits = sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
-    # Enrich visits with lead names by looking up each lead
-    lead_ids = list(set(v.get("lead_id") for v in visits if v.get("lead_id")))
-    lead_map = {}
-    if lead_ids:
-        leads = sb_select("leads", {"select": "lead_id,name"})
-        lead_map = {l["lead_id"]: l["name"] for l in leads}
-    for v in visits:
-        if not v.get("lead_name"):
-            v["lead_name"] = lead_map.get(v.get("lead_id"), "Unknown Lead")
-    return visits
+    return sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
 
 @api_router.patch("/visits/{visit_id}")
 async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_current_user)):
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("visits", "visit_id", visit_id, data)
     if not updated: raise HTTPException(404, "Visit not found")
-    
-    if p.status == "completed":
-        log_activity(cu, "site_visit_completed", f"Completed site visit (ID: {visit_id})", lead_id=updated.get("lead_id"))
-    elif p.status == "rescheduled":
-        log_activity(cu, "site_visit_rescheduled", f"Rescheduled site visit (ID: {visit_id})", lead_id=updated.get("lead_id"))
-        
     return updated
 
 # ---- Bookings ----
@@ -427,9 +566,6 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
         "status": "active", "created_at": now_utc().isoformat(),
     }
     result = sb_insert("bookings", b)
-    # Automatically move lead to booking stage
-    sb_update("leads", "lead_id", p.lead_id, {"stage": "booking", "updated_at": now_utc().isoformat()})
-    log_activity(cu, "booking_created", f"Created booking for {p.property_name}", lead_id=p.lead_id)
     return result or b
 
 @api_router.get("/bookings")
@@ -456,9 +592,6 @@ async def create_loan(p: LoanCreate, cu: User=Depends(get_current_user)):
         "created_at": now_utc().isoformat(),
     }
     result = sb_insert("loans", l)
-    # Automatically move lead to loan stage
-    sb_update("leads", "lead_id", p.lead_id, {"stage": "loan", "updated_at": now_utc().isoformat()})
-    log_activity(cu, "loan_initiated", f"Initiated loan application with {p.bank_name or 'pending bank'}", lead_id=p.lead_id)
     return result or l
 
 @api_router.get("/loans")
@@ -621,8 +754,7 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
         leads_by_day.append({"date": d, "count": cnt})
 
     # 2. Real revenue by month (last 12 months)
-    # Removed confirmed filter to match dashboard total which includes active pipeline
-    bookings = sb_select("bookings", {"select": "booking_amount,created_at"})
+    bookings = sb_select("bookings", {"select": "booking_amount,created_at", "status": "eq.confirmed"})
     rev_by_month = []
     months_map = {}
     for i in range(12):
@@ -651,10 +783,8 @@ async def stats_me(cu: User=Depends(get_current_user)):
     # Get personal stats
     activities = sb_select("activities", {"user_id": f"eq.{eid}", "select": "*", "order": "created_at.desc"})
     
-    positives = sum(1 for a in activities if "positive" in str(a.get("type")))
-    negatives = sum(1 for a in activities if "negative" in str(a.get("type")))
-    followups = sum(1 for a in activities if "follow_up" in str(a.get("type")) or "rescheduled" in str(a.get("type")))
-    visits = sum(1 for a in activities if "visit" in str(a.get("type")))
+    positives = sum(1 for a in activities if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
+    visits = sum(1 for a in activities if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
     bookings_done = sum(1 for a in activities if "booking" in str(a.get("type")))
     loans_done = sum(1 for a in activities if "loan" in str(a.get("type")))
     closed_deals = sum(1 for a in activities if "closed" in str(a.get("type")))
@@ -675,7 +805,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     return {
         "employee": None, "role": cu.role,
         "personal": {
-            "actions_total": len(activities), "positives": positives, "negatives": negatives, "followups": followups,
+            "actions_total": len(activities), "positives": positives, "negatives": 0, "followups": 0,
             "visits": visits, "bookings_done": bookings_done, "loans_done": loans_done, "closed_deals": closed_deals,
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
             "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
@@ -706,10 +836,8 @@ async def stats_employees(cu: User=Depends(get_current_user)):
             "employee_id": eid, "name": e["name"], "email": e["email"],
             "role": e["role"], "department": e.get("department", ""),
             "actions_total": actions_total, "last_activity": last_activity,
-            "positives": sum(1 for a in emp_acts if "positive" in str(a.get("type"))), 
-            "negatives": sum(1 for a in emp_acts if "negative" in str(a.get("type"))),
-            "followups": sum(1 for a in emp_acts if "follow_up" in str(a.get("type")) or "rescheduled" in str(a.get("type"))), 
-            "visits": sum(1 for a in emp_acts if "visit" in str(a.get("type"))),
+            "positives": positives, "negatives": 0,
+            "followups": 0, "visits": visits,
             "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))), 
             "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
             "closed_deals": sum(1 for a in emp_acts if "closed" in str(a.get("type"))), 

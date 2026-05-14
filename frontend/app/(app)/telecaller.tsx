@@ -138,4 +138,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 4,
     borderWidth: 1, paddingHorizontal: 10, height: 26, borderRadius: 6,
   },
+  iconBtn: {
+    width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });

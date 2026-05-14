@@ -113,7 +113,18 @@ export default function Enquire() {
   );
 }
 
-function Field({ label, value, onChange, colors, placeholder, multiline, keyboardType, testID }: any) {
+interface FieldProps {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  colors: any;
+  placeholder?: string;
+  multiline?: boolean;
+  keyboardType?: any;
+  testID?: string;
+}
+
+function Field({ label, value, onChange, colors, placeholder, multiline, keyboardType, testID }: FieldProps) {
   return (
     <View style={{ flex: 1, marginTop: 14 }}>
       <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginBottom: 6, textTransform: 'uppercase', letterSpacing: 0.8 }}>
@@ -138,7 +149,7 @@ function Field({ label, value, onChange, colors, placeholder, multiline, keyboar
   );
 }
 
-function Row({ children }: any) {
+function Row({ children }: { children: React.ReactNode }) {
   return <View style={{ flexDirection: 'row', gap: 12 }}>{children}</View>;
 }
 

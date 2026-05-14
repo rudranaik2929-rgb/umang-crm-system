@@ -58,31 +58,10 @@ export default function Pipeline() {
                   </Text>
                 </View>
               </View>
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 8, paddingBottom: 10 }}>
+              </View>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 10, paddingBottom: 10 }}>
                 {grouped[s.key].map((l) => (
-                  <Pressable
-                    key={l.lead_id}
-                    testID={`kanban-card-${l.lead_id}`}
-                    onPress={() => setOpenLead(l.lead_id)}
-                    style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
-                  >
-                    <Text style={[styles.cardName, { color: colors.text }]} numberOfLines={1}>{l.name}</Text>
-                    <View style={styles.cardMeta}>
-                      <Ionicons name="call-outline" size={11} color={colors.textMuted} />
-                      <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{l.phone}</Text>
-                    </View>
-                    {l.location ? (
-                      <View style={styles.cardMeta}>
-                        <Ionicons name="location-outline" size={11} color={colors.textMuted} />
-                        <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{l.location}</Text>
-                      </View>
-                    ) : null}
-                    {l.budget ? (
-                      <View style={[styles.budget, { borderColor: colors.border }]}>
-                        <Text style={{ color: colors.text, fontSize: 11, fontWeight: '600' }}>{l.budget}</Text>
-                      </View>
-                    ) : null}
-                  </Pressable>
+                  <KanbanCard key={l.lead_id} lead={l} colors={colors} onPress={() => setOpenLead(l.lead_id)} />
                 ))}
                 {grouped[s.key].length === 0 && (
                   <Text style={{ color: colors.textMuted, fontSize: 11, padding: 14, textAlign: 'center' }}>
@@ -105,6 +84,60 @@ export default function Pipeline() {
   );
 }
 
+function KanbanCard({ lead, colors, onPress }: any) {
+  const [hovered, setHovered] = useState(false);
+  
+  return (
+    <Pressable
+      testID={`kanban-card-${lead.lead_id}`}
+      onPress={onPress}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      style={[
+        styles.card, 
+        { 
+          backgroundColor: colors.surface, 
+          borderColor: hovered ? colors.primary : colors.border,
+          transform: [{ translateY: hovered ? -3 : 0 }],
+          boxShadow: hovered ? `0 6px 16px ${colors.primary}20` : 'none'
+        } as any
+      ]}
+    >
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <Text style={[styles.cardName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
+        {hovered && (
+          <View style={{ flexDirection: 'row', gap: 6 }}>
+             <Pressable style={styles.miniBtn} onPress={() => {}}>
+               <Ionicons name="call-outline" size={10} color={colors.primary} />
+             </Pressable>
+             <Pressable style={styles.miniBtn} onPress={() => {}}>
+               <Ionicons name="logo-whatsapp" size={10} color="#25D366" />
+             </Pressable>
+          </View>
+        )}
+      </View>
+      <View style={styles.cardMeta}>
+        <Ionicons name="call-outline" size={11} color={colors.textMuted} />
+        <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{lead.phone}</Text>
+      </View>
+      {lead.location ? (
+        <View style={styles.cardMeta}>
+          <Ionicons name="location-outline" size={11} color={colors.textMuted} />
+          <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{lead.location}</Text>
+        </View>
+      ) : null}
+      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+        {lead.budget ? (
+          <View style={[styles.budget, { borderColor: colors.border }]}>
+            <Text style={{ color: colors.text, fontSize: 10, fontWeight: '600' }}>{lead.budget}</Text>
+          </View>
+        ) : <View />}
+        <Text style={{ fontSize: 9, color: colors.textMuted }}>{lead.source}</Text>
+      </View>
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
   board: { padding: 16, gap: 12, flexDirection: 'row', alignItems: 'stretch', height: '100%' },
   col: { width: 280, padding: 12, borderRadius: 12, height: '100%', flexDirection: 'column' },
@@ -112,9 +145,10 @@ const styles = StyleSheet.create({
   colDot: { width: 8, height: 8, borderRadius: 4 },
   colTitle: { flex: 1, fontSize: 13, fontWeight: '700' },
   colCount: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 99, borderWidth: 1 },
-  card: { padding: 12, borderRadius: 8, borderWidth: 1, gap: 4 },
-  cardName: { fontSize: 13, fontWeight: '600' },
+  card: { padding: 12, borderRadius: 10, borderWidth: 1, gap: 4, transitionDuration: '150ms' } as any,
+  cardName: { fontSize: 13, fontWeight: '600', flex: 1 },
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   cardMetaText: { fontSize: 11 },
-  budget: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4 },
+  budget: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
+  miniBtn: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#f1f5f910', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#e2e8f030' },
 });

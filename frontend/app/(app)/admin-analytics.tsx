@@ -303,12 +303,12 @@ export default function AdminAnalytics() {
                 {activities.length === 0 ? (
                   <Text style={{ color: colors.textMuted, fontSize: 12 }}>No activity yet.</Text>
                 ) : activities.map((a) => (
-                  <View key={a.entry_id} style={[styles.actRow, { borderBottomColor: colors.border }]}>
+                  <View key={a.activity_id} style={[styles.actRow, { borderBottomColor: colors.border }]}>
                     <Ionicons name="ellipse" size={6} color={colors.primary} style={{ marginRight: 10, marginTop: 7 }} />
                     <View style={{ flex: 1 }}>
                       <Text style={{ color: colors.text, fontSize: 13 }}>{a.text}</Text>
                       <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                        {a.actor_name || 'System'} · {new Date(a.created_at).toLocaleString()}
+                        {new Date(a.created_at).toLocaleString()}
                       </Text>
                     </View>
                   </View>

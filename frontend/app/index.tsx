@@ -210,13 +210,13 @@ const styles = StyleSheet.create({
   heroPill: { paddingHorizontal: 12, height: 30, borderRadius: 99, borderWidth: 1, borderColor: 'rgba(255,255,255,0.25)', justifyContent: 'center' },
   heroPillText: { color: '#fff', fontSize: 11, fontWeight: '600', letterSpacing: 0.6 },
 
-  right: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', minHeight: Platform.OS === 'web' ? '100vh' : '100%' },
+  right: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', minHeight: Platform.OS === 'web' ? '100%' : '100%' },
   rightInner: { width: '100%', maxWidth: 460, padding: Platform.OS === 'web' && Dimensions.get('window').width > 600 ? 48 : 24, flex: 1, justifyContent: 'center' },
   topRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20 },
   brandRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
   logoImageSm: { width: 38, height: 38, borderRadius: 8 },
   brandText: { fontSize: 14, fontWeight: '700' },
-  themeBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center', cursor: 'pointer' } as any,
+  themeBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 
   kicker: { fontSize: 11, fontWeight: '700', letterSpacing: 1.4, marginTop: 12 },
   headline: { fontSize: 30, fontWeight: '700', letterSpacing: -0.8, marginTop: 6 },
@@ -225,16 +225,14 @@ const styles = StyleSheet.create({
   primaryBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 10, height: 48, borderRadius: 10, marginTop: 8,
-    cursor: 'pointer',
-  } as any,
+  },
   primaryText: { fontSize: 14, fontWeight: '600' },
   input: { height: 48, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, fontSize: 15 },
   divider: { height: 1, marginVertical: 28 },
   outlineBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
     gap: 8, height: 44, borderRadius: 10, borderWidth: 1,
-    cursor: 'pointer',
-  } as any,
+  },
   outlineText: { fontSize: 13, fontWeight: '600' },
   footer: { fontSize: 11, marginTop: 24, textAlign: 'left' },
 });

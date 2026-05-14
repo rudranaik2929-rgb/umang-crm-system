@@ -100,8 +100,8 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID }:
               </svg>
               {/* Dots */}
               {data.map((d, i) => {
-                const left = `${(i / (data.length - 1)) * 100}%`;
-                const top = `${(1 - d.value / max) * 85}%`;
+                const left = `${(i / (data.length - 1)) * 100}%` as any;
+                const top = `${(1 - d.value / max) * 85}%` as any;
                 return (
                   <View key={i} style={{
                     position: 'absolute', left, top, width: 8, height: 8, borderRadius: 4,

@@ -1,0 +1,485 @@
+app/(app)/telecaller.tsx(47,22): error TS2339: Property 'iconBtn' does not exist on type '{ content: { padding: number; gap: number; }; filters: { flexDirection: "row"; gap: number; }; chip: { paddingHorizontal: number; height: number; borderRadius: number; borderWidth: number; alignItems: "center"; justifyContent: "center"; }; ... 6 more ...; openBtn: { ...; }; }'.
+app/enquire.tsx(76,91): error TS7006: Parameter 'v' implicitly has an 'any' type.
+app/enquire.tsx(77,96): error TS7006: Parameter 'v' implicitly has an 'any' type.
+app/enquire.tsx(78,87): error TS7006: Parameter 'v' implicitly has an 'any' type.
+app/enquire.tsx(80,92): error TS7006: Parameter 'v' implicitly has an 'any' type.
+app/enquire.tsx(81,104): error TS7006: Parameter 'v' implicitly has an 'any' type.
+app/enquire.tsx(83,106): error TS7006: Parameter 'v' implicitly has an 'any' type.
+app/enquire.tsx(84,87): error TS7006: Parameter 'v' implicitly has an 'any' type.
+app/index.tsx(64,19): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(67,15): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(68,45): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ImageProps): Image', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+        Type 'ViewStyle' is not assignable to type 'ImageStyle'.
+          Types of property 'overflow' are incompatible.
+            Type '"visible" | "hidden" | "scroll" | undefined' is not assignable to type '"visible" | "hidden" | undefined'.
+              Type '"scroll"' is not assignable to type '"visible" | "hidden" | undefined'.
+  Overload 2 of 2, '(props: ImageProps, context: any): Image', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+        Type 'ViewStyle' is not assignable to type 'ImageStyle'.
+          Types of property 'overflow' are incompatible.
+            Type '"visible" | "hidden" | "scroll" | undefined' is not assignable to type '"visible" | "hidden" | undefined'.
+              Type '"scroll"' is not assignable to type '"visible" | "hidden" | undefined'.
+app/index.tsx(69,17): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(70,19): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(73,17): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ImageProps): Image', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+        Type 'ViewStyle' is not assignable to type 'ImageStyle'.
+          Types of property 'overflow' are incompatible.
+            Type '"visible" | "hidden" | "scroll" | undefined' is not assignable to type '"visible" | "hidden" | undefined'.
+              Type '"scroll"' is not assignable to type '"visible" | "hidden" | undefined'.
+  Overload 2 of 2, '(props: ImageProps, context: any): Image', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+        Type 'ViewStyle' is not assignable to type 'ImageStyle'.
+          Types of property 'overflow' are incompatible.
+            Type '"visible" | "hidden" | "scroll" | undefined' is not assignable to type '"visible" | "hidden" | undefined'.
+              Type '"scroll"' is not assignable to type '"visible" | "hidden" | undefined'.
+app/index.tsx(76,21): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(79,19): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(80,19): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(83,19): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(85,31): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(86,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<TextStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<TextStyle>'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(96,9): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ScrollViewProps): ScrollView', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ScrollViewProps, context: any): ScrollView', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(100,15): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(101,17): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(102,19): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+      Type 'TextStyle' is not assignable to type 'StyleProp<ViewStyle>'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(105,17): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ImageProps): Image', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+        Type 'ViewStyle' is not assignable to type 'ImageStyle'.
+          Types of property 'overflow' are incompatible.
+            Type '"visible" | "hidden" | "scroll" | undefined' is not assignable to type '"visible" | "hidden" | undefined'.
+              Type '"scroll"' is not assignable to type '"visible" | "hidden" | undefined'.
+  Overload 2 of 2, '(props: ImageProps, context: any): Image', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+      Type 'ViewStyle' is not assignable to type 'StyleProp<ImageStyle>'.
+        Type 'ViewStyle' is not assignable to type 'ImageStyle'.
+          Types of property 'overflow' are incompatible.
+            Type '"visible" | "hidden" | "scroll" | undefined' is not assignable to type '"visible" | "hidden" | undefined'.
+              Type '"scroll"' is not assignable to type '"visible" | "hidden" | undefined'.
+app/index.tsx(108,29): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(113,23): error TS2322: Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+  Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+    Type 'TextStyle' is not assignable to type 'ViewStyle'.
+      Types of property 'cursor' are incompatible.
+        Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+          Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(121,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(122,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(123,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(129,23): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextInputProps): TextInput', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextInputProps, context: any): TextInput', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(138,23): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextInputProps): TextInput', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextInputProps, context: any): TextInput', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(152,23): error TS2322: Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+  Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+    Type 'TextStyle' is not assignable to type 'ViewStyle'.
+      Types of property 'cursor' are incompatible.
+        Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+          Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(154,29): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(161,23): error TS2322: Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+  Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+    Type 'TextStyle' is not assignable to type 'ViewStyle'.
+      Types of property 'cursor' are incompatible.
+        Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+          Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(166,31): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(171,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'TextStyle' is not assignable to type 'ViewStyle'.
+          Types of property 'cursor' are incompatible.
+            Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+              Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(173,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(179,21): error TS2322: Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+  Type 'TextStyle' is not assignable to type 'Falsy | ViewStyle | RegisteredStyle<ViewStyle> | RecursiveArray<Falsy | ViewStyle | RegisteredStyle<ViewStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+    Type 'TextStyle' is not assignable to type 'ViewStyle'.
+      Types of property 'cursor' are incompatible.
+        Type 'string | undefined' is not assignable to type 'CursorValue | undefined'.
+          Type 'string' is not assignable to type 'CursorValue | undefined'.
+app/index.tsx(182,27): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(186,25): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: TextProps): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+  Overload 2 of 2, '(props: TextProps, context: any): Text', gave the following error.
+    Type 'ViewStyle | TextStyle | ImageStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+      Type 'ViewStyle' is not assignable to type 'Falsy | TextStyle | RegisteredStyle<TextStyle> | RecursiveArray<Falsy | TextStyle | RegisteredStyle<TextStyle>> | readonly (Falsy | ... 1 more ... | RegisteredStyle<...>)[]'.
+        Type 'ViewStyle' is not assignable to type 'TextStyle'.
+          Types of property 'userSelect' are incompatible.
+            Type 'string | undefined' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+              Type 'string' is not assignable to type '"text" | "auto" | "none" | "contain" | "all" | undefined'.
+app/index.tsx(213,73): error TS2322: Type '"100%" | "100vh"' is not assignable to type 'DimensionValue | undefined'.
+  Type '"100vh"' is not assignable to type 'DimensionValue | undefined'.
+src/components/LineChart.tsx(106,33): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(props: ViewProps): View', gave the following error.
+    Type '{ position: "absolute"; left: string; top: string; width: number; height: number; borderRadius: number; backgroundColor: string; borderWidth: number; borderColor: string; marginLeft: number; marginTop: number; zIndex: number; }' is not assignable to type 'StyleProp<ViewStyle>'.
+      Types of property 'left' are incompatible.
+        Type 'string' is not assignable to type 'DimensionValue | undefined'.
+  Overload 2 of 2, '(props: ViewProps, context: any): View', gave the following error.
+    Type '{ position: "absolute"; left: string; top: string; width: number; height: number; borderRadius: number; backgroundColor: string; borderWidth: number; borderColor: string; marginLeft: number; marginTop: number; zIndex: number; }' is not assignable to type 'StyleProp<ViewStyle>'.
+      Types of property 'left' are incompatible.
+        Type 'string' is not assignable to type 'DimensionValue | undefined'.
+src/components/TopBar.tsx(34,63): error TS2339: Property 'acting_as_employee_id' does not exist on type 'User'.
+src/components/TopBar.tsx(37,15): error TS2339: Property 'acting_as_employee_id' does not exist on type 'User'.
+src/components/TopBar.tsx(38,70): error TS2339: Property 'acting_as_employee_id' does not exist on type 'User'.
+src/components/TopBar.tsx(162,41): error TS2339: Property 'acting_as_employee_id' does not exist on type 'User'.
+src/components/TopBar.tsx(170,23): error TS2339: Property 'acting_as_employee_id' does not exist on type 'User'.
+src/components/TopBar.tsx(183,44): error TS2339: Property 'acting_as_employee_id' does not exist on type 'User'.
+src/components/TopBar.tsx(196,26): error TS2339: Property 'acting_as_employee_id' does not exist on type 'User'.

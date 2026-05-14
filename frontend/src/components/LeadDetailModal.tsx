@@ -22,7 +22,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
   const [busy, setBusy] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [loadingSummary, setLoadingSummary] = useState(false);
+  const [showConfetti, setShowConfetti] = useState(false);
   const subAnim = React.useRef(new Animated.Value(0)).current;
+  const confettiAnims = React.useRef([...Array(15)].map(() => new Animated.Value(0))).current;
 
   const selectCategory = (cat: string) => {
     if (activeCategory === cat) {
@@ -47,14 +51,53 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
   }, [leadId]);
 
   useEffect(() => {
-    if (visible && leadId) load();
+    if (visible && leadId) {
+      load();
+      setAiSummary(null);
+    }
   }, [visible, leadId, load]);
+
+  const fetchSummary = async () => {
+    if (!leadId) return;
+    setLoadingSummary(true);
+    try {
+      const r = await api.get(`/leads/${leadId}/ai-summary`);
+      setAiSummary(r.data.summary);
+    } catch (e) {
+      setAiSummary("Could not generate summary at this time.");
+    } finally {
+      setLoadingSummary(false);
+    }
+  };
+
+  const triggerConfetti = () => {
+    setShowConfetti(true);
+    Animated.parallel(
+      confettiAnims.map((anim, i) => 
+        Animated.sequence([
+          Animated.delay(i * 100),
+          Animated.timing(anim, {
+            toValue: 1,
+            duration: 2000,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true
+          })
+        ])
+      )
+    ).start(() => {
+      setShowConfetti(false);
+      confettiAnims.forEach(a => a.setValue(0));
+    });
+  };
 
   const updateLead = async (payload: any, action: string) => {
     if (!leadId) return;
     setBusy(action);
     try {
       await api.patch(`/leads/${leadId}`, payload);
+      if (payload.stage === 'closed') {
+        triggerConfetti();
+      }
       await load();
       onChanged?.();
     } finally {
@@ -204,6 +247,32 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
               )}
 
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, gap: 16 }}>
+                {/* AI Magic Summary */}
+                <View style={[styles.aiBlock, { borderColor: colors.primary + '40', backgroundColor: colors.primary + '08' }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      <Ionicons name="sparkles" size={16} color={colors.primary} />
+                      <Text style={[styles.blockTitle, { color: colors.primary, marginBottom: 0 }]}>AI MAGIC SUMMARY</Text>
+                    </View>
+                    {!aiSummary && !loadingSummary && (
+                      <Pressable onPress={fetchSummary} style={styles.magicBtn}>
+                        <Text style={{ color: '#fff', fontSize: 10, fontWeight: '700' }}>GENERATE</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                  {loadingSummary ? (
+                    <ActivityIndicator color={colors.primary} size="small" style={{ alignSelf: 'flex-start', marginVertical: 4 }} />
+                  ) : aiSummary ? (
+                    <Text style={{ color: colors.text, fontSize: 13, lineHeight: 18, fontStyle: 'italic' }}>
+                      "{aiSummary}"
+                    </Text>
+                  ) : (
+                    <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                      Click generate to get an AI-powered overview of this lead's status.
+                    </Text>
+                  )}
+                </View>
+
                 {/* Details */}
                 <View style={[styles.block, { borderColor: colors.border }]}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>CUSTOMER DETAILS</Text>
@@ -370,12 +439,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                   ) : (
                     <View style={{ marginTop: 8 }}>
                       {timeline.map((t: any) => (
-                        <View key={t.entry_id} style={[styles.timeItem, { borderLeftColor: colors.border }]}>
+                        <View key={t.activity_id} style={[styles.timeItem, { borderLeftColor: colors.border }]}>
                           <View style={[styles.timeDot, { backgroundColor: colors.primary, borderColor: colors.surface }]} />
                           <View style={{ flex: 1 }}>
                             <Text style={{ color: colors.text, fontSize: 13 }}>{t.text}</Text>
                             <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                              {t.actor_name || 'System'} · {t.actor_role || 'system'} · {new Date(t.created_at).toLocaleString()}
+                              {new Date(t.created_at).toLocaleString()}
                             </Text>
                           </View>
                         </View>
@@ -384,6 +453,30 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                   )}
                 </View>
               </ScrollView>
+
+              {/* Confetti Celebration Overlay */}
+              {showConfetti && (
+                <View style={StyleSheet.absoluteFill} pointerEvents="none">
+                  {confettiAnims.map((anim, i) => (
+                    <Animated.Text
+                      key={i}
+                      style={{
+                        position: 'absolute',
+                        left: `${(i / 15) * 100}%`,
+                        fontSize: 24,
+                        transform: [
+                          { translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [-50, 800] }) },
+                          { rotate: anim.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] }) },
+                          { translateX: anim.interpolate({ inputRange: [0, 1], outputRange: [0, (i % 2 === 0 ? 50 : -50)] }) }
+                        ],
+                        opacity: anim.interpolate({ inputRange: [0, 0.8, 1], outputRange: [1, 1, 0] })
+                      }}
+                    >
+                      {['🎉', '🎊', '✨', '⭐', '🏠', '🔑'][i % 6]}
+                    </Animated.Text>
+                  ))}
+                </View>
+              )}
             </>
           )}
         </Pressable>
@@ -484,6 +577,8 @@ const styles = StyleSheet.create({
     height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 16, alignSelf: 'flex-end', marginTop: 10,
   },
+  aiBlock: { padding: 16, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed' },
+  magicBtn: { backgroundColor: '#7C3AED', paddingHorizontal: 10, height: 24, borderRadius: 12, justifyContent: 'center' },
   timeItem: { flexDirection: 'row', gap: 12, paddingVertical: 8, paddingLeft: 10, borderLeftWidth: 1 },
   timeDot: { width: 8, height: 8, borderRadius: 4, marginTop: 5, marginLeft: -14, borderWidth: 2 },
 });
