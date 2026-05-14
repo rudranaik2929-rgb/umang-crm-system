@@ -2,7 +2,7 @@
 import httpx, json, sys
 
 SUPABASE_URL = "https://xlaiwmyyldxmuvopqomi.supabase.co"
-SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdWJhc2UiLCJyZWYiOiJ4bGFpd215eWxkeG14V2b3Bxb21pIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODU2Njc2MSwiZXhwIjoyMDk0MTQyNzYxfQ.2lYDVgmVnbvaBVdDOkOfPekd8uPNeo7NiFEcdNh81EM"
+SERVICE_ROLE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdWJhc2UiLCJyZWYiOiJ4bGFpd215eWxkeG14dXZvcHFvbWkiLCJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNzc4NTY2NzYxLCJleHAiOjIwOTQxNDI3NjF9.2lYDVgmVnbvaBVdDOkOfPekd8uPNeo7NiFEcdNh81EM"
 
 HEADERS = {
     "apikey": SERVICE_ROLE_KEY,

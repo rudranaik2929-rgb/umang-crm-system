@@ -15,10 +15,6 @@ export default function AppLayout() {
   useEffect(() => {
     if (!loading && !user) router.replace('/' as any);
     else if (!loading && user && !user.role) router.replace('/select-role' as any);
-    else if (!loading && user && user.role && user.role !== 'admin' && pathname === '/(app)/dashboard') {
-      // Non-admins land on My Dashboard
-      router.replace('/(app)/my-dashboard' as any);
-    }
   }, [user, loading, router, pathname]);
 
   if (loading || !user) {

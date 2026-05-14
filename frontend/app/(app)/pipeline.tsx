@@ -111,8 +111,8 @@ function KanbanCard({ lead, colors, onPress }: any) {
       <Pressable
         testID={`kanban-card-${lead.lead_id}`}
         onPress={onPress}
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
+        onHoverIn={() => setHovered(true)}
+        onHoverOut={() => setHovered(false)}
         style={[
           styles.card, 
           { 

@@ -58,11 +58,11 @@ export const NAV_ITEMS = [
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
   admin: ['dashboard', 'my-dashboard', 'admin-analytics', 'pipeline', 'telecaller', 'visits', 'bookings', 'loans', 'whatsapp', 'tracking', 'employees', 'negative'],
-  telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
-  site_visit: ['my-dashboard', 'visits', 'pipeline'],
-  booking: ['my-dashboard', 'bookings', 'pipeline'],
-  loan: ['my-dashboard', 'loans', 'pipeline'],
-  marketing: ['my-dashboard', 'whatsapp', 'negative', 'pipeline'],
+  telecaller: ['dashboard', 'my-dashboard', 'telecaller', 'pipeline', 'negative'],
+  site_visit: ['dashboard', 'my-dashboard', 'visits', 'pipeline'],
+  booking: ['dashboard', 'my-dashboard', 'bookings', 'pipeline'],
+  loan: ['dashboard', 'my-dashboard', 'loans', 'pipeline'],
+  marketing: ['dashboard', 'my-dashboard', 'whatsapp', 'negative', 'pipeline'],
 };
 
 export function visibleNavFor(role?: string | null) {
