@@ -934,6 +934,8 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     now = now_utc()
     start_date = (now - timedelta(days=30)).isoformat()
     leads = sb_select("leads", {"select": "created_at", "created_at": f"gte.{start_date}"})
+    leads = SESSION_CACHE["leads"] + leads
+    if not leads: leads = DEMO_LEADS
     
     leads_by_day = []
     days_map = {}
@@ -951,6 +953,9 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
 
     # 2. Real revenue by month (last 12 months)
     bookings = sb_select("bookings", {"select": "booking_amount,created_at", "status": "eq.confirmed"})
+    bookings = SESSION_CACHE["bookings"] + bookings
+    if not bookings: bookings = DEMO_BOOKINGS
+    
     rev_by_month = []
     months_map = {}
     for i in range(12):
@@ -970,14 +975,17 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
 
 @api_router.get("/activities")
 async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):
-    return sb_select("activities", {"select": "*", "order": "created_at.desc", "limit": str(limit)})
+    activities = sb_select("activities", {"select": "*", "order": "created_at.desc", "limit": str(limit)})
+    return SESSION_CACHE["activities"] + activities
 
 @api_router.get("/stats/me")
 async def stats_me(cu: User=Depends(get_current_user)):
     eid = cu.acting_as_employee_id or cu.user_id
     
-    # Get personal stats
+    # Get personal stats (merge with cache)
     activities = sb_select("activities", {"user_id": f"eq.{eid}", "select": "*", "order": "created_at.desc"})
+    cache_acts = [a for a in SESSION_CACHE["activities"] if a.get("user_id") == eid]
+    activities = cache_acts + activities
     
     positives = sum(1 for a in activities if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
     visits = sum(1 for a in activities if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
@@ -990,8 +998,11 @@ async def stats_me(cu: User=Depends(get_current_user)):
     if not activities:
         score = 0
     
-    # Get all leads for pipeline counts
+    # Get all leads for pipeline counts (merge with cache)
     leads = sb_select("leads", {"select": "stage,status"})
+    leads = SESSION_CACHE["leads"] + leads
+    if not leads: leads = DEMO_LEADS
+    
     hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])
     warm = sum(1 for l in leads if l.get("stage") == "contacted")
     cold = sum(1 for l in leads if l.get("stage") == "new")
