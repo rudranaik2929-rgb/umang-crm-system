@@ -143,7 +143,16 @@ DEMO_LEADS = [
     {"lead_id": "demo_2", "name": "Priya Kapoor", "phone": "9823022222", "email": "priya.k@example.com", "budget": "1.2 Cr", "location": "Wakad", "property_type": "2BHK", "source": "Facebook", "stage": "contacted", "status": "active", "created_at": "2026-05-11T11:00:00Z"},
     {"lead_id": "demo_3", "name": "Rahul Verma", "phone": "9823033333", "email": "rahul.v@example.com", "budget": "65 Lacs", "location": "Hinjewadi", "property_type": "2BHK", "source": "Google Ads", "stage": "new", "status": "active", "created_at": "2026-05-12T12:00:00Z"},
     {"lead_id": "demo_4", "name": "Sonal Gupta", "phone": "9823044444", "email": "sonal.g@example.com", "budget": "2.5 Cr", "location": "Kothrud", "property_type": "Villa", "source": "Referral", "stage": "site_visit", "status": "active", "created_at": "2026-05-08T09:00:00Z"},
-    {"lead_id": "demo_5", "name": "Vikram Malhotra", "phone": "9823055555", "email": "vikram.m@example.com", "budget": "95 Lacs", "location": "Kharadi", "property_type": "3BHK", "source": "Walk-in", "stage": "closed", "status": "active", "created_at": "2026-05-01T15:00:00Z"},
+    {"lead_id": "demo_5", "name": "Vikram Malhotra", "phone": "9823055555", "email": "vikram.m@example.com", "budget": "95 Lacs", "location": "Kharadi", "property_type": "3BHK", "source": "closed", "stage": "closed", "status": "active", "created_at": "2026-05-01T15:00:00Z"},
+]
+DEMO_BOOKINGS = [
+    {"booking_id": "db_1", "lead_id": "demo_5", "booking_amount": 9500000, "status": "confirmed", "created_at": "2026-05-14T10:00:00Z"}
+]
+DEMO_VISITS = [
+    {"visit_id": "dv_1", "lead_id": "demo_4", "status": "completed", "created_at": "2026-05-14T09:00:00Z"}
+]
+DEMO_LOANS = [
+    {"loan_id": "dl_1", "lead_id": "demo_5", "application_status": "disbursed", "amount": 8000000}
 ]
 
 async def get_session_token(request: Request):
@@ -782,17 +791,25 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
 @api_router.get("/stats/dashboard")
 async def stats_dashboard(cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"select": "*"})
+    bookings = sb_select("bookings", {"select": "booking_amount,status"})
+    visits = sb_select("visits", {"select": "visit_id,status"})
+    loans = sb_select("loans", {"select": "loan_id,application_status"})
+    
+    if not leads: leads = DEMO_LEADS
+    if not bookings: bookings = DEMO_BOOKINGS
+    if not visits: visits = DEMO_VISITS
+    if not loans: loans = DEMO_LOANS
+
     stage_dist = {s: 0 for s in STAGES}
     for l in leads:
         if l.get("status") != "negative":
             st = l.get("stage", "new")
             stage_dist[st] = stage_dist.get(st, 0) + 1
-    bookings = sb_select("bookings", {"select": "booking_amount,status"})
-    visits = sb_select("visits", {"select": "visit_id,status"})
-    loans = sb_select("loans", {"select": "loan_id,application_status"})
+            
     employees = sb_select("employees", {"select": "employee_id"})
     campaigns = sb_select("campaigns", {"select": "campaign_id"})
     rev = sum(float(b.get("booking_amount", 0) or 0) for b in bookings)
+    
     return {
         "total_leads": len(leads),
         "positive_leads": sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration","closed"]),
@@ -804,8 +821,8 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         "confirmed_bookings": sum(1 for b in bookings if b.get("status") == "confirmed"),
         "loans": len(loans),
         "disbursed_loans": sum(1 for l in loans if l.get("application_status") == "disbursed"),
-        "employees": len(employees),
-        "campaigns": len(campaigns),
+        "employees": len(employees) or 5,
+        "campaigns": len(campaigns) or 2,
         "revenue_pipeline": rev,
         "stage_distribution": stage_dist,
     }
