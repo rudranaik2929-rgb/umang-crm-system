@@ -571,9 +571,17 @@ async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, ass
 @api_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
-    if not leads: raise HTTPException(404, "Lead not found")
+    lead = None
+    if leads:
+        lead = leads[0]
+    else:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
+        if cache_match:
+            lead = cache_match[0]
+    if not lead: raise HTTPException(404, "Lead not found")
     timeline = sb_select("activities", {"lead_id": f"eq.{lead_id}", "select": "*", "order": "created_at.desc"})
-    return {"lead": leads[0], "timeline": timeline}
+    cache_activities = [a for a in SESSION_CACHE["activities"] if a.get("lead_id") == lead_id]
+    return {"lead": lead, "timeline": cache_activities + timeline}
 
 @api_router.get("/leads/{lead_id}/ai-summary")
 async def get_lead_ai_summary(lead_id: str, cu: User=Depends(get_current_user)):
@@ -640,28 +648,44 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
 @api_router.post("/leads/{lead_id}/notes")
 async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id"})
-    if not leads: raise HTTPException(404, "Lead not found")
-    return log_activity(cu, p.type, p.text, lead_id=lead_id)
+    if not leads:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
+        if not cache_match: raise HTTPException(404, "Lead not found")
+    activity = log_activity(cu, p.type, p.text, lead_id=lead_id)
+    if activity: SESSION_CACHE["activities"].insert(0, activity)
+    return activity
 
 @api_router.post("/leads/{lead_id}/advance")
 async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
-    if not leads: raise HTTPException(404, "Lead not found")
-    lead = leads[0]
+    lead = None
+    if leads:
+        lead = leads[0]
+    else:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
+        if cache_match: lead = cache_match[0]
+    if not lead: raise HTTPException(404, "Lead not found")
     cur = lead.get("stage", "new")
     try: idx = STAGES.index(cur)
     except: idx = 0
     if idx >= len(STAGES) - 1: return lead
     new_stage = STAGES[idx + 1]
     updated = sb_update("leads", "lead_id", lead_id, {"stage": new_stage, "updated_at": now_utc().isoformat()})
+    # Update cache
+    new_lead = {**lead, "stage": new_stage, "updated_at": now_utc().isoformat()}
+    SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
+    if not any(l.get("lead_id") == lead_id for l in SESSION_CACHE["leads"]):
+        SESSION_CACHE["leads"].insert(0, new_lead)
     log_activity(cu, "stage_change", f"Stage moved {cur} → {new_stage}", lead_id=lead_id)
-    return updated or lead
+    return updated or new_lead
 
 # ---- Visits ----
 @api_router.post("/visits")
 async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{p.lead_id}", "select": "lead_id,name"})
-    if not leads: raise HTTPException(404, "Lead not found")
+    if not leads:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == p.lead_id]
+        if not cache_match: raise HTTPException(404, "Lead not found")
     vid = gen_id("vis")
     v = {
         "visit_id": vid, "lead_id": p.lead_id, "scheduled_at": p.scheduled_at.isoformat(),
@@ -669,16 +693,24 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
         "interested": None, "created_at": now_utc().isoformat(),
     }
     result = sb_insert("visits", v)
+    SESSION_CACHE["visits"].insert(0, result or v)
     return result or v
 
 @api_router.get("/visits")
 async def list_visits(cu: User=Depends(get_current_user)):
-    return sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
+    visits = sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
+    return SESSION_CACHE["visits"] + visits
 
 @api_router.patch("/visits/{visit_id}")
 async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_current_user)):
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("visits", "visit_id", visit_id, data)
+    # Update cache
+    for i, v in enumerate(SESSION_CACHE["visits"]):
+        if v.get("visit_id") == visit_id:
+            SESSION_CACHE["visits"][i] = {**v, **data}
+            if not updated: updated = SESSION_CACHE["visits"][i]
+            break
     if not updated: raise HTTPException(404, "Visit not found")
     return updated
 
@@ -686,21 +718,31 @@ async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_c
 @api_router.post("/bookings")
 async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{p.lead_id}", "select": "lead_id,name"})
-    if not leads: raise HTTPException(404, "Lead not found")
+    lead_name = "Lead"
+    if leads:
+        lead_name = leads[0]["name"]
+    else:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == p.lead_id]
+        if cache_match:
+            lead_name = cache_match[0].get("name", "Lead")
+        else:
+            raise HTTPException(404, "Lead not found")
     bid = gen_id("bkg")
     b = {
-        "booking_id": bid, "lead_id": p.lead_id, "lead_name": leads[0]["name"],
+        "booking_id": bid, "lead_id": p.lead_id, "lead_name": lead_name,
         "property_name": p.property_name, "booking_amount": p.booking_amount,
         "token_received": p.token_received, "agreement_status": "pending",
         "payment_progress": int((p.token_received / p.booking_amount) * 100) if p.booking_amount else 0,
         "status": "active", "created_at": now_utc().isoformat(),
     }
     result = sb_insert("bookings", b)
+    SESSION_CACHE["bookings"].insert(0, result or b)
     return result or b
 
 @api_router.get("/bookings")
 async def list_bookings(cu: User=Depends(get_current_user)):
-    return sb_select("bookings", {"select": "*", "order": "created_at.desc"})
+    bookings = sb_select("bookings", {"select": "*", "order": "created_at.desc"})
+    return SESSION_CACHE["bookings"] + bookings
 
 @api_router.patch("/bookings/{booking_id}")
 async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get_current_user)):
@@ -713,20 +755,30 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
 @api_router.post("/loans")
 async def create_loan(p: LoanCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{p.lead_id}", "select": "lead_id,name"})
-    if not leads: raise HTTPException(404, "Lead not found")
+    lead_name = "Lead"
+    if leads:
+        lead_name = leads[0]["name"]
+    else:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == p.lead_id]
+        if cache_match:
+            lead_name = cache_match[0].get("name", "Lead")
+        else:
+            raise HTTPException(404, "Lead not found")
     lid = gen_id("lon")
     l = {
-        "loan_id": lid, "lead_id": p.lead_id, "lead_name": leads[0]["name"],
+        "loan_id": lid, "lead_id": p.lead_id, "lead_name": lead_name,
         "bank_name": p.bank_name, "amount": p.amount, "application_status": "pending",
         "bank_stage": "documentation", "emi_eligible": None, "progress": 0,
         "created_at": now_utc().isoformat(),
     }
     result = sb_insert("loans", l)
+    SESSION_CACHE["loans"].insert(0, result or l)
     return result or l
 
 @api_router.get("/loans")
 async def list_loans(cu: User=Depends(get_current_user)):
-    return sb_select("loans", {"select": "*", "order": "created_at.desc"})
+    loans = sb_select("loans", {"select": "*", "order": "created_at.desc"})
+    return SESSION_CACHE["loans"] + loans
 
 @api_router.patch("/loans/{loan_id}")
 async def update_loan(loan_id: str, p: LoanUpdate, cu: User=Depends(get_current_user)):
