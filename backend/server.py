@@ -138,6 +138,13 @@ class CampaignCreate(BaseModel):
 
 # ---- Auth Helpers ----
 LOCAL_SESSIONS = {}
+DEMO_LEADS = [
+    {"lead_id": "demo_1", "name": "Amit Sharma", "phone": "9823011111", "email": "amit.sharma@example.com", "budget": "85 Lacs", "location": "Baner", "property_type": "3BHK", "source": "Website", "stage": "positive", "status": "active", "created_at": "2026-05-10T10:00:00Z"},
+    {"lead_id": "demo_2", "name": "Priya Kapoor", "phone": "9823022222", "email": "priya.k@example.com", "budget": "1.2 Cr", "location": "Wakad", "property_type": "2BHK", "source": "Facebook", "stage": "contacted", "status": "active", "created_at": "2026-05-11T11:00:00Z"},
+    {"lead_id": "demo_3", "name": "Rahul Verma", "phone": "9823033333", "email": "rahul.v@example.com", "budget": "65 Lacs", "location": "Hinjewadi", "property_type": "2BHK", "source": "Google Ads", "stage": "new", "status": "active", "created_at": "2026-05-12T12:00:00Z"},
+    {"lead_id": "demo_4", "name": "Sonal Gupta", "phone": "9823044444", "email": "sonal.g@example.com", "budget": "2.5 Cr", "location": "Kothrud", "property_type": "Villa", "source": "Referral", "stage": "site_visit", "status": "active", "created_at": "2026-05-08T09:00:00Z"},
+    {"lead_id": "demo_5", "name": "Vikram Malhotra", "phone": "9823055555", "email": "vikram.m@example.com", "budget": "95 Lacs", "location": "Kharadi", "property_type": "3BHK", "source": "Walk-in", "stage": "closed", "status": "active", "created_at": "2026-05-01T15:00:00Z"},
+]
 
 async def get_session_token(request: Request):
     t = request.cookies.get("session_token")
@@ -538,7 +545,12 @@ async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, ass
     if stage: params["stage"] = f"eq.{stage}"
     if status_: params["status"] = f"eq.{status_}"
     if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
-    return sb_select("leads", params)
+    
+    leads = sb_select("leads", params)
+    if not leads and not stage and not status_ and not assigned_to:
+        # Fallback to demo data if DB is empty
+        return DEMO_LEADS
+    return leads
 
 @api_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
