@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
@@ -55,6 +55,12 @@ export default function MyDashboard() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Auto-refresh every 30 seconds for live feel
+  useEffect(() => {
+    const interval = setInterval(() => { load(); }, 30000);
+    return () => clearInterval(interval);
+  }, [load]);
+
   if (loading || !data) {
     return (
       <View style={{ flex: 1 }}>
@@ -75,7 +81,12 @@ export default function MyDashboard() {
 
   return (
     <View style={{ flex: 1 }}>
-      <TopBar title="My Dashboard" subtitle={`${roleLabel(role)} workspace`} />
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View style={{ flex: 1 }}>
+          <TopBar title="My Dashboard" subtitle={`${roleLabel(role)} workspace`} />
+        </View>
+        <LivePulse />
+      </View>
       <ScrollView contentContainerStyle={styles.content}>
         {/* Hero score card */}
         <View style={[styles.hero, { backgroundColor: colors.surface, borderColor: accent + '40' }]}>
@@ -236,6 +247,32 @@ function KPI({ label, value, icon, color, colors, highlight }: any) {
   );
 }
 
+function LivePulse() {
+  const pulseAnim = React.useRef(new Animated.Value(0)).current;
+
+  React.useEffect(() => {
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulseAnim, { toValue: 1, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        Animated.timing(pulseAnim, { toValue: 0, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+      ])
+    ).start();
+  }, []);
+
+  return (
+    <View style={styles.livePulseWrap}>
+      <Animated.View style={[
+        styles.liveDotOuter,
+        { opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.3, 0.8] }),
+          transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [1, 1.8] }) }]
+        }
+      ]} />
+      <View style={styles.liveDotInner} />
+      <Text style={styles.liveText}>LIVE</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   content: { padding: 24, gap: 24 },
   hero: {
@@ -294,4 +331,9 @@ const styles = StyleSheet.create({
   
   activityCard: { padding: 20, borderRadius: 12, borderWidth: 1 },
   actRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1 },
+
+  livePulseWrap: { flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 20, paddingVertical: 8 },
+  liveDotOuter: { position: 'absolute', left: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: '#22C55E' },
+  liveDotInner: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#22C55E', marginLeft: 2 },
+  liveText: { fontSize: 10, fontWeight: '800', color: '#22C55E', letterSpacing: 1.5, marginLeft: 10 },
 });

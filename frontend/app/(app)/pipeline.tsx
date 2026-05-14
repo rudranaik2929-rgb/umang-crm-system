@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Animated, Easing } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
@@ -85,55 +85,94 @@ export default function Pipeline() {
 
 function KanbanCard({ lead, colors, onPress }: any) {
   const [hovered, setHovered] = useState(false);
-  
+  const pulseAnim = React.useRef(new Animated.Value(0)).current;
+
+  // Determine if lead is "hot"
+  const isNew = lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 3600000; // < 1 hour
+  const isHighBudget = lead.budget && parseInt(lead.budget.replace(/[^0-9]/g, ''), 10) >= 5000000; // >= 50 Lacs
+  const isHot = isNew || isHighBudget;
+
+  React.useEffect(() => {
+    if (isHot) {
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(pulseAnim, { toValue: 1, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+          Animated.timing(pulseAnim, { toValue: 0, duration: 1200, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
+        ])
+      ).start();
+    }
+  }, [isHot]);
+
+  const glowColor = isNew ? '#EF4444' : '#D4AF37';
+  const glowShadow = isHot
+    ? pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [`0 0 0px ${glowColor}00`, `0 0 14px ${glowColor}80`] })
+    : 'none';
+
   return (
-    <Pressable
-      testID={`kanban-card-${lead.lead_id}`}
-      onPress={onPress}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={[
-        styles.card, 
-        { 
-          backgroundColor: colors.surface, 
-          borderColor: hovered ? colors.primary : colors.border,
-          transform: [{ translateY: hovered ? -3 : 0 }],
-          boxShadow: hovered ? `0 6px 16px ${colors.primary}20` : 'none'
-        } as any
-      ]}
-    >
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <Text style={[styles.cardName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
-        {hovered && (
-          <View style={{ flexDirection: 'row', gap: 6 }}>
-             <Pressable style={styles.miniBtn} onPress={() => {}}>
-               <Ionicons name="call-outline" size={10} color={colors.primary} />
-             </Pressable>
-             <Pressable style={styles.miniBtn} onPress={() => {}}>
-               <Ionicons name="logo-whatsapp" size={10} color="#25D366" />
-             </Pressable>
+    <Animated.View style={[{ boxShadow: glowShadow }] as any}>
+      <Pressable
+        testID={`kanban-card-${lead.lead_id}`}
+        onPress={onPress}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={[
+          styles.card, 
+          { 
+            backgroundColor: colors.surface, 
+            borderColor: isHot ? glowColor + '60' : (hovered ? colors.primary : colors.border),
+            transform: [{ translateY: hovered ? -3 : 0 }],
+            boxShadow: hovered ? `0 6px 16px ${colors.primary}20` : undefined
+          } as any
+        ]}
+      >
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+            <Text style={[styles.cardName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
+            {isHot && (
+              <Animated.View style={[
+                styles.hotBadge,
+                { backgroundColor: isNew ? '#EF4444' : '#D4AF37',
+                  opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
+                  transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.1] }) }]
+                }
+              ]}>
+                <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800', letterSpacing: 0.5 }}>
+                  {isNew ? '🔥 NEW' : '💰 HIGH'}
+                </Text>
+              </Animated.View>
+            )}
           </View>
-        )}
-      </View>
-      <View style={styles.cardMeta}>
-        <Ionicons name="call-outline" size={11} color={colors.textMuted} />
-        <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{lead.phone}</Text>
-      </View>
-      {lead.location ? (
-        <View style={styles.cardMeta}>
-          <Ionicons name="location-outline" size={11} color={colors.textMuted} />
-          <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{lead.location}</Text>
+          {hovered && (
+            <View style={{ flexDirection: 'row', gap: 6 }}>
+               <Pressable style={styles.miniBtn} onPress={() => {}}>
+                 <Ionicons name="call-outline" size={10} color={colors.primary} />
+               </Pressable>
+               <Pressable style={styles.miniBtn} onPress={() => {}}>
+                 <Ionicons name="logo-whatsapp" size={10} color="#25D366" />
+               </Pressable>
+            </View>
+          )}
         </View>
-      ) : null}
-      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
-        {lead.budget ? (
-          <View style={[styles.budget, { borderColor: colors.border }]}>
-            <Text style={{ color: colors.text, fontSize: 10, fontWeight: '600' }}>{lead.budget}</Text>
+        <View style={styles.cardMeta}>
+          <Ionicons name="call-outline" size={11} color={colors.textMuted} />
+          <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{lead.phone}</Text>
+        </View>
+        {lead.location ? (
+          <View style={styles.cardMeta}>
+            <Ionicons name="location-outline" size={11} color={colors.textMuted} />
+            <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{lead.location}</Text>
           </View>
-        ) : <View />}
-        <Text style={{ fontSize: 9, color: colors.textMuted }}>{lead.source}</Text>
-      </View>
-    </Pressable>
+        ) : null}
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+          {lead.budget ? (
+            <View style={[styles.budget, { borderColor: isHighBudget ? '#D4AF37' : colors.border, backgroundColor: isHighBudget ? '#D4AF3710' : 'transparent' }]}>
+              <Text style={{ color: isHighBudget ? '#D4AF37' : colors.text, fontSize: 10, fontWeight: '600' }}>{lead.budget}</Text>
+            </View>
+          ) : <View />}
+          <Text style={{ fontSize: 9, color: colors.textMuted }}>{lead.source}</Text>
+        </View>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -150,4 +189,5 @@ const styles = StyleSheet.create({
   cardMetaText: { fontSize: 11 },
   budget: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   miniBtn: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#f1f5f910', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#e2e8f030' },
+  hotBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
 });
