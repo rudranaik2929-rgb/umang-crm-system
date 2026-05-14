@@ -340,6 +340,15 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                             busy={busy === 'hot'}
                             color="#E11D48"
                           />
+                          <SubActionBtn 
+                            label="🏆 Deal Won (Close)" 
+                            sub="Finalize and celebrate!"
+                            onPress={() => {
+                              updateLead({ stage: 'closed', status: 'active' }, 'deal_won');
+                            }}
+                            busy={busy === 'deal_won'}
+                            color="#D4AF37"
+                          />
                         </View>
                       )}
 
