@@ -87,10 +87,8 @@ function KanbanCard({ lead, colors, onPress }: any) {
   const [hovered, setHovered] = useState(false);
   const pulseAnim = React.useRef(new Animated.Value(0)).current;
 
-  // Determine if lead is "hot"
-  const isNew = lead.created_at && (Date.now() - new Date(lead.created_at).getTime()) < 3600000; // < 1 hour
-  const isHighBudget = lead.budget && parseInt(lead.budget.replace(/[^0-9]/g, ''), 10) >= 5000000; // >= 50 Lacs
-  const isHot = isNew || isHighBudget;
+  // Only show badge if telecaller has explicitly marked it as "Hot Lead"
+  const isHot = lead.priority === 'hot';
 
   React.useEffect(() => {
     if (isHot) {
@@ -103,7 +101,7 @@ function KanbanCard({ lead, colors, onPress }: any) {
     }
   }, [isHot]);
 
-  const glowColor = isNew ? '#EF4444' : '#D4AF37';
+  const glowColor = '#EF4444';
   const glowShadow = isHot
     ? pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [`0 0 0px ${glowColor}00`, `0 0 14px ${glowColor}80`] })
     : 'none';
@@ -131,13 +129,13 @@ function KanbanCard({ lead, colors, onPress }: any) {
             {isHot && (
               <Animated.View style={[
                 styles.hotBadge,
-                { backgroundColor: isNew ? '#EF4444' : '#D4AF37',
+                { backgroundColor: '#EF4444',
                   opacity: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.7, 1] }),
                   transform: [{ scale: pulseAnim.interpolate({ inputRange: [0, 1], outputRange: [0.9, 1.1] }) }]
                 }
               ]}>
                 <Text style={{ color: '#fff', fontSize: 8, fontWeight: '800', letterSpacing: 0.5 }}>
-                  {isNew ? '🔥 NEW' : '💰 HIGH'}
+                  🔥 HOT
                 </Text>
               </Animated.View>
             )}
@@ -165,8 +163,8 @@ function KanbanCard({ lead, colors, onPress }: any) {
         ) : null}
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
           {lead.budget ? (
-            <View style={[styles.budget, { borderColor: isHighBudget ? '#D4AF37' : colors.border, backgroundColor: isHighBudget ? '#D4AF3710' : 'transparent' }]}>
-              <Text style={{ color: isHighBudget ? '#D4AF37' : colors.text, fontSize: 10, fontWeight: '600' }}>{lead.budget}</Text>
+            <View style={[styles.budget, { borderColor: colors.border }]}>
+              <Text style={{ color: colors.text, fontSize: 10, fontWeight: '600' }}>{lead.budget}</Text>
             </View>
           ) : <View />}
           <Text style={{ fontSize: 9, color: colors.textMuted }}>{lead.source}</Text>

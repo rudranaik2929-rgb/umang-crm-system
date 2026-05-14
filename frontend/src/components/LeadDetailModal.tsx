@@ -326,17 +326,17 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                             label="Cold Lead" 
                             sub="Interested but not urgent"
                             onPress={() => {
-                              updateLead({ stage: 'positive', status: 'active' }, 'cold');
+                              updateLead({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold');
                               onClose();
                             }}
                             busy={busy === 'cold'}
                             color={colors.positive}
                           />
                           <SubActionBtn 
-                            label="Hot Lead" 
+                            label="Hot Lead 🔥" 
                             sub="Active with Urgent requirement"
                             onPress={() => {
-                              updateLead({ stage: 'positive', status: 'active' }, 'hot');
+                              updateLead({ stage: 'positive', status: 'active', priority: 'hot' }, 'hot');
                               onClose();
                             }}
                             busy={busy === 'hot'}
