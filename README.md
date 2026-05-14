@@ -32,3 +32,5 @@ Open `http://localhost:3000` → sign in with Google → first user becomes admi
 - **Roles**: admin · telecaller · site_visit · booking · loan · marketing
 
 See [`PROJECT_DOCS.md`](./PROJECT_DOCS.md) for the full architecture, API, models, workflow handoff matrix, and scoring formulas.
+
+<!-- Rebuild trigger: 2026-05-14T22:35:00Z -->
