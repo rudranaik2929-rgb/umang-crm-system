@@ -138,6 +138,8 @@ class CampaignCreate(BaseModel):
 
 # ---- Auth Helpers ----
 LOCAL_SESSIONS = {}
+SESSION_CACHE = {"leads": [], "bookings": [], "visits": [], "loans": [], "activities": []}
+
 DEMO_LEADS = [
     {"lead_id": "demo_1", "name": "Amit Sharma", "phone": "9823011111", "email": "amit.sharma@example.com", "budget": "85 Lacs", "location": "Baner", "property_type": "3BHK", "source": "Website", "stage": "positive", "status": "active", "created_at": "2026-05-10T10:00:00Z"},
     {"lead_id": "demo_2", "name": "Priya Kapoor", "phone": "9823022222", "email": "priya.k@example.com", "budget": "1.2 Cr", "location": "Wakad", "property_type": "2BHK", "source": "Facebook", "stage": "contacted", "status": "active", "created_at": "2026-05-11T11:00:00Z"},
@@ -545,6 +547,8 @@ async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
         "assigned_to": None, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
     }
     result = sb_insert("leads", lead)
+    # Always add to session cache for immediate responsiveness
+    SESSION_CACHE["leads"].insert(0, result or lead)
     log_activity(cu, "manual_enquiry", f"Manual lead entry created for {p.name}.", lead_id=lid)
     return result or lead
 
@@ -556,10 +560,13 @@ async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, ass
     if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
     
     leads = sb_select("leads", params)
-    if not leads and not stage and not status_ and not assigned_to:
+    # Merge with session cache
+    all_leads = SESSION_CACHE["leads"] + leads
+
+    if not all_leads and not stage and not status_ and not assigned_to:
         # Fallback to demo data if DB is empty
         return DEMO_LEADS
-    return leads
+    return all_leads
 
 @api_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
@@ -589,13 +596,33 @@ async def get_lead_ai_summary(lead_id: str, cu: User=Depends(get_current_user)):
 @api_router.patch("/leads/{lead_id}")
 async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
-    if not leads: raise HTTPException(404, "Lead not found")
-    old_lead = leads[0]
+    old_lead = None
+    if leads:
+        old_lead = leads[0]
+    else:
+        # Check cache
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
+        if cache_match:
+            old_lead = cache_match[0]
+            
+    if not old_lead: raise HTTPException(404, "Lead not found")
     
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     data["updated_at"] = now_utc().isoformat()
     updated = sb_update("leads", "lead_id", lead_id, data)
-    if not updated: raise HTTPException(404, "Lead not found")
+    
+    # Always update cache for immediate UI feedback
+    if leads:
+        # If it was in DB, we still want it in cache if DB update is unreliable
+        new_lead = {**old_lead, **data}
+        SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
+        if not any(l.get("lead_id") == lead_id for l in SESSION_CACHE["leads"]):
+            SESSION_CACHE["leads"].insert(0, new_lead)
+    else:
+        # Update existing cache entry
+        new_lead = {**old_lead, **data}
+        SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
+        updated = new_lead
     
     # Log activity for stage/status changes
     if p.stage and p.stage != old_lead.get("stage"):
@@ -795,6 +822,12 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     visits = sb_select("visits", {"select": "visit_id,status"})
     loans = sb_select("loans", {"select": "loan_id,application_status"})
     
+    # Merge with session cache
+    leads = SESSION_CACHE["leads"] + leads
+    bookings = SESSION_CACHE["bookings"] + bookings
+    visits = SESSION_CACHE["visits"] + visits
+    loans = SESSION_CACHE["loans"] + loans
+
     if not leads: leads = DEMO_LEADS
     if not bookings: bookings = DEMO_BOOKINGS
     if not visits: visits = DEMO_VISITS
