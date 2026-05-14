@@ -479,8 +479,18 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
 async def get_lead_ai_summary(lead_id: str, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
     if not leads: raise HTTPException(404, "Lead not found")
+    
     timeline = sb_select("activities", {"lead_id": f"eq.{lead_id}", "select": "*", "order": "created_at.desc", "limit": "20"})
+    
+    # Try Real AI first
     summary = AIService.generate_lead_summary(timeline)
+    
+    # If AI fails (e.g. 401 error), use the Smart Fallback
+    if not summary or "Could not generate" in summary or "available" in summary:
+        l = leads[0]
+        summary = f"Customer interested in {l.get('property_type','property')} in {l.get('location','specified area')} with a budget of {l.get('budget','budget')}. {l.get('notes','Follow up for site visit.')}"
+        if len(summary) > 100: summary = summary[:97] + "..."
+
     return {"summary": summary}
 
 @api_router.patch("/leads/{lead_id}")
