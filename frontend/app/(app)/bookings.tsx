@@ -66,8 +66,8 @@ export default function Bookings() {
                   <Text style={[styles.cardTitle, { color: colors.text }]}>{b.property_name}</Text>
                   <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
                   <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                    <Badge text={`AGREEMENT: ${b.agreement_status.toUpperCase()}`} color={AGREEMENT_COLOR[b.agreement_status] || colors.info} />
-                    <Badge text={`STATUS: ${b.status.toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
+                    <Badge text={`AGREEMENT: ${(b.agreement_status || 'pending').toUpperCase()}`} color={AGREEMENT_COLOR[b.agreement_status] || colors.info} />
+                    <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
                   </View>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>

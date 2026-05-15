@@ -79,8 +79,8 @@ export default function Loans() {
                   <Text style={[styles.cardTitle, { color: colors.text }]}>{lo.lead_name}</Text>
                   <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Bank pending'}  ·  ₹{(lo.amount || 0).toLocaleString('en-IN')}</Text>
                   <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
-                    <Badge text={lo.application_status.toUpperCase()} color={STATUS_COLOR[lo.application_status] || colors.primary} />
-                    <Badge text={lo.bank_stage.toUpperCase()} color={colors.info} />
+                    <Badge text={(lo.application_status || 'pending').toUpperCase()} color={STATUS_COLOR[lo.application_status] || colors.primary} />
+                    <Badge text={(lo.bank_stage || 'documentation').toUpperCase()} color={colors.info} />
                   </View>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
