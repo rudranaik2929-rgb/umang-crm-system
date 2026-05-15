@@ -2,12 +2,7 @@ import axios from 'axios';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-let rawBackend = process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-home-tech.onrender.com';
-// Sanitize malformed production URLs (fixes concatenation errors like https://umang-crm-systemumang-home-tech.onrender.com)
-if (rawBackend.includes('umang-crm-systemumang-home-tech')) {
-    rawBackend = rawBackend.replace('umang-crm-systemumang-home-tech', 'umang-home-tech');
-}
-const BACKEND_URL = rawBackend.replace(/\/$/, '');
+const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-systemumang-home-tech.onrender.com').replace(/\/$/, '');
 
 export const api = axios.create({
     baseURL: `${BACKEND_URL}/api`,
