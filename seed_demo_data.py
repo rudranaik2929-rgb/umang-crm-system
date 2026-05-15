@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 # Verified working key
 SUPABASE_URL = "https://xlaiwmyyldxmuvopqomi.supabase.co"
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdWJhc2UiLCJyZWYiOiJ4bGFpd215eWxkeG14dXZvcHFvbWkiLCJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNzc4NTY2NzYxLCJleHAiOjIwOTQxNDI3NjF9.2lYDVgmVnbvaBVdDOkOfPekd8uPNeo7NiFEcdNh81EM"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhsYWl3bXl5bGR4bXV2b3Bxb21pIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODU2Njc2MSwiZXhwIjoyMDk0MTQyNzYxfQ.2lYDVgmVnbvaBVdDOkOfPekd8uPNeo7NiFEcdNh81EM"
 
 headers = {
     "apikey": SUPABASE_KEY,

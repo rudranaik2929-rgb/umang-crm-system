@@ -61,7 +61,7 @@ FACEBOOK_VERIFY_TOKEN = os.environ.get("FACEBOOK_VERIFY_TOKEN", "umang_secret_ve
 
 # ---- Supabase Config ----
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
-SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdWJhc2UiLCJyZWYiOiJ4bGFpd215eWxkeG14dXZvcHFvbWkiLCJyb2xlIjoic2VydmljZV9yb2xlIiwiaWF0IjoxNzc4NTY2NzYxLCJleHAiOjIwOTQxNDI3NjF9.2lYDVgmVnbvaBVdDOkOfPekd8uPNeo7NiFEcdNh81EM"
+SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhsYWl3bXl5bGR4bXV2b3Bxb21pIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3ODU2Njc2MSwiZXhwIjoyMDk0MTQyNzYxfQ.2lYDVgmVnbvaBVdDOkOfPekd8uPNeo7NiFEcdNh81EM"
 
 def sb_headers():
     return {
@@ -140,22 +140,10 @@ class CampaignCreate(BaseModel):
 LOCAL_SESSIONS = {}
 SESSION_CACHE = {"leads": [], "bookings": [], "visits": [], "loans": [], "activities": []}
 
-DEMO_LEADS = [
-    {"lead_id": "demo_1", "name": "Amit Sharma", "phone": "9823011111", "email": "amit.sharma@example.com", "budget": "85 Lacs", "location": "Baner", "property_type": "3BHK", "source": "Website", "stage": "positive", "status": "active", "created_at": "2026-05-10T10:00:00Z"},
-    {"lead_id": "demo_2", "name": "Priya Kapoor", "phone": "9823022222", "email": "priya.k@example.com", "budget": "1.2 Cr", "location": "Wakad", "property_type": "2BHK", "source": "Facebook", "stage": "contacted", "status": "active", "created_at": "2026-05-11T11:00:00Z"},
-    {"lead_id": "demo_3", "name": "Rahul Verma", "phone": "9823033333", "email": "rahul.v@example.com", "budget": "65 Lacs", "location": "Hinjewadi", "property_type": "2BHK", "source": "Google Ads", "stage": "new", "status": "active", "created_at": "2026-05-12T12:00:00Z"},
-    {"lead_id": "demo_4", "name": "Sonal Gupta", "phone": "9823044444", "email": "sonal.g@example.com", "budget": "2.5 Cr", "location": "Kothrud", "property_type": "Villa", "source": "Referral", "stage": "site_visit", "status": "active", "created_at": "2026-05-08T09:00:00Z"},
-    {"lead_id": "demo_5", "name": "Vikram Malhotra", "phone": "9823055555", "email": "vikram.m@example.com", "budget": "95 Lacs", "location": "Kharadi", "property_type": "3BHK", "source": "closed", "stage": "closed", "status": "active", "created_at": "2026-05-01T15:00:00Z"},
-]
-DEMO_BOOKINGS = [
-    {"booking_id": "db_1", "lead_id": "demo_5", "booking_amount": 9500000, "status": "confirmed", "created_at": "2026-05-14T10:00:00Z"}
-]
-DEMO_VISITS = [
-    {"visit_id": "dv_1", "lead_id": "demo_4", "status": "completed", "created_at": "2026-05-14T09:00:00Z"}
-]
-DEMO_LOANS = [
-    {"loan_id": "dl_1", "lead_id": "demo_5", "application_status": "disbursed", "amount": 8000000}
-]
+DEMO_LEADS = []
+DEMO_BOOKINGS = []
+DEMO_VISITS = []
+DEMO_LOANS = []
 
 async def get_session_token(request: Request):
     t = request.cookies.get("session_token")
@@ -564,8 +552,7 @@ async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, ass
     all_leads = SESSION_CACHE["leads"] + leads
 
     if not all_leads and not stage and not status_ and not assigned_to:
-        # Fallback to demo data if DB is empty
-        return DEMO_LEADS
+        return []
     return all_leads
 
 @api_router.get("/leads/{lead_id}")
@@ -642,7 +629,31 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         act_type = f"status_change_{p.status}"
         if p.status == "negative": act_type = "negative_response"
         log_activity(cu, act_type, f"Changed lead status from {old_lead.get('status')} to {p.status}", lead_id=lead_id)
-        
+
+    # Auto-create related records when lead enters a new department stage
+    if p.stage and p.stage != old_lead.get("stage"):
+        if p.stage == "site_visit":
+            existing = sb_select("visits", {"lead_id": f"eq.{lead_id}"})
+            if not existing and not [v for v in SESSION_CACHE["visits"] if v.get("lead_id") == lead_id]:
+                vid = gen_id("vis")
+                v = {"visit_id": vid, "lead_id": lead_id, "scheduled_at": now_utc().isoformat(), "status": "scheduled", "created_at": now_utc().isoformat()}
+                sb_insert("visits", v)
+                SESSION_CACHE["visits"].insert(0, v)
+        elif p.stage == "booking":
+            existing = sb_select("bookings", {"lead_id": f"eq.{lead_id}"})
+            if not existing and not [b for b in SESSION_CACHE["bookings"] if b.get("lead_id") == lead_id]:
+                bid = gen_id("bkg")
+                b = {"booking_id": bid, "lead_id": lead_id, "lead_name": old_lead.get("name", "Lead"), "property_name": "Selected Property", "booking_amount": 0, "token_received": 0, "status": "active", "created_at": now_utc().isoformat()}
+                sb_insert("bookings", b)
+                SESSION_CACHE["bookings"].insert(0, b)
+        elif p.stage == "loan":
+            existing = sb_select("loans", {"lead_id": f"eq.{lead_id}"})
+            if not existing and not [ln for ln in SESSION_CACHE["loans"] if ln.get("lead_id") == lead_id]:
+                lnid = gen_id("lon")
+                ln = {"loan_id": lnid, "lead_id": lead_id, "lead_name": old_lead.get("name", "Lead"), "bank_name": "Bank Pending", "amount": 0, "application_status": "pending", "bank_stage": "documentation", "progress": 0, "created_at": now_utc().isoformat()}
+                sb_insert("loans", ln)
+                SESSION_CACHE["loans"].insert(0, ln)
+
     return updated
 
 @api_router.post("/leads/{lead_id}/notes")
@@ -676,6 +687,27 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
     if not any(l.get("lead_id") == lead_id for l in SESSION_CACHE["leads"]):
         SESSION_CACHE["leads"].insert(0, new_lead)
+
+    # Auto-create related records when lead enters a new department stage
+    if new_stage == "site_visit":
+        existing = sb_select("visits", {"lead_id": f"eq.{lead_id}"})
+        if not existing and not [v for v in SESSION_CACHE["visits"] if v.get("lead_id") == lead_id]:
+            v = {"visit_id": gen_id("vis"), "lead_id": lead_id, "scheduled_at": now_utc().isoformat(), "status": "scheduled", "created_at": now_utc().isoformat()}
+            sb_insert("visits", v)
+            SESSION_CACHE["visits"].insert(0, v)
+    elif new_stage == "booking":
+        existing = sb_select("bookings", {"lead_id": f"eq.{lead_id}"})
+        if not existing and not [b for b in SESSION_CACHE["bookings"] if b.get("lead_id") == lead_id]:
+            b = {"booking_id": gen_id("bkg"), "lead_id": lead_id, "lead_name": lead.get("name", "Lead"), "property_name": "Selected Property", "booking_amount": 0, "token_received": 0, "status": "active", "created_at": now_utc().isoformat()}
+            sb_insert("bookings", b)
+            SESSION_CACHE["bookings"].insert(0, b)
+    elif new_stage == "loan":
+        existing = sb_select("loans", {"lead_id": f"eq.{lead_id}"})
+        if not existing and not [ln for ln in SESSION_CACHE["loans"] if ln.get("lead_id") == lead_id]:
+            ln = {"loan_id": gen_id("lon"), "lead_id": lead_id, "lead_name": lead.get("name", "Lead"), "bank_name": "Bank Pending", "amount": 0, "application_status": "pending", "bank_stage": "documentation", "progress": 0, "created_at": now_utc().isoformat()}
+            sb_insert("loans", ln)
+            SESSION_CACHE["loans"].insert(0, ln)
+
     log_activity(cu, "stage_change", f"Stage moved {cur} → {new_stage}", lead_id=lead_id)
     return updated or new_lead
 
@@ -880,10 +912,11 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     visits = SESSION_CACHE["visits"] + visits
     loans = SESSION_CACHE["loans"] + loans
 
-    if not leads: leads = DEMO_LEADS
-    if not bookings: bookings = DEMO_BOOKINGS
-    if not visits: visits = DEMO_VISITS
-    if not loans: loans = DEMO_LOANS
+    # No demo data fallbacks
+    # if not leads: leads = DEMO_LEADS
+    # if not bookings: bookings = DEMO_BOOKINGS
+    # if not visits: visits = DEMO_VISITS
+    # if not loans: loans = DEMO_LOANS
 
     stage_dist = {s: 0 for s in STAGES}
     for l in leads:
@@ -935,7 +968,7 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     start_date = (now - timedelta(days=30)).isoformat()
     leads = sb_select("leads", {"select": "created_at", "created_at": f"gte.{start_date}"})
     leads = SESSION_CACHE["leads"] + leads
-    if not leads: leads = DEMO_LEADS
+    # if not leads: leads = DEMO_LEADS
     
     leads_by_day = []
     days_map = {}
@@ -954,7 +987,7 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     # 2. Real revenue by month (last 12 months)
     bookings = sb_select("bookings", {"select": "booking_amount,created_at", "status": "eq.confirmed"})
     bookings = SESSION_CACHE["bookings"] + bookings
-    if not bookings: bookings = DEMO_BOOKINGS
+    # if not bookings: bookings = DEMO_BOOKINGS
     
     rev_by_month = []
     months_map = {}
@@ -1001,7 +1034,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     # Get all leads for pipeline counts (merge with cache)
     leads = sb_select("leads", {"select": "stage,status"})
     leads = SESSION_CACHE["leads"] + leads
-    if not leads: leads = DEMO_LEADS
+    # if not leads: leads = DEMO_LEADS
     
     hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])
     warm = sum(1 for l in leads if l.get("stage") == "contacted")
@@ -1057,4 +1090,5 @@ async def stats_employees(cu: User=Depends(get_current_user)):
 async def root(): return {"app": "Umang Properties CRM", "status": "ok", "database": "supabase"}
 
 app.include_router(api_router)
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
