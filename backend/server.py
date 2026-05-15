@@ -82,12 +82,18 @@ def sb_select(table, params=None):
     return r.json() if r.status_code < 400 else []
 
 def sb_insert(table, data):
-    r = _http.post(sb_url(table), headers=sb_headers(), json=data)
+    h = {**sb_headers(), "Prefer": "return=representation"}
+    r = _http.post(sb_url(table), headers=h, json=data)
     if r.status_code >= 400:
         logging.error(f"Supabase INSERT {table}: {r.status_code} {r.text[:300]}")
         return None
-    rows = r.json()
-    return rows[0] if isinstance(rows, list) and rows else rows
+    if not r.text or not r.text.strip():
+        return data  # Return the input data if Supabase returns empty body
+    try:
+        rows = r.json()
+        return rows[0] if isinstance(rows, list) and rows else rows
+    except Exception:
+        return data
 
 def sb_update(table, pk_col, pk_val, data):
     h = {**sb_headers(), "Prefer": "return=representation"}
@@ -548,8 +554,21 @@ async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, ass
     if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
     
     leads = sb_select("leads", params)
-    # Merge with session cache
-    all_leads = SESSION_CACHE["leads"] + leads
+    
+    # Filter session cache to match the query parameters
+    filtered_cache = []
+    for l in SESSION_CACHE["leads"]:
+        match = True
+        if stage and l.get("stage") != stage: match = False
+        if status_ and l.get("status") != status_: match = False
+        if assigned_to and l.get("assigned_to") != assigned_to: match = False
+        if match:
+            filtered_cache.append(l)
+
+    # Merge with session cache (deduplicate: cache wins)
+    cache_ids = {l.get("lead_id") for l in filtered_cache}
+    db_only = [l for l in leads if l.get("lead_id") not in cache_ids]
+    all_leads = filtered_cache + db_only
 
     if not all_leads and not stage and not status_ and not assigned_to:
         return []
@@ -568,7 +587,12 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     if not lead: raise HTTPException(404, "Lead not found")
     timeline = sb_select("activities", {"lead_id": f"eq.{lead_id}", "select": "*", "order": "created_at.desc"})
     cache_activities = [a for a in SESSION_CACHE["activities"] if a.get("lead_id") == lead_id]
-    return {"lead": lead, "timeline": cache_activities + timeline}
+    
+    # Deduplicate activities
+    cache_act_ids = {a.get("activity_id") for a in cache_activities}
+    all_timeline = cache_activities + [a for a in timeline if a.get("activity_id") not in cache_act_ids]
+    
+    return {"lead": lead, "timeline": all_timeline}
 
 @api_router.get("/leads/{lead_id}/ai-summary")
 async def get_lead_ai_summary(lead_id: str, cu: User=Depends(get_current_user)):
@@ -731,7 +755,10 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
 @api_router.get("/visits")
 async def list_visits(cu: User=Depends(get_current_user)):
     visits = sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
-    return SESSION_CACHE["visits"] + visits
+    # Deduplicate visits (cache wins)
+    cache_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
+    db_only = [v for v in visits if v.get("visit_id") not in cache_ids]
+    return SESSION_CACHE["visits"] + db_only
 
 @api_router.patch("/visits/{visit_id}")
 async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_current_user)):
@@ -774,7 +801,10 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
 @api_router.get("/bookings")
 async def list_bookings(cu: User=Depends(get_current_user)):
     bookings = sb_select("bookings", {"select": "*", "order": "created_at.desc"})
-    return SESSION_CACHE["bookings"] + bookings
+    # Deduplicate bookings (cache wins)
+    cache_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
+    db_only = [b for b in bookings if b.get("booking_id") not in cache_ids]
+    return SESSION_CACHE["bookings"] + db_only
 
 @api_router.patch("/bookings/{booking_id}")
 async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get_current_user)):
@@ -810,7 +840,10 @@ async def create_loan(p: LoanCreate, cu: User=Depends(get_current_user)):
 @api_router.get("/loans")
 async def list_loans(cu: User=Depends(get_current_user)):
     loans = sb_select("loans", {"select": "*", "order": "created_at.desc"})
-    return SESSION_CACHE["loans"] + loans
+    # Deduplicate loans (cache wins)
+    cache_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
+    db_only = [ln for ln in loans if ln.get("loan_id") not in cache_ids]
+    return SESSION_CACHE["loans"] + db_only
 
 @api_router.patch("/loans/{loan_id}")
 async def update_loan(loan_id: str, p: LoanUpdate, cu: User=Depends(get_current_user)):
@@ -906,11 +939,21 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     visits = sb_select("visits", {"select": "visit_id,status"})
     loans = sb_select("loans", {"select": "loan_id,application_status"})
     
-    # Merge with session cache
-    leads = SESSION_CACHE["leads"] + leads
-    bookings = SESSION_CACHE["bookings"] + bookings
-    visits = SESSION_CACHE["visits"] + visits
-    loans = SESSION_CACHE["loans"] + loans
+    # Deduplicate leads
+    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
+    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
+    
+    # Deduplicate bookings
+    cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
+    bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
+    
+    # Deduplicate visits
+    cache_vis_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
+    visits = SESSION_CACHE["visits"] + [v for v in visits if v.get("visit_id") not in cache_vis_ids]
+    
+    # Deduplicate loans
+    cache_lon_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
+    loans = SESSION_CACHE["loans"] + [ln for ln in loans if ln.get("loan_id") not in cache_lon_ids]
 
     # No demo data fallbacks
     # if not leads: leads = DEMO_LEADS
@@ -967,7 +1010,9 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     now = now_utc()
     start_date = (now - timedelta(days=30)).isoformat()
     leads = sb_select("leads", {"select": "created_at", "created_at": f"gte.{start_date}"})
-    leads = SESSION_CACHE["leads"] + leads
+    # Deduplicate
+    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
+    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
     # if not leads: leads = DEMO_LEADS
     
     leads_by_day = []
@@ -986,7 +1031,9 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
 
     # 2. Real revenue by month (last 12 months)
     bookings = sb_select("bookings", {"select": "booking_amount,created_at", "status": "eq.confirmed"})
-    bookings = SESSION_CACHE["bookings"] + bookings
+    # Deduplicate
+    cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
+    bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
     # if not bookings: bookings = DEMO_BOOKINGS
     
     rev_by_month = []
@@ -1009,7 +1056,9 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
 @api_router.get("/activities")
 async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):
     activities = sb_select("activities", {"select": "*", "order": "created_at.desc", "limit": str(limit)})
-    return SESSION_CACHE["activities"] + activities
+    # Deduplicate
+    cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+    return SESSION_CACHE["activities"] + [a for a in activities if a.get("activity_id") not in cache_act_ids]
 
 @api_router.get("/stats/me")
 async def stats_me(cu: User=Depends(get_current_user)):
@@ -1031,9 +1080,10 @@ async def stats_me(cu: User=Depends(get_current_user)):
     if not activities:
         score = 0
     
-    # Get all leads for pipeline counts (merge with cache)
-    leads = sb_select("leads", {"select": "stage,status"})
-    leads = SESSION_CACHE["leads"] + leads
+    # Get all leads for pipeline counts (merge with cache correctly)
+    leads = sb_select("leads", {"select": "lead_id,stage,status"})
+    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
+    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
     # if not leads: leads = DEMO_LEADS
     
     hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])

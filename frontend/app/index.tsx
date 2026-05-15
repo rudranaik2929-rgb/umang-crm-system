@@ -31,12 +31,12 @@ export default function Index() {
       alert('Please enter both email and password');
       return;
     }
-    
+
     setIsLoggingIn(true);
     try {
-      const loggedInUser = await exchangeSession({ 
-        email: email.trim(), 
-        password: password.trim() 
+      const loggedInUser = await exchangeSession({
+        email: email.trim(),
+        password: password.trim()
       });
       if (loggedInUser) {
         if (!loggedInUser.role) router.replace('/select-role' as any);
@@ -68,10 +68,10 @@ export default function Index() {
           <Image source={{ uri: HERO_IMG }} style={styles.heroImg} />
           <View style={styles.heroOverlay}>
             <View style={styles.heroBrand}>
-              <Image 
-                source={require('../assets/images/logo.jpeg')} 
-                style={styles.logoImage} 
-                resizeMode="contain" 
+              <Image
+                source={require('../assets/images/logo.jpeg')}
+                style={styles.logoImage}
+                resizeMode="contain"
               />
               <Text style={styles.heroBrandTitle}>Umang Properties</Text>
             </View>
@@ -92,18 +92,18 @@ export default function Index() {
       )}
 
       {/* RIGHT — AUTH PANEL */}
-      <ScrollView 
-        contentContainerStyle={styles.right} 
+      <ScrollView
+        contentContainerStyle={styles.right}
         style={{ flex: 1 }}
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.rightInner}>
           <View style={styles.topRow}>
             <View style={styles.brandRow}>
-              <Image 
-                source={require('../assets/images/logo.jpeg')} 
-                style={styles.logoImageSm} 
-                resizeMode="contain" 
+              <Image
+                source={require('../assets/images/logo.jpeg')}
+                style={styles.logoImageSm}
+                resizeMode="contain"
               />
               <Text style={[styles.brandText, { color: colors.text }]}>Umang Properties</Text>
             </View>

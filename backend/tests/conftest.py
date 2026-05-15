@@ -4,7 +4,7 @@ import requests
 import subprocess
 import json
 
-BASE_URL = "https://umang-crm.preview.emergentagent.com"
+BASE_URL = "https://umang-home-tech.onrender.com"
 
 
 def _create_session_via_mongo(role="admin"):

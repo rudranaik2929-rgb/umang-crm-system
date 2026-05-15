@@ -26,7 +26,7 @@ yarn start          # press 'w' for web
 Open `http://localhost:3000` → sign in with Google → first user becomes admin.
 
 ## What's inside
-- **Backend**: `backend/server.py` (FastAPI + MongoDB + Emergent Google OAuth)
+- **Backend**: `backend/server.py` (FastAPI + MongoDB + Local Auth)
 - **Frontend**: `frontend/app/` (Expo Router screens) + `frontend/src/` (theme, auth, components)
 - **Admin PIN**: `9999` (gates the Admin Analytics page; configurable in `frontend/app/(app)/admin-analytics.tsx`)
 - **Roles**: admin · telecaller · site_visit · booking · loan · marketing

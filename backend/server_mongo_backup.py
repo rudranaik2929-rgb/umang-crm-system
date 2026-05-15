@@ -24,7 +24,7 @@ db = client[os.getenv('DB_NAME', 'umang')]
 app = FastAPI(title="Umang Properties CRM")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8081", "http://localhost:19006", "http://localhost:3000", "https://umang-crm.preview.emergentagent.com"],
+    allow_origins=["http://localhost:8081", "http://localhost:19006", "http://localhost:3000", "https://umang-home-tech.vercel.app"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

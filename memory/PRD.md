@@ -8,7 +8,7 @@ Lead Generated → Telecaller → Site Visit → Booking → Loan → Registrati
 Side-channel: Negative Leads (for re-engagement campaigns)
 
 ## Authentication
-- **Emergent-managed Google Auth** (HTTP cookie + Bearer-token fallback)
+- **Local Email/Password Auth** (Bearer-token persistence)
 - First user becomes `admin`; subsequent users pick a role
 - Role can be switched anytime from top bar (demo-friendly)
 

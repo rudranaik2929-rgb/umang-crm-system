@@ -100,16 +100,16 @@
   ],
   "image_urls": {
     "login_background": {
-      "url": "https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/35dda4ad3fda80d98d3e686fde61d9fcf2b36147d133e43a32eed389dcf53913.png",
-      "description": "Abstract architectural background with deep navy blue and gold accents, premium corporate feel. Used for the auth/login split screen."
+      "url": "https://images.unsplash.com/photo-1560518883-ce09059eeffa?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80",
+      "description": "Modern architectural interior, premium corporate feel. Used for the auth/login split screen."
     },
     "empty_state_leads": {
-      "url": "https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/7f56f928d66ef4ddaa17ab0dc9e6c7ebc53ebb20ceb2c00b023cc10e89fd1a0d.png",
-      "description": "Minimalist 3D empty file folder with gold accents. Use in CRM lead panels, tables, and Kanban when no data is present."
+      "url": "https://images.unsplash.com/photo-1586281380349-632531db7ed4?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80",
+      "description": "Minimalist document illustration. Use in CRM lead panels when no data is present."
     },
     "empty_state_whatsapp": {
-      "url": "https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/50693d7cf7936af2128b21e985ccab73e6ead92c3473b173b78c2a08a4e6eeef.png",
-      "description": "Minimalist smartphone with chat bubbles. Use in the WhatsApp Campaign Panel when no campaigns exist."
+      "url": "https://images.unsplash.com/photo-1577563906417-45458e3e3e4a?ixlib=rb-4.0.3&auto=format&fit=crop&w=800&q=80",
+      "description": "Minimalist communication illustration. Use in the WhatsApp Campaign Panel when no campaigns exist."
     },
     "real_estate_buildings": {
       "url": "https://images.unsplash.com/photo-1548950308-69fac3b90a45?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NTY2OTV8MHwxfHNlYXJjaHwxfHxsdXh1cnklMjBtb2Rlcm4lMjBvZmZpY2UlMjBidWlsZGluZyUyMGV4dGVyaW9yfGVufDB8fHx8MTc3ODI2NDA2MXww&ixlib=rb-4.1.0&q=85",
@@ -127,6 +127,6 @@
     "The application starts completely empty (No fake data). ALL panels must gracefully handle empty states using the provided 'empty_state_leads' and 'empty_state_whatsapp' images.",
     "Add 'data-testid' to every actionable button (e.g., data-testid='create-lead-btn', data-testid='toggle-theme-btn').",
     "For charts (Pipeline Analytics, WhatsApp Stats, Revenue), use Recharts. Make sure chart grids and lines are subtle (border/10) and colors match the status hex codes provided.",
-    "Implement Emergent Google Auth. The login screen should be a 50/50 split layout using 'login_background' image on one side."
+    "Implement Local Email/Password Auth. The login screen should be a 50/50 split layout using 'login_background' image on one side."
   ]
 }

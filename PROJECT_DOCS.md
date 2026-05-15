@@ -24,9 +24,9 @@ Public Enquiry ──► Telecaller ──► Site Visit ──► Booking ─�
 | Layer    | Stack |
 |----------|-------|
 | Frontend | **Expo SDK 54** + **expo-router** (file-based routing) + **react-native-web** rendering for desktop browser. TypeScript. `@expo/vector-icons` (Ionicons). `axios` for API. `@react-native-async-storage/async-storage` for client-side token persistence. |
-| Backend  | **FastAPI** 0.110 + **uvicorn**, async **motor** driver for MongoDB, **pydantic** v2 models, **httpx** for Emergent OAuth exchange |
+| Backend  | **FastAPI** 0.110 + **uvicorn**, async **motor** driver for MongoDB, **pydantic** v2 models, **httpx** for API requests |
 | Database | **MongoDB** — collections: `users`, `user_sessions`, `employees`, `leads`, `activities`, `visits`, `bookings`, `loans`, `templates`, `campaigns` |
-| Auth     | **Emergent-managed Google OAuth** (session_id exchanged for session_token via `demobackend.emergentagent.com/auth/v1/env/oauth/session-data`). Cookie + Bearer-token fallback. |
+| Auth     | **Local Email/Password Auth** with session-token persistence. |
 
 ---
 
@@ -85,14 +85,14 @@ Public Enquiry ──► Telecaller ──► Site Visit ──► Booking ─�
 
 ## 4. Authentication flow
 
-1. User clicks "Continue with Google" → redirected to `https://auth.emergentagent.com/?redirect=<origin>/`
-2. After Google auth, comes back with `#session_id=...` in URL hash
-3. `app/_layout.tsx` `SessionBootstrap` detects the hash, calls `POST /api/auth/session { session_id }`
-4. Backend calls Emergent's `auth/v1/env/oauth/session-data` to get user info, then:
+1. User enters Email and Password on the login screen.
+2. Frontend calls `POST /api/auth/session` with credentials.
+3. Backend verifies credentials against `db.users`:
    - If a `db.employees` record exists with the same email → user is auto-linked: `role=emp.role`, `acting_as_employee_id=emp.employee_id`
-   - Else if no users exist yet → user becomes `admin`
+   - Else if it's the admin account → user becomes `admin`
    - Else → role=null, will be sent to `/select-role`
-5. Backend returns `{ user, session_token }`; frontend stores token in `localStorage` AND backend sets a `session_token` cookie (httpOnly, secure, samesite=none, 7 days)
+4. Backend returns `{ user, session_token }`; frontend stores token in `localStorage` AND backend sets a `session_token` cookie (httpOnly, secure, samesite=none, 7 days)
+5. Future API calls use `Authorization: Bearer <token>` (set by `axios` interceptor)
 6. Future API calls use `Authorization: Bearer <token>` (set by `axios` interceptor)
 
 ### Bypass for testing
@@ -240,7 +240,7 @@ yarn start          # press 'w' for web
 mongod --dbpath ./data/db
 ```
 
-**Auth redirect for local**: Emergent OAuth callback redirects to whatever origin you provided. For localhost you'd hit `https://auth.emergentagent.com/?redirect=http://localhost:3000/`. The Google Auth flow then redirects back with `#session_id=...`.
+**Auth redirect for local**: No redirects needed for local email/pass login. Simply ensure the backend is running.
 
 ---
 
@@ -263,6 +263,6 @@ mongod --dbpath ./data/db
 
 ## 12. Test credentials
 
-This app uses Google OAuth — no app-managed passwords. To bypass for automated tests, see `/app/memory/test_credentials.md` for the mongosh insertion snippet.
+This app uses Email/Password login. To bypass for automated tests, see `/app/memory/test_credentials.md` for the insertion snippet.
 
 The Admin Analytics page is gated by a **simple 4-digit PIN: `9999`** (constant in `admin-analytics.tsx`). Change `ADMIN_PIN` there for production.
