@@ -81,6 +81,27 @@ def sb_select(table, params=None):
         logging.error(f"Supabase SELECT {table}: {r.status_code} {r.text[:300]}")
     return r.json() if r.status_code < 400 else []
 
+@api_router.delete("/leads/{lead_id}")
+async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
+    if cu.role != "admin":
+        raise HTTPException(status_code=403, detail="Only admins can delete leads")
+    
+    # 1. Delete associated data first
+    sb_delete("visits", "lead_id", lead_id)
+    sb_delete("bookings", "lead_id", lead_id)
+    sb_delete("loans", "lead_id", lead_id)
+    sb_delete("activities", "lead_id", lead_id)
+    
+    # 2. Delete the lead
+    res = sb_delete("leads", "lead_id", lead_id)
+    
+    # 3. Clean from session cache
+    global SESSION_CACHE
+    if "leads" in SESSION_CACHE:
+        SESSION_CACHE["leads"] = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") != lead_id]
+    
+    return {"status": "deleted", "lead_id": lead_id}
+
 def sb_insert(table, data):
     h = {**sb_headers(), "Prefer": "return=representation"}
     r = _http.post(sb_url(table), headers=h, json=data)

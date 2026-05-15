@@ -71,15 +71,15 @@ export default function Bookings() {
                   </View>
                 </View>
                 <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[styles.bigVal, { color: colors.text }]}>₹{(b.booking_amount).toLocaleString('en-IN')}</Text>
+                  <Text style={[styles.bigVal, { color: colors.text }]}>₹{(b.booking_amount || 0).toLocaleString('en-IN')}</Text>
                   <Text style={[styles.cardSub, { color: colors.textMuted }]}>Booking amount</Text>
                 </View>
               </View>
 
               <View style={{ marginTop: 14 }}>
                 <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{b.token_received.toLocaleString('en-IN')}</Text>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{b.payment_progress}%</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{(b.token_received || 0).toLocaleString('en-IN')}</Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{b.payment_progress || 0}%</Text>
                 </View>
                 <View style={[styles.track, { backgroundColor: colors.surfaceAlt }]}>
                   <View style={[styles.fill, { width: `${b.payment_progress}%`, backgroundColor: colors.positive }]} />
