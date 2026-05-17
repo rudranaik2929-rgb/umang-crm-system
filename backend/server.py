@@ -300,38 +300,9 @@ class WhatsAppService:
         Sends a WhatsApp template via Interakt API.
         Values: List of strings to fill in the {{1}}, {{2}} placeholders.
         """
-        if not INTERAKT_API_KEY:
-            logging.info(f"[SIMULATION] Interakt Template '{template_name}' would be sent to {phone} with values {values}")
-            return {"status": "simulated", "message": "No Interakt API Key"}
-        
-        url = "https://api.interakt.ai/v1/public/message/"
-        headers = {
-            "Authorization": f"Basic {INTERAKT_API_KEY}",
-            "Content-Type": "application/json"
-        }
-        
-        # Format phone (must include country code, e.g., +91)
-        clean_phone = phone.strip().replace(" ", "").replace("-", "")
-        if not clean_phone.startswith("+"):
-            clean_phone = "+91" + clean_phone[-10:] # Default to India
-            
-        payload = {
-            "fullPhoneNumber": clean_phone,
-            "type": "Template",
-            "template": {
-                "name": template_name,
-                "languageCode": "en",
-                "bodyValues": values
-            }
-        }
-        
-        try:
-            r = httpx.post(url, headers=headers, json=payload, timeout=10)
-            logging.info(f"Interakt API Response: {r.status_code} {r.text}")
-            return r.json()
-        except Exception as e:
-            logging.error(f"Interakt API Connection Error: {e}")
-            return {"status": "error", "message": str(e)}
+        # TEMPORARY: Disabled WhatsApp Business API for client campaign automation
+        logging.info(f"[SIMULATION] Interakt Template '{template_name}' would be sent to {phone} with values {values}")
+        return {"status": "simulated", "message": "WhatsApp automation is temporarily disabled"}
 
 # ---- AI Assistant Service (from umang.py) ----
 class AIService:
@@ -510,29 +481,8 @@ async def inbound_whatsapp_reply(request: Request):
     """
     Handle incoming WhatsApp replies from Interakt.
     """
-    body = await request.json()
-    # Interakt Webhook structure
-    msg_data = body.get("data", {})
-    message_text = msg_data.get("message", {}).get("text", "")
-    phone = msg_data.get("customer", {}).get("phoneNumber", "")
-    
-    if not message_text or not phone:
-        return {"status": "ignored"}
-        
-    # 1. Generate AI Response using your umang.py logic
-    ai_reply = AIService.generate_reply(message_text)
-    
-    # 2. Log activity in CRM
-    leads = sb_select("leads", {"phone": f"ilike.%{phone[-10:]}%", "select": "lead_id"})
-    if leads:
-        log_activity(None, "whatsapp_reply", f"Customer: {message_text}\nAI: {ai_reply}", lead_id=leads[0]["lead_id"])
-    
-    # 3. Send AI response back via Interakt
-    # Note: For inbound replies, Interakt uses a 'Regular Message' instead of a Template
-    # (Checking Interakt documentation for regular message structure)
-    WhatsAppService.send_template(phone, "ai_chat_response", [ai_reply]) # Fallback to template or use regular message API
-    
-    return {"status": "replied", "response": ai_reply}
+    # TEMPORARY: WhatsApp Webhook Automation is temporarily disabled
+    return {"status": "disabled", "message": "WhatsApp Automation is temporarily disabled"}
 
 @api_router.post("/leads/import")
 async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_current_user)):
