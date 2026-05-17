@@ -165,6 +165,18 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
   const lead = data?.lead;
   const timeline = data?.timeline || [];
 
+  // Extract preferred property if prepended in notes
+  let preferredProperty = '';
+  let cleanNotes = '';
+  if (lead) {
+    cleanNotes = lead.notes || '';
+    if (cleanNotes.startsWith('Preferred Property:')) {
+      const lines = cleanNotes.split('\n');
+      preferredProperty = lines[0].replace('Preferred Property:', '').trim();
+      cleanNotes = lines.slice(1).join('\n').trim();
+    }
+  }
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
@@ -281,8 +293,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                   <DetailRow label="Budget" value={lead.budget} colors={colors} />
                   <DetailRow label="Location" value={lead.location} colors={colors} />
                   <DetailRow label="Property type" value={lead.property_type} colors={colors} />
+                  {preferredProperty ? (
+                    <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
+                  ) : null}
                   <DetailRow label="Source" value={lead.source} colors={colors} />
-                  <DetailRow label="Notes" value={lead.notes} colors={colors} />
+                  <DetailRow label="Notes" value={cleanNotes} colors={colors} />
                 </View>
 
                 {/* Quick actions Refactored */}

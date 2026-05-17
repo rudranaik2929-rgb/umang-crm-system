@@ -552,9 +552,7 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             if not h:
                 continue
             h_clean = str(h).strip().lower()
-            if any(term in h_clean for term in ["name", "full name", "customer name", "lead name"]):
-                header_mapping["name"] = idx
-            elif any(term in h_clean for term in ["phone", "mobile", "contact"]):
+            if any(term in h_clean for term in ["phone", "mobile", "contact"]):
                 header_mapping["phone"] = idx
             elif any(term in h_clean for term in ["email", "mail"]):
                 header_mapping["email"] = idx
@@ -564,8 +562,13 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
                 header_mapping["location"] = idx
             elif any(term in h_clean for term in ["property type", "configuration", "config", "requirement"]):
                 header_mapping["property_type"] = idx
-            elif any(term in h_clean for term in ["notes", "remarks", "comments", "project", "building"]):
+            elif any(term in h_clean for term in ["property", "project", "society", "building", "apartment", "flat"]):
+                header_mapping["preferred_property"] = idx
+            elif any(term in h_clean for term in ["notes", "remarks", "comments"]):
                 header_mapping["notes"] = idx
+            elif any(term in h_clean for term in ["name", "full name", "customer name", "lead name"]):
+                if not any(prop in h_clean for prop in ["property", "project", "society", "building", "flat", "apartment"]):
+                    header_mapping["name"] = idx
         return header_mapping
 
     if filename.endswith(".csv"):
@@ -595,6 +598,7 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
                     "budget": row[header_map["budget"]] if "budget" in header_map else "",
                     "location": row[header_map["location"]] if "location" in header_map else "",
                     "property_type": row[header_map["property_type"]] if "property_type" in header_map else "",
+                    "preferred_property": row[header_map["preferred_property"]] if "preferred_property" in header_map else "",
                     "notes": row[header_map["notes"]] if "notes" in header_map else ""
                 })
         except HTTPException as he:
@@ -636,6 +640,7 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
                     "budget": get_val("budget"),
                     "location": get_val("location"),
                     "property_type": get_val("property_type"),
+                    "preferred_property": get_val("preferred_property"),
                     "notes": get_val("notes")
                 })
         except HTTPException as he:
@@ -659,6 +664,16 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         lid = gen_id("lead")
         now = now_utc().isoformat()
         
+        pref_prop = r.get("preferred_property", "").strip()
+        r_notes = r["notes"].strip()
+        if pref_prop:
+            if r_notes:
+                lead_notes = f"Preferred Property: {pref_prop}\n{r_notes}"
+            else:
+                lead_notes = f"Preferred Property: {pref_prop}"
+        else:
+            lead_notes = r_notes
+
         lead = {
             "lead_id": lid,
             "name": name,
@@ -667,7 +682,7 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             "budget": r["budget"],
             "location": r["location"],
             "property_type": r["property_type"],
-            "notes": r["notes"],
+            "notes": lead_notes,
             "source": "bulk_import",
             "stage": "new",
             "status": "active",
