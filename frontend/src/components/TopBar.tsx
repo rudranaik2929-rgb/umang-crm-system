@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, TextInput, Modal, ScrollView, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../theme/ThemeContext';
+import { useTheme, AccentColor, ACCENT_COLORS } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel } from '../lib/constants';
 import { api } from '../lib/api';
@@ -16,7 +16,7 @@ interface Props {
 }
 
 export function TopBar({ title, subtitle, rightAction }: Props) {
-  const { colors, themeName, toggle } = useTheme();
+  const { colors, themeName, toggle, accentColor, setAccentColor } = useTheme();
   const { user, logout, setRole, actAs } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [roleOpen, setRoleOpen] = useState(false);
@@ -151,6 +151,29 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
             <Text style={[styles.pillText, { color: colors.text }]}>{roleLabel(user?.role)}</Text>
           </View>
         ) : null}
+
+        {/* Accent color picker */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 6 }}>
+          {(['orange', 'sky', 'emerald', 'royal', 'orchid'] as AccentColor[]).map((acc) => {
+            const isSelected = accentColor === acc;
+            const dotColor = ACCENT_COLORS[acc][themeName].primary;
+            return (
+              <Pressable
+                key={acc}
+                onPress={() => setAccentColor(acc)}
+                testID={`accent-dot-${acc}`}
+                style={[
+                  styles.dotBtn,
+                  {
+                    backgroundColor: dotColor,
+                    borderColor: isSelected ? colors.text : 'rgba(0,0,0,0.15)',
+                    borderWidth: isSelected ? 2 : 1,
+                  }
+                ]}
+              />
+            );
+          })}
+        </View>
 
         {/* Theme toggle */}
         <Pressable
@@ -319,6 +342,11 @@ const styles = StyleSheet.create({
   iconBtn: {
     width: 34, height: 34, borderRadius: 8, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
+  },
+  dotBtn: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
   },
   backdrop: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.4)',
