@@ -5,26 +5,142 @@ import { ThemeName, lightColors, darkColors, ThemeColors } from './tokens';
 
 export type AccentColor = 'orange' | 'sky' | 'emerald' | 'royal' | 'orchid';
 
-export const ACCENT_COLORS = {
+export const ACCENT_THEMES = {
   orange: {
-    light: { primary: '#E88B35', hover: '#D97A28', shadow: 'rgba(232,139,53,0.12)' },
-    dark: { primary: '#E88B35', hover: '#F9A867', shadow: 'rgba(0,0,0,0.5)' }
+    light: lightColors,
+    dark: darkColors
   },
   sky: {
-    light: { primary: '#0EA5E9', hover: '#0284C7', shadow: 'rgba(14,165,233,0.12)' },
-    dark: { primary: '#0EA5E9', hover: '#38BDF8', shadow: 'rgba(0,0,0,0.5)' }
+    light: {
+      ...lightColors,
+      background: '#F0F9FF',
+      surface: '#FFFFFF',
+      surfaceAlt: '#E0F2FE',
+      sidebar: '#FFFFFF',
+      primary: '#0EA5E9',
+      primaryHover: '#0284C7',
+      accent: '#0369A1',
+      text: '#0F172A',
+      textSecondary: '#334155',
+      textMuted: '#64748B',
+      border: '#BAE6FD',
+      borderSoft: '#E0F2FE',
+      shadow: 'rgba(14,165,233,0.08)',
+    },
+    dark: {
+      ...darkColors,
+      background: '#0B0F19',
+      surface: '#1E293B',
+      surfaceAlt: '#334155',
+      sidebar: '#0F172A',
+      primary: '#38BDF8',
+      primaryHover: '#7DD3FC',
+      accent: '#0EA5E9',
+      text: '#F8FAFC',
+      textSecondary: '#CBD5E1',
+      textMuted: '#64748B',
+      border: '#334155',
+      borderSoft: '#1E293B',
+    }
   },
   emerald: {
-    light: { primary: '#10B981', hover: '#059669', shadow: 'rgba(16,185,129,0.12)' },
-    dark: { primary: '#10B981', hover: '#34D399', shadow: 'rgba(0,0,0,0.5)' }
+    light: {
+      ...lightColors,
+      background: '#F0FDF4',
+      surface: '#FFFFFF',
+      surfaceAlt: '#DCFCE7',
+      sidebar: '#FFFFFF',
+      primary: '#10B981',
+      primaryHover: '#059669',
+      accent: '#15803D',
+      text: '#062F17',
+      textSecondary: '#166534',
+      textMuted: '#71717A',
+      border: '#BBF7D0',
+      borderSoft: '#DCFCE7',
+      shadow: 'rgba(16,185,129,0.08)',
+    },
+    dark: {
+      ...darkColors,
+      background: '#06100B',
+      surface: '#0F2A1D',
+      surfaceAlt: '#1B4D36',
+      sidebar: '#091E14',
+      primary: '#34D399',
+      primaryHover: '#6EE7B7',
+      accent: '#10B981',
+      text: '#F0FDF4',
+      textSecondary: '#A7F3D0',
+      textMuted: '#71717A',
+      border: '#1B4D36',
+      borderSoft: '#0F2A1D',
+    }
   },
   royal: {
-    light: { primary: '#2563EB', hover: '#1D4ED8', shadow: 'rgba(37,99,235,0.12)' },
-    dark: { primary: '#3B82F6', hover: '#60A5FA', shadow: 'rgba(0,0,0,0.5)' }
+    light: {
+      ...lightColors,
+      background: '#F5F7FF',
+      surface: '#FFFFFF',
+      surfaceAlt: '#EEF2FF',
+      sidebar: '#FFFFFF',
+      primary: '#2563EB',
+      primaryHover: '#1D4ED8',
+      accent: '#1E40AF',
+      text: '#0F172A',
+      textSecondary: '#1E293B',
+      textMuted: '#64748B',
+      border: '#C7D2FE',
+      borderSoft: '#E0E7FF',
+      shadow: 'rgba(37,99,235,0.08)',
+    },
+    dark: {
+      ...darkColors,
+      background: '#0A0D1A',
+      surface: '#181E36',
+      surfaceAlt: '#252E54',
+      sidebar: '#0F1322',
+      primary: '#3B82F6',
+      primaryHover: '#60A5FA',
+      accent: '#2563EB',
+      text: '#F8FAFC',
+      textSecondary: '#C7D2FE',
+      textMuted: '#64748B',
+      border: '#252E54',
+      borderSoft: '#181E36',
+    }
   },
   orchid: {
-    light: { primary: '#D946EF', hover: '#C084FC', shadow: 'rgba(217,70,239,0.12)' },
-    dark: { primary: '#D946EF', hover: '#E879F9', shadow: 'rgba(0,0,0,0.5)' }
+    light: {
+      ...lightColors,
+      background: '#FDF4FF',
+      surface: '#FFFFFF',
+      surfaceAlt: '#F5D0FE',
+      sidebar: '#FFFFFF',
+      primary: '#D946EF',
+      primaryHover: '#C084FC',
+      accent: '#A21CAF',
+      text: '#2E083E',
+      textSecondary: '#4A044E',
+      textMuted: '#701A75',
+      border: '#F5D0FE',
+      borderSoft: '#FAE8FF',
+      shadow: 'rgba(217,70,239,0.08)',
+    },
+    dark: {
+      ...darkColors,
+      background: '#140718',
+      surface: '#290F33',
+      surfaceAlt: '#3E184D',
+      sidebar: '#110614',
+      primary: '#E879F9',
+      primaryHover: '#F5D0FE',
+      accent: '#D946EF',
+      text: '#FDF4FF',
+      textSecondary: '#F5D0FE',
+      textMuted: '#A21CAF',
+      border: '#3E184D',
+      borderSoft: '#290F33',
+    }
   }
 };
 
@@ -84,10 +200,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       try {
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
           const val = window.localStorage.getItem(ACCENT_STORAGE_KEY) as AccentColor;
-          if (val && ACCENT_COLORS[val]) setAccentColorState(val);
+          if (val && ACCENT_THEMES[val]) setAccentColorState(val);
         } else {
           const val = await AsyncStorage.getItem(ACCENT_STORAGE_KEY) as AccentColor;
-          if (val && ACCENT_COLORS[val]) setAccentColorState(val);
+          if (val && ACCENT_THEMES[val]) setAccentColorState(val);
         }
       } catch {}
     };
@@ -116,14 +232,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     saveAccent();
   }, []);
 
-  const baseColors = themeName === 'dark' ? darkColors : lightColors;
-  const overrides = ACCENT_COLORS[accentColor][themeName];
-  const colors: ThemeColors = {
-    ...baseColors,
-    primary: overrides.primary,
-    primaryHover: overrides.hover,
-    shadow: overrides.shadow
-  };
+  const colors = ACCENT_THEMES[accentColor][themeName];
 
   return (
     <ThemeContext.Provider value={{ themeName, colors, toggle, accentColor, setAccentColor }}>

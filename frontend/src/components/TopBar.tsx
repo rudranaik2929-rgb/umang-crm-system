@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, TextInput, Modal, ScrollView, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, AccentColor, ACCENT_COLORS } from '../theme/ThemeContext';
+import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel } from '../lib/constants';
 import { api } from '../lib/api';
@@ -156,7 +156,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 6 }}>
           {(['orange', 'sky', 'emerald', 'royal', 'orchid'] as AccentColor[]).map((acc) => {
             const isSelected = accentColor === acc;
-            const dotColor = ACCENT_COLORS[acc][themeName].primary;
+            const dotColor = ACCENT_THEMES[acc][themeName].primary;
             return (
               <Pressable
                 key={acc}
