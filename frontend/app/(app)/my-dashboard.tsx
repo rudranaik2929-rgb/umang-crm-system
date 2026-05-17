@@ -31,7 +31,7 @@ const ROLE_CTA: Record<string, { label: string; route: string }> = {
   site_visit: { label: 'View my site visits', route: '/(app)/visits' },
   booking: { label: 'Open bookings', route: '/(app)/bookings' },
   loan: { label: 'Open loan applications', route: '/(app)/loans' },
-  marketing: { label: 'WhatsApp campaigns', route: '/(app)/whatsapp' },
+  marketing: { label: 'Negative leads', route: '/(app)/negative-leads' },
   admin: { label: 'Admin analytics', route: '/(app)/admin-analytics' },
 };
 
@@ -110,7 +110,7 @@ export default function MyDashboard() {
                 ? 'Confirm bookings, collect tokens, get agreements signed, and hand over to the loan department.'
                 : role === 'loan'
                 ? 'Process applications, track bank stages, and close the deal when documents are complete.'
-                : 'Run WhatsApp campaigns and re-engage negative leads.'}
+                : 'Analyze lead temperatures and re-engage negative leads.'}
             </Text>
             <Pressable
               testID="my-dashboard-cta"

@@ -27,7 +27,7 @@ export const ROLES = [
   { key: 'site_visit', label: 'Site Visit Executive', dept: 'Site Visit Team' },
   { key: 'booking', label: 'Booking Team', dept: 'Booking Department' },
   { key: 'loan', label: 'Loan Officer', dept: 'Loan Department' },
-  { key: 'marketing', label: 'Marketing Team', dept: 'Marketing & WhatsApp' },
+  { key: 'marketing', label: 'Marketing Team', dept: 'Marketing Team' },
 ];
 
 export function roleLabel(role?: string | null): string {
@@ -49,7 +49,7 @@ export const NAV_ITEMS = [
   { key: 'visits', path: '/(app)/visits', label: 'Site Visits', icon: 'visit' },
   { key: 'bookings', path: '/(app)/bookings', label: 'Bookings', icon: 'booking' },
   { key: 'loans', path: '/(app)/loans', label: 'Loan Department', icon: 'bank' },
-  { key: 'whatsapp', path: '/(app)/whatsapp', label: 'WhatsApp Campaigns', icon: 'wa' },
+  // { key: 'whatsapp', path: '/(app)/whatsapp', label: 'WhatsApp Campaigns', icon: 'wa' },
   { key: 'tracking', path: '/(app)/admin-tracking', label: 'Employee Tracking', icon: 'tracking' },
   { key: 'employees', path: '/(app)/employees', label: 'Employees', icon: 'team' },
   { key: 'negative', path: '/(app)/negative-leads', label: 'Negative Leads', icon: 'archive' },
@@ -57,12 +57,12 @@ export const NAV_ITEMS = [
 
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
-  admin: ['dashboard', 'my-dashboard', 'admin-analytics', 'pipeline', 'telecaller', 'visits', 'bookings', 'loans', 'whatsapp', 'tracking', 'employees', 'negative'],
+  admin: ['dashboard', 'my-dashboard', 'admin-analytics', 'pipeline', 'telecaller', 'visits', 'bookings', 'loans', 'tracking', 'employees', 'negative'],
   telecaller: ['dashboard', 'my-dashboard', 'telecaller', 'pipeline', 'negative'],
   site_visit: ['dashboard', 'my-dashboard', 'visits', 'pipeline'],
   booking: ['dashboard', 'my-dashboard', 'bookings', 'pipeline'],
   loan: ['dashboard', 'my-dashboard', 'loans', 'pipeline'],
-  marketing: ['dashboard', 'my-dashboard', 'whatsapp', 'negative', 'pipeline'],
+  marketing: ['dashboard', 'my-dashboard', 'negative', 'pipeline'],
 };
 
 export function visibleNavFor(role?: string | null) {

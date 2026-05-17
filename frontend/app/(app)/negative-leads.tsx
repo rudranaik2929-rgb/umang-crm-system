@@ -33,7 +33,7 @@ export default function NegativeLeads() {
             <EmptyState
               variant="leads"
               title="No negative leads (yet)"
-              description="When the telecaller marks a lead as negative, it lands here — perfect for re-engagement WhatsApp campaigns later."
+              description="When the telecaller marks a lead as negative, it lands here — perfect for future re-engagement campaigns."
             />
           ) : (
             <View style={[styles.tableCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>

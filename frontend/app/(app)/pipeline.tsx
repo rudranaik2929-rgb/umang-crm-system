@@ -145,9 +145,6 @@ function KanbanCard({ lead, colors, onPress }: any) {
                <Pressable style={styles.miniBtn} onPress={() => {}}>
                  <Ionicons name="call-outline" size={10} color={colors.primary} />
                </Pressable>
-               <Pressable style={styles.miniBtn} onPress={() => {}}>
-                 <Ionicons name="logo-whatsapp" size={10} color="#25D366" />
-               </Pressable>
             </View>
           )}
         </View>

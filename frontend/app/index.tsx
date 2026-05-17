@@ -81,7 +81,7 @@ export default function Index() {
               From the first website enquiry to the keys in hand — orchestrate every department in a single elegant cockpit.
             </Text>
             <View style={styles.heroPills}>
-              {['Telecaller', 'Site Visits', 'Bookings', 'Loans', 'WhatsApp'].map((t) => (
+              {['Telecaller', 'Site Visits', 'Bookings', 'Loans'].map((t) => (
                 <View key={t} style={styles.heroPill}>
                   <Text style={styles.heroPillText}>{t}</Text>
                 </View>
