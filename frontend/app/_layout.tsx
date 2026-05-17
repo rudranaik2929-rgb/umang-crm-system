@@ -123,7 +123,7 @@ function useWebPrivacyShield(user: any, themeName: string) {
       mask.style.width = '100vw';
       mask.style.height = '100vh';
       mask.style.backdropFilter = 'blur(25px)';
-      mask.style.webkitBackdropFilter = 'blur(25px)';
+      mask.style.setProperty('-webkit-backdrop-filter', 'blur(25px)');
       mask.style.backgroundColor = 'rgba(20, 12, 7, 0.6)';
       mask.style.zIndex = '999999';
       mask.style.display = 'flex';
