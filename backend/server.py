@@ -986,6 +986,12 @@ async def list_bookings(cu: User=Depends(get_current_user)):
 async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get_current_user)):
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("bookings", "booking_id", booking_id, data)
+    # Update cache
+    for i, b in enumerate(SESSION_CACHE["bookings"]):
+        if b.get("booking_id") == booking_id:
+            SESSION_CACHE["bookings"][i] = {**b, **data}
+            if not updated: updated = SESSION_CACHE["bookings"][i]
+            break
     if not updated: raise HTTPException(404, "Booking not found")
     return updated
 
@@ -1025,6 +1031,12 @@ async def list_loans(cu: User=Depends(get_current_user)):
 async def update_loan(loan_id: str, p: LoanUpdate, cu: User=Depends(get_current_user)):
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("loans", "loan_id", loan_id, data)
+    # Update cache
+    for i, ln in enumerate(SESSION_CACHE["loans"]):
+        if ln.get("loan_id") == loan_id:
+            SESSION_CACHE["loans"][i] = {**ln, **data}
+            if not updated: updated = SESSION_CACHE["loans"][i]
+            break
     if not updated: raise HTTPException(404, "Loan not found")
     return updated
 
