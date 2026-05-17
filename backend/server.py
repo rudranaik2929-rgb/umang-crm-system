@@ -689,6 +689,38 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         "leads": imported_leads[:10]
     }
 
+@api_router.delete("/leads/clear-all")
+async def clear_all_leads(cu: User = Depends(get_current_user)):
+    # Verify the user is admin
+    if cu.role != "admin" and cu.email != "htshpatil13@gmail.com":
+        raise HTTPException(status_code=403, detail="Only admins can delete all leads.")
+        
+    tables_to_wipe = ["visits", "bookings", "loans", "activities", "leads"]
+    
+    # We clear them from Supabase
+    import httpx
+    errors = []
+    for table in tables_to_wipe:
+        try:
+            r = httpx.delete(
+                f"{SUPABASE_URL}/rest/v1/{table}?created_at=neq.1970-01-01",
+                headers=sb_headers()
+            )
+            if r.status_code >= 400:
+                errors.append(f"Failed to wipe {table}: {r.text}")
+        except Exception as e:
+            errors.append(f"Failed to wipe {table} due to exception: {str(e)}")
+            
+    # Clear local session cache
+    for table in tables_to_wipe:
+        if table in SESSION_CACHE:
+            SESSION_CACHE[table] = []
+    
+    if errors:
+        raise HTTPException(status_code=500, detail="; ".join(errors))
+        
+    return {"status": "success", "message": "All leads and associated records have been wiped."}
+
 @api_router.post("/leads")
 async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
     lid = gen_id("lead")

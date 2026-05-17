@@ -29,6 +29,25 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   
   const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
 
+  const clearAllLeads = async () => {
+    if (typeof window !== 'undefined') {
+      const confirm = window.confirm(
+        "⚠️ WARNING: This will permanently DELETE ALL LEADS and all associated bookings, visits, loans, and activities in the CRM!\n\nThis action is irreversible. Are you absolutely sure you want to proceed?"
+      );
+      if (!confirm) return;
+      
+      try {
+        await api.delete('/leads/clear-all');
+        alert("Success: Database cleared completely.");
+        window.location.reload();
+      } catch (e: any) {
+        console.error(e);
+        const msg = e.response?.data?.detail || "Failed to wipe database.";
+        alert(`Error: ${msg}`);
+      }
+    }
+  };
+
   const loadEmployees = useCallback(async () => {
     try { const r = await api.get('/employees'); setEmployees(r.data || []); } catch {}
   }, []);
@@ -70,6 +89,16 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
 
       <View style={styles.actions}>
         {rightAction}
+
+        {isAdminOrOwner && (
+          <Pressable
+            onPress={clearAllLeads}
+            testID="topbar-clear-leads"
+            style={[styles.iconBtn, { borderColor: colors.negative, backgroundColor: colors.negative + '15' }]}
+          >
+            <Ionicons name="trash-outline" size={18} color={colors.negative} />
+          </Pressable>
+        )}
 
         <Pressable
           onPress={() => setImportLeadsVisible(true)}
