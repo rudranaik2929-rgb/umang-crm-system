@@ -136,7 +136,7 @@ class BookingUpdate(BaseModel):
     token_received: Optional[float]=None; agreement_status: Optional[str]=None; status: Optional[str]=None
 class LoanCreate(BaseModel): lead_id: str; amount: float; bank_name: Optional[str]=None
 class LoanUpdate(BaseModel):
-    bank_name: Optional[str]=None; application_status: Optional[str]=None; progress: Optional[int]=None
+    bank_name: Optional[str]=None; application_status: Optional[str]=None; progress: Optional[int]=None; bank_stage: Optional[str]=None
 class EmployeeCreate(BaseModel): name: str; email: str; phone: Optional[str]=None; role: str; department: str
 class EmployeeUpdate(BaseModel):
     name: Optional[str]=None; phone: Optional[str]=None; role: Optional[str]=None; active: Optional[bool]=None

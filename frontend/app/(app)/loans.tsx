@@ -60,112 +60,197 @@ export default function Loans() {
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
         {loading ? <ActivityIndicator color={colors.primary} /> :
-          loans.length === 0 ? (
-            <EmptyState
-              variant="leads"
-              title="No loan applications"
-              description="Send a booking lead to the loan department to start a bank application here. Track documentation → verification → sanction → disbursal in one place."
-              actionLabel="Start an Application"
-              onAction={() => setShowCreate(true)}
-              testIDAction="empty-create-loan"
-            />
-          ) : loans.map((lo) => (
-            <View key={lo.loan_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-                <View style={[styles.iconBig, { backgroundColor: '#7C3AED18' }]}>
-                  <Ionicons name="business" size={18} color={'#7C3AED'} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.cardTitle, { color: colors.text }]}>{lo.lead_name}</Text>
-                  <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Bank pending'}  ·  ₹{(lo.amount || 0).toLocaleString('en-IN')}</Text>
-                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
-                    <Badge text={(lo.application_status || 'pending').toUpperCase()} color={STATUS_COLOR[lo.application_status] || colors.primary} />
-                    <Badge text={(lo.bank_stage || 'documentation').toUpperCase()} color={colors.info} />
-                  </View>
-                </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[styles.bigVal, { color: colors.text }]}>{lo.progress}%</Text>
-                  <Text style={[styles.cardSub, { color: colors.textMuted }]}>Progress</Text>
-                </View>
-              </View>
-
-              {/* Progress bar */}
-              <View style={[styles.track, { backgroundColor: colors.surfaceAlt, marginTop: 14 }]}>
-                <View style={[styles.fill, { width: `${lo.progress}%`, backgroundColor: '#7C3AED' }]} />
-              </View>
-
-              {/* Stage steps */}
-              <View style={styles.steps}>
-                {['documentation', 'verification', 'sanction', 'disbursal'].map((s) => {
-                  const active = STAGE_PROGRESS[s] <= lo.progress;
-                  return (
-                    <View key={s} style={{ flex: 1, alignItems: 'center' }}>
-                      <View style={[styles.stepDot, {
-                        backgroundColor: active ? '#7C3AED' : colors.surfaceAlt,
-                        borderColor: active ? '#7C3AED' : colors.border,
-                      }]} />
-                      <Text style={{ color: active ? colors.text : colors.textMuted, fontSize: 10, marginTop: 4, fontWeight: '600' }}>
-                        {s.toUpperCase()}
-                      </Text>
+          (() => {
+            const activeLoans = loans.filter((lo) => lo.bank_stage !== 'disbursal' && lo.application_status !== 'disbursed');
+            return activeLoans.length === 0 ? (
+              <EmptyState
+                variant="leads"
+                title="No loan applications"
+                description="Initiate a loan application to start. Track Setup → Sanction (50%) → Disbursal (100%) in one clean, structured pipeline."
+                actionLabel="Start an Application"
+                onAction={() => setShowCreate(true)}
+                testIDAction="empty-create-loan"
+              />
+            ) : activeLoans.map((lo) => {
+              const hasSetup = lo.bank_name === 'Self Loan Adjustment' || lo.bank_name === 'Developer Loan Adjustment' || lo.bank_name === 'Umang Properties Loan';
+              return (
+                <View key={lo.loan_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                  <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                    <View style={[styles.iconBig, { backgroundColor: '#7C3AED18' }]}>
+                      <Ionicons name="business" size={18} color={'#7C3AED'} />
                     </View>
-                  );
-                })}
-              </View>
-
-              <Text style={[styles.label, { color: colors.textMuted, marginTop: 14 }]}>PENDING DOCUMENTS</Text>
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 4 }}>
-                {(lo.pending_documents || []).map((d: string, i: number) => (
-                  <View key={i} style={[styles.docPill, { borderColor: colors.warning + '60', backgroundColor: colors.warning + '10' }]}>
-                    <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '600' }}>{d}</Text>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.cardTitle, { color: colors.text }]}>{lo.lead_name}</Text>
+                      <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Loan source pending'}  ·  ₹{(lo.amount || 0).toLocaleString('en-IN')}</Text>
+                      <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+                        <Badge text={(lo.application_status || 'pending').toUpperCase()} color={STATUS_COLOR[lo.application_status] || colors.primary} />
+                        <Badge text={(lo.bank_stage || 'setup').toUpperCase()} color={colors.info} />
+                      </View>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={[styles.bigVal, { color: colors.text }]}>{lo.progress}%</Text>
+                      <Text style={[styles.cardSub, { color: colors.textMuted }]}>Progress</Text>
+                    </View>
                   </View>
-                ))}
-                {(!lo.pending_documents || lo.pending_documents.length === 0) && (
-                  <Text style={{ color: colors.textMuted, fontSize: 11 }}>All documents submitted</Text>
-                )}
-              </View>
 
-              <View style={[styles.actions]}>
-                <Pressable testID={`loan-advance-${lo.loan_id}`} onPress={() => advance(lo)} disabled={busy === `${lo.loan_id}-adv` || lo.bank_stage === 'disbursal'}
-                  style={[styles.act, { borderColor: colors.primary + '60', backgroundColor: colors.primary + '10', opacity: lo.bank_stage === 'disbursal' ? 0.5 : 1 }]}>
-                  {busy === `${lo.loan_id}-adv` ? <ActivityIndicator size="small" color={colors.primary} /> : <>
-                    <Ionicons name="arrow-forward" size={13} color={colors.primary} />
-                    <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>Advance Stage</Text>
-                  </>}
-                </Pressable>
-                <Pressable testID={`loan-emi-${lo.loan_id}`} onPress={async () => {
-                    setBusy(`${lo.loan_id}-emi`);
-                    try { await api.patch(`/loans/${lo.loan_id}`, { emi_eligible: !lo.emi_eligible }); await load(); }
-                    finally { setBusy(null); }
-                  }}
-                  disabled={busy === `${lo.loan_id}-emi`}
-                  style={[styles.act, { borderColor: colors.positive + '60', backgroundColor: lo.emi_eligible ? colors.positive + '30' : colors.positive + '10' }]}>
-                  {busy === `${lo.loan_id}-emi` ? <ActivityIndicator size="small" color={colors.positive} /> : <>
-                    <Ionicons name={lo.emi_eligible ? 'checkmark-circle' : 'checkmark-outline'} size={13} color={colors.positive} />
-                    <Text style={{ color: colors.positive, fontSize: 11, fontWeight: '600' }}>{lo.emi_eligible ? 'EMI Eligible ✓' : 'Mark EMI Eligible'}</Text>
-                  </>}
-                </Pressable>
-                <Pressable testID={`loan-clear-docs-${lo.loan_id}`} onPress={async () => {
-                    setBusy(`${lo.loan_id}-docs`);
-                    try {
-                      // All Docs Submitted → clear docs, mark loan disbursed (auto-completes), and CLOSE the lead
-                      await api.patch(`/loans/${lo.loan_id}`, {
-                        pending_documents: [],
-                        application_status: 'disbursed',
-                        bank_stage: 'disbursal',
-                        progress: 100,
-                      });
-                      await api.patch(`/leads/${lo.lead_id}`, { stage: 'closed' });
-                      await load();
-                    } finally { setBusy(null); }
-                  }}
-                  disabled={busy === `${lo.loan_id}-docs`}
-                  style={[styles.act, { borderColor: colors.info + '60', backgroundColor: colors.info + '10' }]}>
-                  <Ionicons name="document-attach-outline" size={13} color={colors.info} />
-                  <Text style={{ color: colors.info, fontSize: 11, fontWeight: '600' }}>All Docs Submitted</Text>
-                </Pressable>
-              </View>
-            </View>
-          ))}
+                  {/* Progress bar */}
+                  <View style={[styles.track, { backgroundColor: colors.surfaceAlt, marginTop: 14 }]}>
+                    <View style={[styles.fill, { width: `${lo.progress}%`, backgroundColor: '#7C3AED' }]} />
+                  </View>
+
+                  {/* Stage steps */}
+                  <View style={styles.steps}>
+                    {[
+                      { name: 'SETUP', active: hasSetup },
+                      { name: 'SANCTIONED (50%)', active: lo.progress >= 50 },
+                      { name: 'DISBURSAL (100%)', active: lo.progress === 100 }
+                    ].map((step, idx) => (
+                      <View key={idx} style={{ flex: 1, alignItems: 'center' }}>
+                        <View style={[styles.stepDot, {
+                          backgroundColor: step.active ? '#7C3AED' : colors.surfaceAlt,
+                          borderColor: step.active ? '#7C3AED' : colors.border,
+                        }]} />
+                        <Text style={{ color: step.active ? colors.text : colors.textMuted, fontSize: 9, marginTop: 4, fontWeight: '700' }}>
+                          {step.name}
+                        </Text>
+                      </View>
+                    ))}
+                  </View>
+
+                  <View style={[styles.actions, { marginTop: 18, borderTopWidth: 1, borderTopColor: colors.borderSoft, paddingTop: 14 }]}>
+                    {/* 1. SELF Button */}
+                    <Pressable
+                      testID={`loan-self-${lo.loan_id}`}
+                      onPress={async () => {
+                        setBusy(`${lo.loan_id}-self`);
+                        try {
+                          await api.patch(`/loans/${lo.loan_id}`, {
+                            bank_name: "Self Loan Adjustment",
+                            application_status: "submitted",
+                            bank_stage: "setup"
+                          });
+                          await load();
+                        } finally { setBusy(null); }
+                      }}
+                      disabled={busy !== null}
+                      style={[styles.act, {
+                        borderColor: lo.bank_name === 'Self Loan Adjustment' ? colors.primary : colors.border,
+                        backgroundColor: lo.bank_name === 'Self Loan Adjustment' ? colors.primary + '15' : colors.surfaceAlt,
+                        opacity: busy !== null ? 0.6 : 1
+                      }]}
+                    >
+                      <Ionicons name="person-outline" size={12} color={lo.bank_name === 'Self Loan Adjustment' ? colors.primary : colors.textMuted} />
+                      <Text style={{ color: lo.bank_name === 'Self Loan Adjustment' ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>SELF</Text>
+                    </Pressable>
+
+                    {/* 2. DEVELOPER Button */}
+                    <Pressable
+                      testID={`loan-developer-${lo.loan_id}`}
+                      onPress={async () => {
+                        setBusy(`${lo.loan_id}-dev`);
+                        try {
+                          await api.patch(`/loans/${lo.loan_id}`, {
+                            bank_name: "Developer Loan Adjustment",
+                            application_status: "submitted",
+                            bank_stage: "setup"
+                          });
+                          await load();
+                        } finally { setBusy(null); }
+                      }}
+                      disabled={busy !== null}
+                      style={[styles.act, {
+                        borderColor: lo.bank_name === 'Developer Loan Adjustment' ? colors.primary : colors.border,
+                        backgroundColor: lo.bank_name === 'Developer Loan Adjustment' ? colors.primary + '15' : colors.surfaceAlt,
+                        opacity: busy !== null ? 0.6 : 1
+                      }]}
+                    >
+                      <Ionicons name="construct-outline" size={12} color={lo.bank_name === 'Developer Loan Adjustment' ? colors.primary : colors.textMuted} />
+                      <Text style={{ color: lo.bank_name === 'Developer Loan Adjustment' ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>DEVELOPER</Text>
+                    </Pressable>
+
+                    {/* 3. UMANG LOAN Button */}
+                    <Pressable
+                      testID={`loan-umang-${lo.loan_id}`}
+                      onPress={async () => {
+                        setBusy(`${lo.loan_id}-umang`);
+                        try {
+                          await api.patch(`/loans/${lo.loan_id}`, {
+                            bank_name: "Umang Properties Loan",
+                            application_status: "submitted",
+                            bank_stage: "setup"
+                          });
+                          await load();
+                        } finally { setBusy(null); }
+                      }}
+                      disabled={busy !== null}
+                      style={[styles.act, {
+                        borderColor: lo.bank_name === 'Umang Properties Loan' ? colors.primary : colors.border,
+                        backgroundColor: lo.bank_name === 'Umang Properties Loan' ? colors.primary + '15' : colors.surfaceAlt,
+                        opacity: busy !== null ? 0.6 : 1
+                      }]}
+                    >
+                      <Ionicons name="business-outline" size={12} color={lo.bank_name === 'Umang Properties Loan' ? colors.primary : colors.textMuted} />
+                      <Text style={{ color: lo.bank_name === 'Umang Properties Loan' ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>UMANG LOAN</Text>
+                    </Pressable>
+
+                    {/* 4. SANCTIONED Button */}
+                    <Pressable
+                      testID={`loan-sanctioned-${lo.loan_id}`}
+                      onPress={async () => {
+                        setBusy(`${lo.loan_id}-sanc`);
+                        try {
+                          await api.patch(`/loans/${lo.loan_id}`, {
+                            progress: 50,
+                            bank_stage: "sanction",
+                            application_status: "approved"
+                          });
+                          await load();
+                        } finally { setBusy(null); }
+                      }}
+                      disabled={busy !== null || !hasSetup}
+                      style={[styles.act, {
+                        borderColor: lo.progress >= 50 ? colors.positive : colors.border,
+                        backgroundColor: lo.progress >= 50 ? colors.positive + '15' : colors.surfaceAlt,
+                        opacity: (!hasSetup || busy !== null) ? 0.5 : 1
+                      }]}
+                    >
+                      <Ionicons name="shield-checkmark-outline" size={12} color={lo.progress >= 50 ? colors.positive : colors.textMuted} />
+                      <Text style={{ color: lo.progress >= 50 ? colors.positive : colors.text, fontSize: 11, fontWeight: '600' }}>SANCTIONED (50%)</Text>
+                    </Pressable>
+
+                    {/* 5. DISBURSAL Button */}
+                    <Pressable
+                      testID={`loan-disbursal-${lo.loan_id}`}
+                      onPress={async () => {
+                        setBusy(`${lo.loan_id}-disb`);
+                        try {
+                          // 1. Mark loan as fully disbursed (100%)
+                          await api.patch(`/loans/${lo.loan_id}`, {
+                            progress: 100,
+                            bank_stage: "disbursal",
+                            application_status: "disbursed"
+                          });
+                          // 2. Change main lead status to CLOSED so it vanishes and joins Dashboard Closed Metrics!
+                          await api.patch(`/leads/${lo.lead_id}`, { stage: "closed" });
+                          await load();
+                        } finally { setBusy(null); }
+                      }}
+                      disabled={busy !== null || lo.progress !== 50}
+                      style={[styles.act, {
+                        borderColor: lo.progress === 100 ? colors.info : colors.border,
+                        backgroundColor: lo.progress === 100 ? colors.info + '15' : colors.surfaceAlt,
+                        opacity: (lo.progress !== 50 || busy !== null) ? 0.4 : 1
+                      }]}
+                    >
+                      <Ionicons name="cash-outline" size={12} color={lo.progress === 100 ? colors.info : colors.textMuted} />
+                      <Text style={{ color: lo.progress === 100 ? colors.info : colors.text, fontSize: 11, fontWeight: '600' }}>DISBURSAL (100%)</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              );
+            });
+          })()
+        }
       </ScrollView>
 
       <CreateLoanModal
