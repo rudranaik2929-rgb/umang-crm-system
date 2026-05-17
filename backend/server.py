@@ -1,7 +1,8 @@
 """Umang Properties – Real Estate CRM Backend (Supabase Production)"""
-from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from starlette.middleware.cors import CORSMiddleware
-import uuid, logging, random, os, httpx
+import uuid, logging, random, os, httpx, csv, io, openpyxl
+from io import BytesIO
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
@@ -357,6 +358,7 @@ Always:
 - Ask questions
 - Engage user
 - Push for site visit
+- Don't be a bot
 """
                 },
                 {"role": "user", "content": message_text}
@@ -531,6 +533,161 @@ async def inbound_whatsapp_reply(request: Request):
     WhatsAppService.send_template(phone, "ai_chat_response", [ai_reply]) # Fallback to template or use regular message API
     
     return {"status": "replied", "response": ai_reply}
+
+@api_router.post("/leads/import")
+async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_current_user)):
+    filename = file.filename.lower()
+    
+    # Supported files: .csv, .xlsx, .xls
+    if not (filename.endswith(".csv") or filename.endswith(".xlsx") or filename.endswith(".xls")):
+        raise HTTPException(status_code=400, detail="Only CSV and Excel files (.xlsx, .xls) are supported.")
+    
+    contents = await file.read()
+    records = []
+
+    # Helper function to normalize headers and find indexes
+    def map_headers(headers):
+        header_mapping = {}
+        for idx, h in enumerate(headers):
+            if not h:
+                continue
+            h_clean = str(h).strip().lower()
+            if any(term in h_clean for term in ["name", "full name", "customer name", "lead name"]):
+                header_mapping["name"] = idx
+            elif any(term in h_clean for term in ["phone", "mobile", "contact"]):
+                header_mapping["phone"] = idx
+            elif any(term in h_clean for term in ["email", "mail"]):
+                header_mapping["email"] = idx
+            elif any(term in h_clean for term in ["budget", "price"]):
+                header_mapping["budget"] = idx
+            elif any(term in h_clean for term in ["location", "locality", "address"]):
+                header_mapping["location"] = idx
+            elif any(term in h_clean for term in ["property type", "configuration", "config", "requirement"]):
+                header_mapping["property_type"] = idx
+            elif any(term in h_clean for term in ["notes", "remarks", "comments", "project", "building"]):
+                header_mapping["notes"] = idx
+        return header_mapping
+
+    if filename.endswith(".csv"):
+        try:
+            text = contents.decode("utf-8")
+            csv_reader = csv.reader(io.StringIO(text))
+            rows = list(csv_reader)
+            if not rows:
+                raise HTTPException(status_code=400, detail="CSV file is empty.")
+            
+            headers = rows[0]
+            header_map = map_headers(headers)
+            
+            if "name" not in header_map or "phone" not in header_map:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="CSV must contain at least 'Name' and 'Phone Number' columns."
+                )
+                
+            for row in rows[1:]:
+                if not row or len(row) <= max(header_map.values(), default=0):
+                    continue
+                records.append({
+                    "name": row[header_map["name"]],
+                    "phone": row[header_map["phone"]],
+                    "email": row[header_map["email"]] if "email" in header_map else "",
+                    "budget": row[header_map["budget"]] if "budget" in header_map else "",
+                    "location": row[header_map["location"]] if "location" in header_map else "",
+                    "property_type": row[header_map["property_type"]] if "property_type" in header_map else "",
+                    "notes": row[header_map["notes"]] if "notes" in header_map else ""
+                })
+        except HTTPException as he:
+            raise he
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
+
+    else: # Excel
+        try:
+            wb = openpyxl.load_workbook(filename=BytesIO(contents), data_only=True)
+            sheet = wb.active
+            rows = list(sheet.iter_rows(values_only=True))
+            if not rows:
+                raise HTTPException(status_code=400, detail="Excel file is empty.")
+            
+            headers = rows[0]
+            header_map = map_headers(headers)
+            
+            if "name" not in header_map or "phone" not in header_map:
+                raise HTTPException(
+                    status_code=400, 
+                    detail="Excel sheet must contain at least 'Name' and 'Phone Number' columns."
+                )
+                
+            for row in rows[1:]:
+                if not row or all(c is None for c in row):
+                    continue
+                
+                def get_val(key):
+                    if key in header_map and header_map[key] < len(row):
+                        val = row[header_map[key]]
+                        return str(val).strip() if val is not None else ""
+                    return ""
+
+                records.append({
+                    "name": get_val("name"),
+                    "phone": get_val("phone"),
+                    "email": get_val("email"),
+                    "budget": get_val("budget"),
+                    "location": get_val("location"),
+                    "property_type": get_val("property_type"),
+                    "notes": get_val("notes")
+                })
+        except HTTPException as he:
+            raise he
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Failed to parse Excel: {str(e)}")
+
+    imported_count = 0
+    skipped_count = 0
+    imported_leads = []
+
+    for r in records:
+        name = r["name"].strip()
+        phone = r["phone"].strip()
+        
+        if not name or not phone:
+            skipped_count += 1
+            continue
+
+        assigned_to = assign_lead_round_robin()
+        lid = gen_id("lead")
+        now = now_utc().isoformat()
+        
+        lead = {
+            "lead_id": lid,
+            "name": name,
+            "phone": phone,
+            "email": r["email"],
+            "budget": r["budget"],
+            "location": r["location"],
+            "property_type": r["property_type"],
+            "notes": r["notes"],
+            "source": "bulk_import",
+            "stage": "new",
+            "status": "active",
+            "assigned_to": assigned_to,
+            "created_at": now,
+            "updated_at": now
+        }
+        
+        result = sb_insert("leads", lead)
+        SESSION_CACHE["leads"].insert(0, result or lead)
+        log_activity(cu, "bulk_import", f"Lead imported via bulk upload: {name}", lead_id=lid)
+        imported_leads.append(result or lead)
+        imported_count += 1
+        
+    return {
+        "status": "success",
+        "imported_count": imported_count,
+        "skipped_count": skipped_count,
+        "leads": imported_leads[:10]
+    }
 
 @api_router.post("/leads")
 async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):

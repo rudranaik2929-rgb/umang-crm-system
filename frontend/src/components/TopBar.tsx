@@ -7,6 +7,7 @@ import { ROLES, roleLabel } from '../lib/constants';
 import { api } from '../lib/api';
 import { useRouter } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
+import { ImportLeadsModal } from './ImportLeadsModal';
 
 interface Props {
   title: string;
@@ -23,6 +24,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const [employees, setEmployees] = useState<any[]>([]);
   const [actingEmployee, setActingEmployee] = useState<any | null>(null);
   const [addLeadVisible, setAddLeadVisible] = useState(false);
+  const [importLeadsVisible, setImportLeadsVisible] = useState(false);
   const router = useRouter();
   
   const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
@@ -68,6 +70,14 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
 
       <View style={styles.actions}>
         {rightAction}
+
+        <Pressable
+          onPress={() => setImportLeadsVisible(true)}
+          testID="topbar-import-leads"
+          style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
+        >
+          <Ionicons name="cloud-upload-outline" size={18} color={colors.accent} />
+        </Pressable>
 
         <Pressable
           onPress={() => setAddLeadVisible(true)}
@@ -241,6 +251,20 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         onClose={() => setAddLeadVisible(false)}
         onSuccess={() => {
           // Success!
+          if (typeof window !== 'undefined') {
+            window.location.reload();
+          }
+        }}
+      />
+
+      <ImportLeadsModal
+        visible={importLeadsVisible}
+        onClose={() => setImportLeadsVisible(false)}
+        onSuccess={() => {
+          // Refresh page to load bulk data
+          if (typeof window !== 'undefined') {
+            window.location.reload();
+          }
         }}
       />
     </View>

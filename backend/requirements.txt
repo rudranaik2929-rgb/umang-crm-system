@@ -16,3 +16,5 @@ certifi==2026.4.22
 click==8.3.3
 passlib[bcrypt]==1.7.4
 bcrypt==4.1.2
+openpyxl==3.1.2
+
