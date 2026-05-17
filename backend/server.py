@@ -1125,7 +1125,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"select": "*"})
     bookings = sb_select("bookings", {"select": "booking_amount,status"})
     visits = sb_select("visits", {"select": "visit_id,status"})
-    loans = sb_select("loans", {"select": "loan_id,application_status"})
+    loans = sb_select("loans", {"select": "loan_id,application_status,amount,bank_stage"})
     
     # Deduplicate leads
     cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
@@ -1158,6 +1158,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     employees = sb_select("employees", {"select": "employee_id"})
     campaigns = sb_select("campaigns", {"select": "campaign_id"})
     rev = sum(float(b.get("booking_amount", 0) or 0) for b in bookings)
+    rev += sum(float(l.get("amount", 0) or 0) for l in loans if l.get("application_status") == "disbursed" or l.get("bank_stage") == "disbursal")
     
     return {
         "total_leads": len(leads),
@@ -1223,6 +1224,10 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
     bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
     # if not bookings: bookings = DEMO_BOOKINGS
+
+    loans = sb_select("loans", {"select": "amount,created_at,application_status,bank_stage"})
+    cache_lon_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
+    loans = SESSION_CACHE["loans"] + [ln for ln in loans if ln.get("loan_id") not in cache_lon_ids]
     
     rev_by_month = []
     months_map = {}
@@ -1235,6 +1240,13 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
         if d in months_map:
             val = float(b.get("booking_amount", 0) or 0)
             months_map[d] += val
+
+    for l in loans:
+        if l.get("application_status") == "disbursed" or l.get("bank_stage") == "disbursal":
+            d = l.get("created_at", "")[:7]
+            if d in months_map:
+                val = float(l.get("amount", 0) or 0)
+                months_map[d] += val
             
     for d, rev in sorted(months_map.items()):
         rev_by_month.append({"month": d, "revenue": rev})
