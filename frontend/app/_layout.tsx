@@ -5,7 +5,7 @@ import { ThemeProvider, useTheme } from '../src/theme/ThemeContext';
 import { AuthProvider, useAuth } from '../src/auth/AuthContext';
 import { StatusBar } from 'expo-status-bar';
 
-function useWebPrivacyShield() {
+function useWebPrivacyShield(user: any, themeName: string) {
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
 
@@ -27,24 +27,56 @@ function useWebPrivacyShield() {
     `;
     document.head.appendChild(style);
 
-    // 2. Prevent right-click context menu
+    // 2. Setup dynamic watermark
+    let watermarkOverlay: HTMLDivElement | null = null;
+    if (user) {
+      const email = user.email || 'confidential';
+      const role = user.role || 'Staff';
+      const formattedDate = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      const watermarkText = `Umang CRM — CONFIDENTIAL — ${email} (${role}) — ${formattedDate}`;
+      const fillColor = themeName === 'dark' ? 'rgba(255, 255, 255, 0.038)' : 'rgba(0, 0, 0, 0.038)';
+      
+      const svgString = `
+        <svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
+          <text x="50%" y="50%" fill="${fillColor}" font-size="11" font-family="sans-serif" text-anchor="middle" transform="rotate(-28 200 150)">
+            ${watermarkText}
+          </text>
+        </svg>
+      `;
+      const encodedSvg = encodeURIComponent(svgString);
+      const watermarkUrl = `data:image/svg+xml;utf8,${encodedSvg}`;
+
+      watermarkOverlay = document.createElement('div');
+      watermarkOverlay.id = 'privacy-shield-watermark';
+      watermarkOverlay.style.position = 'fixed';
+      watermarkOverlay.style.top = '0';
+      watermarkOverlay.style.left = '0';
+      watermarkOverlay.style.width = '100vw';
+      watermarkOverlay.style.height = '100vh';
+      watermarkOverlay.style.pointerEvents = 'none';
+      watermarkOverlay.style.zIndex = '99999';
+      watermarkOverlay.style.backgroundImage = `url("${watermarkUrl}")`;
+      document.body.appendChild(watermarkOverlay);
+    }
+
+    // 3. Prevent right-click context menu
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       alert("🔒 PRIVACY SHIELD: Right-click context menu is disabled for security.");
     };
 
-    // 3. Prevent dragging content
+    // 4. Prevent dragging content
     const handleDrag = (e: DragEvent) => {
       e.preventDefault();
     };
 
-    // 4. Prevent copying text
+    // 5. Prevent copying text
     const handleCopy = (e: ClipboardEvent) => {
       e.preventDefault();
       alert("🔒 PRIVACY SHIELD: Copying CRM data is disabled for security.");
     };
 
-    // 5. Intercept key combinations (Print, DevTools, PrintScreen)
+    // 6. Intercept key combinations (Print, DevTools, PrintScreen)
     const handleKeyDown = (e: KeyboardEvent) => {
       // Block F12 and Ctrl+Shift+I / Cmd+Opt+I (Developer Tools)
       if (
@@ -78,7 +110,7 @@ function useWebPrivacyShield() {
       }
     };
 
-    // 6. Blur screen on tab/window unfocus (Switcher Security Mask)
+    // 7. Blur screen on tab/window unfocus (Switcher Security Mask)
     const handleBlur = () => {
       const existing = document.getElementById('privacy-shield-blur-mask');
       if (existing) return;
@@ -140,6 +172,7 @@ function useWebPrivacyShield() {
 
     return () => {
       style.remove();
+      if (watermarkOverlay) watermarkOverlay.remove();
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('dragstart', handleDrag);
       document.removeEventListener('copy', handleCopy);
@@ -147,15 +180,15 @@ function useWebPrivacyShield() {
       window.removeEventListener('blur', handleBlur);
       window.removeEventListener('focus', handleFocus);
     };
-  }, []);
+  }, [user, themeName]);
 }
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
-  const { exchangeSession, refresh } = useAuth();
+  const { exchangeSession, refresh, user } = useAuth();
   const [bootstrapping, setBootstrapping] = useState(true);
-  const { colors } = useTheme();
+  const { colors, themeName } = useTheme();
 
-  useWebPrivacyShield();
+  useWebPrivacyShield(user, themeName);
 
   useEffect(() => {
     (async () => {
