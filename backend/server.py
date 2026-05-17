@@ -836,7 +836,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             existing = sb_select("visits", {"lead_id": f"eq.{lead_id}"})
             if not existing and not [v for v in SESSION_CACHE["visits"] if v.get("lead_id") == lead_id]:
                 vid = gen_id("vis")
-                v = {"visit_id": vid, "lead_id": lead_id, "scheduled_at": now_utc().isoformat(), "status": "scheduled", "created_at": now_utc().isoformat()}
+                v = {"visit_id": vid, "lead_id": lead_id, "lead_name": old_lead.get("name", "Lead"), "scheduled_at": now_utc().isoformat(), "status": "scheduled", "created_at": now_utc().isoformat()}
                 sb_insert("visits", v)
                 SESSION_CACHE["visits"].insert(0, v)
         elif p.stage == "booking":
@@ -892,7 +892,7 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     if new_stage == "site_visit":
         existing = sb_select("visits", {"lead_id": f"eq.{lead_id}"})
         if not existing and not [v for v in SESSION_CACHE["visits"] if v.get("lead_id") == lead_id]:
-            v = {"visit_id": gen_id("vis"), "lead_id": lead_id, "scheduled_at": now_utc().isoformat(), "status": "scheduled", "created_at": now_utc().isoformat()}
+            v = {"visit_id": gen_id("vis"), "lead_id": lead_id, "lead_name": lead.get("name", "Lead"), "scheduled_at": now_utc().isoformat(), "status": "scheduled", "created_at": now_utc().isoformat()}
             sb_insert("visits", v)
             SESSION_CACHE["visits"].insert(0, v)
     elif new_stage == "booking":
@@ -915,12 +915,19 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
 @api_router.post("/visits")
 async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{p.lead_id}", "select": "lead_id,name"})
-    if not leads:
+    lead_name = "Lead"
+    if leads:
+        lead_name = leads[0]["name"]
+    else:
         cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == p.lead_id]
-        if not cache_match: raise HTTPException(404, "Lead not found")
+        if cache_match:
+            lead_name = cache_match[0].get("name", "Lead")
+        else:
+            raise HTTPException(404, "Lead not found")
+            
     vid = gen_id("vis")
     v = {
-        "visit_id": vid, "lead_id": p.lead_id, "scheduled_at": p.scheduled_at.isoformat(),
+        "visit_id": vid, "lead_id": p.lead_id, "lead_name": lead_name, "scheduled_at": p.scheduled_at.isoformat(),
         "assigned_to": p.assigned_to, "status": "scheduled", "feedback": None,
         "interested": None, "created_at": now_utc().isoformat(),
     }
@@ -934,7 +941,27 @@ async def list_visits(cu: User=Depends(get_current_user)):
     # Deduplicate visits (cache wins)
     cache_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
     db_only = [v for v in visits if v.get("visit_id") not in cache_ids]
-    return SESSION_CACHE["visits"] + db_only
+    all_visits = SESSION_CACHE["visits"] + db_only
+    
+    # Fetch all leads & employees to enrich dynamically
+    leads = sb_select("leads", {"select": "lead_id,name"})
+    employees = sb_select("employees", {"select": "employee_id,name"})
+    
+    cache_leads = {l.get("lead_id"): l.get("name") for l in SESSION_CACHE["leads"]}
+    db_leads = {l.get("lead_id"): l.get("name") for l in leads}
+    lead_name_map = {**db_leads, **cache_leads}
+    
+    emp_map = {e.get("employee_id"): e.get("name") for e in employees}
+    
+    enriched_visits = []
+    for v in all_visits:
+        v_copy = dict(v)
+        v_copy["lead_name"] = lead_name_map.get(v.get("lead_id"), "Lead")
+        if v.get("assigned_to"):
+            v_copy["assigned_name"] = emp_map.get(v.get("assigned_to"))
+        enriched_visits.append(v_copy)
+        
+    return enriched_visits
 
 @api_router.patch("/visits/{visit_id}")
 async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_current_user)):
