@@ -74,8 +74,10 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID }:
     return [x, y];
   };
 
+  const activePieData = data.filter(d => d.value > 0);
   let accumulatedPercent = 0;
-  const pieSlices = data.map((d, index) => {
+  
+  const pieSlices = activePieData.map((d, index) => {
     const percent = total > 0 ? d.value / total : 0;
     const [startX, startY] = getCoordinatesForPercent(accumulatedPercent);
     accumulatedPercent += percent;
@@ -204,19 +206,24 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID }:
                 )}
 
                 {/* 3. PIE CHART */}
-                {chartType === 'pie' && total > 0 && (
-                  <>
-                    {pieSlices.map((slice, i) => (
-                      <path
-                        key={i}
-                        d={slice.pathData}
-                        fill={slice.color}
-                        style={{ transition: 'all 0.3s ease', cursor: 'pointer' } as any}
-                      >
-                        <title>{slice.label}: {slice.value} ({slice.percent})</title>
-                      </path>
-                    ))}
-                  </>
+                {chartType === 'pie' && (
+                  total > 0 ? (
+                    <>
+                      {pieSlices.map((slice, i) => (
+                        <path
+                          key={i}
+                          d={slice.pathData}
+                          fill={slice.color}
+                          style={{ transition: 'all 0.3s ease', cursor: 'pointer' } as any}
+                        >
+                          <title>{slice.label}: {slice.value} ({slice.percent})</title>
+                        </path>
+                      ))}
+                    </>
+                  ) : (
+                    /* Elegant placeholder circle for empty data state */
+                    <circle cx="50" cy="50" r="38" fill="transparent" stroke={colors.border} strokeWidth="1.5" strokeDasharray="3 3" />
+                  )
                 )}
               </svg>
 
@@ -256,16 +263,20 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID }:
           })}
         </View>
       ) : (
-        /* Highly Polished Color Legend for Pie Chart */
+        /* Highly Polished Color Legend for Pie Chart (Only for non-zero items) */
         <View style={styles.legendGrid}>
-          {pieSlices.map((slice, i) => (
-            <View key={i} style={styles.legendItem}>
-              <View style={[styles.colorBlock, { backgroundColor: slice.color }]} />
-              <Text style={[styles.legendText, { color: colors.text }]} numberOfLines={1}>
-                {slice.label} ({slice.percent})
-              </Text>
-            </View>
-          ))}
+          {total > 0 ? (
+            pieSlices.map((slice, i) => (
+              <View key={i} style={styles.legendItem}>
+                <View style={[styles.colorBlock, { backgroundColor: slice.color }]} />
+                <Text style={[styles.legendText, { color: colors.text }]} numberOfLines={1}>
+                  {slice.label} ({slice.percent})
+                </Text>
+              </View>
+            ))
+          ) : (
+            <Text style={{ color: colors.textMuted, fontSize: 11 }}>No active revenue / metrics recorded yet.</Text>
+          )}
         </View>
       )}
     </View>
