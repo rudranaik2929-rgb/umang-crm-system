@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
+import { LineChart } from '../../src/components/LineChart';
 
 const GOLD = '#D4A843';
 const GOLD_DIM = '#D4A84340';
@@ -187,40 +188,26 @@ export default function Dashboard() {
         {/* ====== ROW 3: Charts ====== */}
         <View style={s.chartRow}>
           {graphData?.leads_by_day && (
-            <View style={[s.card, { flex: 1 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <View>
-                  <Text style={s.cardTitle}>Leads per Day</Text>
-                  <Text style={s.smallLabel}>Last 30 days</Text>
-                </View>
-                <Text style={{ color: '#ffffff50', fontSize: 18 }}>⋯</Text>
-              </View>
-              <SVGLineChart
-                data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(8), value: d.count }))}
-                color="#3B82F6"
-                height={160}
-              />
-            </View>
+            <LineChart
+              title="Leads per Day"
+              subtitle="Last 30 days"
+              data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(8), value: d.count }))}
+              color="#3B82F6"
+              testID="leads-chart"
+            />
           )}
           {graphData?.revenue_by_month && (
-            <View style={[s.card, { flex: 1 }]}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <View>
-                  <Text style={s.cardTitle}>Revenue per Month</Text>
-                  <Text style={s.smallLabel}>Past 12 months</Text>
-                </View>
-                <Text style={{ color: '#ffffff50', fontSize: 18 }}>⋯</Text>
-              </View>
-              <SVGLineChart
-                data={graphData.revenue_by_month.map((d: any) => ({
-                  label: new Date(d.month + '-01').toLocaleString('en', { month: 'short' }),
-                  value: d.revenue,
-                }))}
-                color="#D4A843"
-                height={160}
-                formatY={(v: number) => v >= 100000 ? `${(v / 100000).toFixed(1)}L` : `${Math.round(v / 1000)}K`}
-              />
-            </View>
+            <LineChart
+              title="Revenue per Month"
+              subtitle="Past 12 months"
+              data={graphData.revenue_by_month.map((d: any) => ({
+                label: new Date(d.month + '-01').toLocaleString('en', { month: 'short' }),
+                value: d.revenue,
+              }))}
+              color="#D4A843"
+              formatValue={(v: number) => v >= 100000 ? `${(v / 100000).toFixed(1)}L` : `${Math.round(v / 1000)}K`}
+              testID="revenue-chart"
+            />
           )}
         </View>
 
@@ -318,117 +305,6 @@ function MiniStat({ label, sub, value, color, onPress }: { label: string; sub: s
   );
 }
 
-/* ====== SVG LINE CHART ====== */
-function SVGLineChart({ data, color, height, formatY }: { data: { label: string; value: number }[]; color: string; height: number; formatY?: (v: number) => string }) {
-  const isWeb = Platform.OS === 'web';
-  const max = Math.max(1, ...data.map(d => d.value));
-  const H = height;
-  const padL = 40;
-  const padB = 24;
-  const chartW = 100; // SVG viewBox width percentage
-  const chartH = 100;
-
-  if (!isWeb || data.length < 2) {
-    // Fallback bars
-    return (
-      <View style={{ flexDirection: 'row', alignItems: 'flex-end', height: H, gap: 2, marginTop: 16 }}>
-        {data.map((d, i) => (
-          <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-            <View style={{ width: '60%', height: (d.value / max) * (H - 20), backgroundColor: color + '60', borderRadius: 3, borderTopWidth: 2, borderTopColor: color }} />
-          </View>
-        ))}
-      </View>
-    );
-  }
-
-  const yTicks = 5;
-  const yVals = Array.from({ length: yTicks + 1 }, (_, i) => Math.round((max / yTicks) * i));
-
-  const buildPath = () => {
-    if (data.length < 2) return '';
-    let p = `M 0 ${100 - (data[0].value / max) * 90}`;
-    const step = 100 / (data.length - 1);
-    for (let i = 0; i < data.length - 1; i++) {
-      const x1 = i * step;
-      const y1 = 100 - (data[i].value / max) * 90;
-      const x2 = (i + 1) * step;
-      const y2 = 100 - (data[i+1].value / max) * 90;
-      p += ` C ${x1 + step/2} ${y1}, ${x2 - step/2} ${y2}, ${x2} ${y2}`;
-    }
-    return p;
-  };
-
-  const linePath = buildPath();
-  const areaPath = linePath + ` L 100 100 L 0 100 Z`;
-  const cleanColor = color.replace('#', '');
-
-  return (
-    <View style={{ marginTop: 12 }}>
-      <View style={{ flexDirection: 'row' }}>
-        {/* Y-axis */}
-        <View style={{ width: padL, justifyContent: 'space-between', height: H, paddingVertical: 2 }}>
-          {[...yVals].reverse().map((v, i) => (
-            <Text key={i} style={{ color: '#ffffff50', fontSize: 9, textAlign: 'right', paddingRight: 6 }}>
-              {formatY ? formatY(v) : v}
-            </Text>
-          ))}
-        </View>
-        {/* Chart area */}
-        <View style={{ flex: 1, height: H }}>
-          {/* Grid lines */}
-          {yVals.map((_, i) => (
-            <View key={i} style={{ position: 'absolute', top: (i / yTicks) * H, left: 0, right: 0, height: 1, backgroundColor: '#ffffff0A' }} />
-          ))}
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', position: 'absolute' } as any}>
-            <defs>
-              <linearGradient id={`area-${cleanColor}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-                <stop offset="60%" stopColor={color} stopOpacity="0.1" />
-                <stop offset="100%" stopColor={color} stopOpacity="0" />
-              </linearGradient>
-              <filter id={`glow-${cleanColor}`}>
-                <feGaussianBlur stdDeviation="1.2" result="blur" />
-                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-            </defs>
-            <path d={areaPath} fill={`url(#area-${cleanColor})`} style={{ transition: 'all 0.4s' } as any} />
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" filter={`url(#glow-${cleanColor})`} vectorEffect="non-scaling-stroke" style={{ transition: 'all 0.4s' } as any} />
-          </svg>
-          {/* Dots */}
-          {data.map((d, i) => {
-            const x = (i / (data.length - 1)) * 100;
-            const y = 100 - (d.value / max) * 90;
-            return (
-              <View key={i} style={{
-                position: 'absolute',
-                left: `${x}%`,
-                top: `${y}%`,
-                width: 8, height: 8, borderRadius: 4,
-                backgroundColor: color,
-                borderWidth: 2, borderColor: CARD_BG,
-                shadowColor: color, shadowOffset: { width: 0, height: 0 }, shadowOpacity: 0.8, shadowRadius: 4,
-                marginLeft: -4, marginTop: -4,
-                zIndex: 2,
-              }} />
-            );
-          })}
-        </View>
-      </View>
-      {/* X-axis */}
-      <View style={{ flexDirection: 'row', marginLeft: padL, marginTop: 6 }}>
-        {data.map((d, i) => {
-          const every = data.length > 20 ? 5 : data.length > 12 ? 3 : 2;
-          if (i % every !== 0 && i !== data.length - 1) return <View key={i} style={{ flex: 1 }} />;
-          return (
-            <View key={i} style={{ flex: 1, alignItems: 'center' }}>
-              <Text style={{ color: '#ffffff50', fontSize: 9 }}>{d.label}</Text>
-            </View>
-          );
-        })}
-      </View>
-    </View>
-  );
-}
 
 /* ====== STYLES ====== */
 const s = StyleSheet.create({
