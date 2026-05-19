@@ -360,6 +360,7 @@ function SVGLineChart({ data, color, height, formatY }: { data: { label: string;
 
   const linePath = buildPath();
   const areaPath = linePath + ` L 100 100 L 0 100 Z`;
+  const cleanColor = color.replace('#', '');
 
   return (
     <View style={{ marginTop: 12 }}>
@@ -380,18 +381,18 @@ function SVGLineChart({ data, color, height, formatY }: { data: { label: string;
           ))}
           <svg viewBox="0 0 100 100" preserveAspectRatio="none" style={{ width: '100%', height: '100%', position: 'absolute' } as any}>
             <defs>
-              <linearGradient id={`area-${color}`} x1="0" y1="0" x2="0" y2="1">
+              <linearGradient id={`area-${cleanColor}`} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={color} stopOpacity="0.35" />
                 <stop offset="60%" stopColor={color} stopOpacity="0.1" />
                 <stop offset="100%" stopColor={color} stopOpacity="0" />
               </linearGradient>
-              <filter id="glow">
+              <filter id={`glow-${cleanColor}`}>
                 <feGaussianBlur stdDeviation="1.2" result="blur" />
                 <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
               </filter>
             </defs>
-            <path d={areaPath} fill={`url(#area-${color})`} style={{ transition: 'all 0.4s' } as any} />
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" filter="url(#glow)" vectorEffect="non-scaling-stroke" style={{ transition: 'all 0.4s' } as any} />
+            <path d={areaPath} fill={`url(#area-${cleanColor})`} style={{ transition: 'all 0.4s' } as any} />
+            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" filter={`url(#glow-${cleanColor})`} vectorEffect="non-scaling-stroke" style={{ transition: 'all 0.4s' } as any} />
           </svg>
           {/* Dots */}
           {data.map((d, i) => {
