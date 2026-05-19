@@ -16,6 +16,7 @@ export default function Bookings() {
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [localBrokerage, setLocalBrokerage] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     try {
@@ -97,12 +98,14 @@ export default function Bookings() {
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE (₹)</Text>
                     <TextInput
-                      defaultValue={brokerageAmount > 0 ? String(brokerageAmount) : ''}
+                      value={localBrokerage[b.booking_id] !== undefined ? localBrokerage[b.booking_id] : (brokerageAmount > 0 ? String(brokerageAmount) : '')}
                       placeholder="Enter Brokerage"
                       placeholderTextColor={colors.textMuted}
                       keyboardType="numeric"
-                      onEndEditing={(e) => {
-                        const val = e.nativeEvent.text;
+                      onChangeText={(text) => setLocalBrokerage(prev => ({ ...prev, [b.booking_id]: text }))}
+                      onBlur={() => {
+                        const val = localBrokerage[b.booking_id];
+                        if (val === undefined) return;
                         const parsedVal = parseFloat(val) || 0;
                         const existingStatus = b.agreement_status ? b.agreement_status.replace(/ \| Brokerage:\s*[0-9.]+/, '').trim() : 'pending';
                         const newStatus = parsedVal > 0 ? `${existingStatus} | Brokerage: ${parsedVal}` : existingStatus;
@@ -113,9 +116,9 @@ export default function Bookings() {
                       style={{ height: 28, width: 140, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
                     />
                   </View>
-                  {brokerageAmount > 0 && b.booking_amount > 0 && (
+                  {((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) > 0) && b.booking_amount > 0 && (
                     <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>
-                      ({((brokerageAmount / b.booking_amount) * 100).toFixed(2)}%)
+                      ({(((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) / b.booking_amount) * 100).toFixed(2)}%)
                     </Text>
                   )}
                 </View>
