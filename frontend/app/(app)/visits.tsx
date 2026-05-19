@@ -94,26 +94,6 @@ export default function Visits() {
                     {v.feedback ? (
                       <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8 }}>“{v.feedback}”</Text>
                     ) : null}
-                    
-                    {/* Brokerage Input */}
-                    <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 8 }}>
-                      <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE %</Text>
-                      <TextInput
-                        defaultValue={v.feedback?.match(/Brokerage:\s*([0-9.]+)%/)?.[1] || ''}
-                        placeholder="0.0"
-                        placeholderTextColor={colors.textMuted}
-                        onEndEditing={(e) => {
-                          const val = e.nativeEvent.text;
-                          if (!val) return;
-                          const existing = v.feedback ? v.feedback.replace(/ \| Brokerage: [0-9.]+%/, '').replace(/Brokerage: [0-9.]+%/, '').trim() : '';
-                          const newFeedback = existing ? `${existing} | Brokerage: ${val}%` : `Brokerage: ${val}%`;
-                          if (newFeedback !== v.feedback) {
-                            update(v.visit_id, { feedback: newFeedback }, 'brokerage');
-                          }
-                        }}
-                        style={{ height: 28, width: 60, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
-                      />
-                    </View>
                   </View>
                 </View>
                 <View style={styles.actions}>

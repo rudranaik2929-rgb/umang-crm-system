@@ -56,38 +56,72 @@ export default function Bookings() {
               onAction={() => setShowCreate(true)}
               testIDAction="empty-create-booking"
             />
-          ) : bookings.map((b) => (
-            <View key={b.booking_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-                <View style={[styles.iconBig, { backgroundColor: colors.warning + '18' }]}>
-                  <Ionicons name="document-text" size={18} color={colors.warning} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.cardTitle, { color: colors.text }]}>{b.property_name}</Text>
-                  <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
-                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                    <Badge text={`AGREEMENT: ${(b.agreement_status || 'pending').toUpperCase()}`} color={AGREEMENT_COLOR[b.agreement_status] || colors.info} />
-                    <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
+          ) : bookings.map((b) => {
+            const rawAgreement = b.agreement_status || 'pending';
+            const realAgreementStatus = rawAgreement.split(' | ')[0] || 'pending';
+            const brokerageMatch = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
+            const brokerageAmount = brokerageMatch ? parseFloat(brokerageMatch[1]) : 0;
+
+            return (
+              <View key={b.booking_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                  <View style={[styles.iconBig, { backgroundColor: colors.warning + '18' }]}>
+                    <Ionicons name="document-text" size={18} color={colors.warning} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.cardTitle, { color: colors.text }]}>{b.property_name}</Text>
+                    <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
+                    <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+                      <Badge text={`AGREEMENT: ${realAgreementStatus.toUpperCase()}`} color={AGREEMENT_COLOR[realAgreementStatus] || colors.info} />
+                      <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
+                    </View>
+                  </View>
+                  <View style={{ alignItems: 'flex-end' }}>
+                    <Text style={[styles.bigVal, { color: colors.text }]}>₹{(b.booking_amount || 0).toLocaleString('en-IN')}</Text>
+                    <Text style={[styles.cardSub, { color: colors.textMuted }]}>Booking amount</Text>
                   </View>
                 </View>
-                <View style={{ alignItems: 'flex-end' }}>
-                  <Text style={[styles.bigVal, { color: colors.text }]}>₹{(b.booking_amount || 0).toLocaleString('en-IN')}</Text>
-                  <Text style={[styles.cardSub, { color: colors.textMuted }]}>Booking amount</Text>
-                </View>
-              </View>
 
-              <View style={{ marginTop: 14 }}>
-                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{(b.token_received || 0).toLocaleString('en-IN')}</Text>
-                  <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{b.payment_progress || 0}%</Text>
+                <View style={{ marginTop: 14 }}>
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{(b.token_received || 0).toLocaleString('en-IN')}</Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{b.payment_progress || 0}%</Text>
+                  </View>
+                  <View style={[styles.track, { backgroundColor: colors.surfaceAlt }]}>
+                    <View style={[styles.fill, { width: `${b.payment_progress}%`, backgroundColor: colors.positive }]} />
+                  </View>
                 </View>
-                <View style={[styles.track, { backgroundColor: colors.surfaceAlt }]}>
-                  <View style={[styles.fill, { width: `${b.payment_progress}%`, backgroundColor: colors.positive }]} />
-                </View>
-              </View>
 
-              <View style={styles.actions}>
-                {/* 1. Login File */}
+                {/* Brokerage Input & Percentage Calculation */}
+                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12, flexWrap: 'wrap' }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE (₹)</Text>
+                    <TextInput
+                      defaultValue={brokerageAmount > 0 ? String(brokerageAmount) : ''}
+                      placeholder="Enter Brokerage"
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="numeric"
+                      onEndEditing={(e) => {
+                        const val = e.nativeEvent.text;
+                        const parsedVal = parseFloat(val) || 0;
+                        const existingStatus = b.agreement_status ? b.agreement_status.replace(/ \| Brokerage:\s*[0-9.]+/, '').trim() : 'pending';
+                        const newStatus = parsedVal > 0 ? `${existingStatus} | Brokerage: ${parsedVal}` : existingStatus;
+                        if (newStatus !== b.agreement_status) {
+                          update(b.booking_id, { agreement_status: newStatus }, 'brokerage');
+                        }
+                      }}
+                      style={{ height: 28, width: 140, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
+                    />
+                  </View>
+                  {brokerageAmount > 0 && b.booking_amount > 0 && (
+                    <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>
+                      ({((brokerageAmount / b.booking_amount) * 100).toFixed(2)}%)
+                    </Text>
+                  )}
+                </View>
+
+                <View style={styles.actions}>
+                  {/* 1. Login File */}
                 <Pressable testID={`booking-login-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'login file' }, 'login')} style={[styles.act, { borderColor: colors.info + '60', backgroundColor: colors.info + '10' }]}>
                   {busy === `${b.booking_id}-login` ? <ActivityIndicator size="small" color={colors.info} /> : <>
                     <Ionicons name="folder-open-outline" size={13} color={colors.info} />
@@ -144,7 +178,8 @@ export default function Bookings() {
                 </Pressable>
               </View>
             </View>
-          ))}
+          );
+        })}
       </ScrollView>
 
       <CreateBookingModal
