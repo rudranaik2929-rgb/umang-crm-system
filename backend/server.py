@@ -668,7 +668,7 @@ async def clear_all_leads(cu: User = Depends(get_current_user)):
     for table in tables_to_wipe:
         try:
             r = httpx.delete(
-                f"{SUPABASE_URL}/rest/v1/{table}?created_at=neq.1970-01-01",
+                f"{SUPABASE_URL}/rest/v1/{table}?created_at=not.is.null",
                 headers=sb_headers()
             )
             if r.status_code >= 400:
@@ -767,6 +767,14 @@ async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
     global SESSION_CACHE
     if "leads" in SESSION_CACHE:
         SESSION_CACHE["leads"] = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") != lead_id]
+    if "visits" in SESSION_CACHE:
+        SESSION_CACHE["visits"] = [v for v in SESSION_CACHE["visits"] if v.get("lead_id") != lead_id]
+    if "bookings" in SESSION_CACHE:
+        SESSION_CACHE["bookings"] = [b for b in SESSION_CACHE["bookings"] if b.get("lead_id") != lead_id]
+    if "loans" in SESSION_CACHE:
+        SESSION_CACHE["loans"] = [ln for ln in SESSION_CACHE["loans"] if ln.get("lead_id") != lead_id]
+    if "activities" in SESSION_CACHE:
+        SESSION_CACHE["activities"] = [a for a in SESSION_CACHE["activities"] if a.get("lead_id") != lead_id]
     
     return {"status": "deleted", "lead_id": lead_id}
 
@@ -1355,10 +1363,15 @@ async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):
 async def stats_me(cu: User=Depends(get_current_user)):
     eid = cu.acting_as_employee_id or cu.user_id
     
-    # Get personal stats (merge with cache)
-    activities = sb_select("activities", {"user_id": f"eq.{eid}", "select": "*", "order": "created_at.desc"})
-    cache_acts = [a for a in SESSION_CACHE["activities"] if a.get("user_id") == eid]
-    activities = cache_acts + activities
+    # Get stats (merge with cache)
+    if cu.role == "admin":
+        activities = sb_select("activities", {"select": "*", "order": "created_at.desc"})
+        cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+        activities = SESSION_CACHE["activities"] + [a for a in activities if a.get("activity_id") not in cache_act_ids]
+    else:
+        activities = sb_select("activities", {"user_id": f"eq.{eid}", "select": "*", "order": "created_at.desc"})
+        cache_acts = [a for a in SESSION_CACHE["activities"] if a.get("user_id") == eid]
+        activities = cache_acts + activities
     
     positives = sum(1 for a in activities if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
     visits = sum(1 for a in activities if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))

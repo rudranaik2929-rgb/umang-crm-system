@@ -191,28 +191,39 @@ export default function MyDashboard() {
               <KPI label="Loans" value={personal.loans_done} icon="business-outline" color={'#7C3AED'} colors={colors} highlight={highlight.includes('loans_done')} />
               <KPI label="Closed Deals" value={personal.closed_deals} icon="trophy-outline" color={colors.accent} colors={colors} highlight={highlight.includes('closed_deals')} />
             </View>
-            
-            {/* Live Activity Feed */}
-            <View style={{ marginTop: 32 }}>
-              <Text style={[styles.section, { color: colors.textMuted }]}>MY RECENT ACTIONS</Text>
-              <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                {(!data.recent_activities || data.recent_activities.length === 0) ? (
-                  <Text style={{ color: colors.textMuted, fontSize: 12 }}>No activity yet.</Text>
-                ) : data.recent_activities.map((a: any) => (
-                  <View key={a.activity_id} style={[styles.actRow, { borderBottomColor: colors.border }]}>
-                    <Ionicons name="ellipse" size={6} color={accent} style={{ marginRight: 10, marginTop: 7 }} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: colors.text, fontSize: 13 }}>{a.text}</Text>
-                      <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                        {new Date(a.created_at).toLocaleString()}
-                      </Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            </View>
           </View>
         )}
+        
+        {/* Live Activity Feed */}
+        <View style={{ marginTop: 32 }}>
+          <Text style={[styles.section, { color: colors.textMuted }]}>
+            {role === 'admin' ? 'CRM LIVE ACTIVITY FEED' : 'MY RECENT ACTIONS'}
+          </Text>
+          <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            {(!data.recent_activities || data.recent_activities.length === 0) ? (
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                {role === 'admin' ? 'No recent global CRM actions.' : 'No activity yet.'}
+              </Text>
+            ) : data.recent_activities.map((a: any) => (
+              <View key={a.activity_id} style={[styles.actRow, { borderBottomColor: colors.border }]}>
+                <Ionicons 
+                  name={role === 'admin' ? 'flash' : 'ellipse'} 
+                  size={role === 'admin' ? 14 : 6} 
+                  color={role === 'admin' ? colors.warning : accent} 
+                  style={{ marginRight: 10, marginTop: role === 'admin' ? 3 : 7 }} 
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.text, fontSize: 13, fontWeight: role === 'admin' ? '500' : '400' }}>
+                    {a.text}
+                  </Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                    {new Date(a.created_at).toLocaleString()}
+                  </Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        </View>
       </ScrollView>
     </View>
   );
