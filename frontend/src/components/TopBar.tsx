@@ -154,7 +154,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
 
         {/* Accent color picker */}
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 6 }}>
-          {(['orange', 'sky', 'emerald', 'royal', 'orchid'] as AccentColor[]).map((acc) => {
+          {(['sky', 'forest', 'lavender', 'sunset', 'rose'] as AccentColor[]).map((acc) => {
             const isSelected = accentColor === acc;
             const dotColor = ACCENT_THEMES[acc][themeName].primary;
             return (
