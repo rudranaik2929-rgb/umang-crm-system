@@ -35,7 +35,7 @@ function useWebPrivacyShield(user: any, themeName: string) {
     `;
     document.head.appendChild(style);
 
-    // 2. Setup dynamic watermark
+    // 2. Setup dynamic watermark (Denser and Highly Visible)
     let watermarkOverlay: HTMLDivElement | null = null;
     let watermarkUrl = '';
     if (user) {
@@ -43,11 +43,14 @@ function useWebPrivacyShield(user: any, themeName: string) {
       const role = user.role || 'Staff';
       const formattedDate = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
       const watermarkText = `Umang CRM — CONFIDENTIAL — ${email} (${role}) — ${formattedDate}`;
-      const fillColor = themeName === 'dark' ? 'rgba(255, 255, 255, 0.045)' : 'rgba(0, 0, 0, 0.045)';
       
+      // Increased opacity from 0.045 to 0.085 for extremely clear visibility
+      const fillColor = themeName === 'dark' ? 'rgba(255, 255, 255, 0.085)' : 'rgba(0, 0, 0, 0.085)';
+      
+      // Reduced canvas dimensions from 400x300 to 300x200 to repeat the pattern much more densely across the screen
       const svgString = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
-          <text x="50%" y="50%" fill="${fillColor}" font-size="11" font-family="sans-serif" text-anchor="middle" transform="rotate(-28 200 150)">
+        <svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
+          <text x="50%" y="50%" fill="${fillColor}" font-size="11" font-family="sans-serif" font-weight="600" text-anchor="middle" transform="rotate(-28 150 100)">
             ${watermarkText}
           </text>
         </svg>
