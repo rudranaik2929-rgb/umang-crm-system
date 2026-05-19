@@ -244,6 +244,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     getAccent();
   }, []);
 
+  
   const toggle = useCallback(() => {
     setThemeName((prev) => {
       const next: ThemeName = prev === 'dark' ? 'light' : 'dark';
