@@ -912,8 +912,9 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     return updated or new_lead
 
 # ---- Stage Sync Helper ----
-def sync_lead_stage(lead_id: str, target_stage: str):
-    """Ensure lead is at least at target_stage in the pipeline."""
+def sync_lead_stage(lead_id: str, target_stage: str, force: bool = False):
+    """Ensure lead is at least at target_stage in the pipeline.
+    If force=True, also moves a 'closed' lead back to the target_stage."""
     leads_db = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id,stage"})
     lead = None
     if leads_db:
@@ -927,7 +928,11 @@ def sync_lead_stage(lead_id: str, target_stage: str):
     except ValueError: cur_idx = 0
     try: target_idx = [s for s in STAGES].index(target_stage)
     except ValueError: return
-    if cur_idx < target_idx:
+    needs_update = cur_idx < target_idx
+    # If lead is closed but we're creating/updating an active department record, bring it back
+    if force and cur == "closed" and target_stage != "closed":
+        needs_update = True
+    if needs_update:
         sb_update("leads", "lead_id", lead_id, {"stage": target_stage, "updated_at": now_utc().isoformat()})
         SESSION_CACHE["leads"] = [({**l, "stage": target_stage, "updated_at": now_utc().isoformat()} if l.get("lead_id") == lead_id else l) for l in SESSION_CACHE["leads"]]
 
@@ -953,7 +958,7 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     result = sb_insert("visits", v)
     SESSION_CACHE["visits"].insert(0, result or v)
     # Auto-sync lead stage to site_visit
-    sync_lead_stage(p.lead_id, "site_visit")
+    sync_lead_stage(p.lead_id, "site_visit", force=True)
     return result or v
 
 @api_router.get("/visits")
@@ -989,12 +994,23 @@ async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_c
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("visits", "visit_id", visit_id, data)
     # Update cache
+    visit_record = None
     for i, v in enumerate(SESSION_CACHE["visits"]):
         if v.get("visit_id") == visit_id:
             SESSION_CACHE["visits"][i] = {**v, **data}
+            visit_record = SESSION_CACHE["visits"][i]
             if not updated: updated = SESSION_CACHE["visits"][i]
             break
-    if not updated: raise HTTPException(404, "Visit not found")
+    if not updated:
+        db_visits = sb_select("visits", {"visit_id": f"eq.{visit_id}"})
+        if db_visits:
+            visit_record = db_visits[0]
+            updated = visit_record
+        else:
+            raise HTTPException(404, "Visit not found")
+    # Auto-sync lead stage
+    if visit_record and visit_record.get("lead_id"):
+        sync_lead_stage(visit_record["lead_id"], "site_visit", force=True)
     return updated
 
 # ---- Bookings ----
@@ -1021,7 +1037,7 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
     result = sb_insert("bookings", b)
     SESSION_CACHE["bookings"].insert(0, result or b)
     # Auto-sync lead stage to booking
-    sync_lead_stage(p.lead_id, "booking")
+    sync_lead_stage(p.lead_id, "booking", force=True)
     return result or b
 
 @api_router.get("/bookings")
@@ -1037,12 +1053,23 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("bookings", "booking_id", booking_id, data)
     # Update cache
+    booking_record = None
     for i, b in enumerate(SESSION_CACHE["bookings"]):
         if b.get("booking_id") == booking_id:
             SESSION_CACHE["bookings"][i] = {**b, **data}
+            booking_record = SESSION_CACHE["bookings"][i]
             if not updated: updated = SESSION_CACHE["bookings"][i]
             break
-    if not updated: raise HTTPException(404, "Booking not found")
+    if not updated:
+        db_bookings = sb_select("bookings", {"booking_id": f"eq.{booking_id}"})
+        if db_bookings:
+            booking_record = db_bookings[0]
+            updated = booking_record
+        else:
+            raise HTTPException(404, "Booking not found")
+    # Auto-sync lead stage
+    if booking_record and booking_record.get("lead_id"):
+        sync_lead_stage(booking_record["lead_id"], "booking", force=True)
     return updated
 
 # ---- Loans ----
@@ -1068,7 +1095,7 @@ async def create_loan(p: LoanCreate, cu: User=Depends(get_current_user)):
     result = sb_insert("loans", l)
     SESSION_CACHE["loans"].insert(0, result or l)
     # Auto-sync lead stage to loan
-    sync_lead_stage(p.lead_id, "loan")
+    sync_lead_stage(p.lead_id, "loan", force=True)
     return result or l
 
 @api_router.get("/loans")
@@ -1084,12 +1111,24 @@ async def update_loan(loan_id: str, p: LoanUpdate, cu: User=Depends(get_current_
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     updated = sb_update("loans", "loan_id", loan_id, data)
     # Update cache
+    loan_record = None
     for i, ln in enumerate(SESSION_CACHE["loans"]):
         if ln.get("loan_id") == loan_id:
             SESSION_CACHE["loans"][i] = {**ln, **data}
+            loan_record = SESSION_CACHE["loans"][i]
             if not updated: updated = SESSION_CACHE["loans"][i]
             break
-    if not updated: raise HTTPException(404, "Loan not found")
+    if not updated:
+        # Try to find it from DB
+        db_loans = sb_select("loans", {"loan_id": f"eq.{loan_id}"})
+        if db_loans:
+            loan_record = db_loans[0]
+            updated = loan_record
+        else:
+            raise HTTPException(404, "Loan not found")
+    # Auto-sync lead stage to loan when loan is actively being worked on
+    if loan_record and loan_record.get("lead_id"):
+        sync_lead_stage(loan_record["lead_id"], "loan", force=True)
     return updated
 
 # ---- Employees ----
