@@ -911,6 +911,26 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     log_activity(cu, "stage_change", f"Stage moved {cur} → {new_stage}", lead_id=lead_id)
     return updated or new_lead
 
+# ---- Stage Sync Helper ----
+def sync_lead_stage(lead_id: str, target_stage: str):
+    """Ensure lead is at least at target_stage in the pipeline."""
+    leads_db = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id,stage"})
+    lead = None
+    if leads_db:
+        lead = leads_db[0]
+    else:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
+        if cache_match: lead = cache_match[0]
+    if not lead: return
+    cur = lead.get("stage", "new")
+    try: cur_idx = [s for s in STAGES].index(cur)
+    except ValueError: cur_idx = 0
+    try: target_idx = [s for s in STAGES].index(target_stage)
+    except ValueError: return
+    if cur_idx < target_idx:
+        sb_update("leads", "lead_id", lead_id, {"stage": target_stage, "updated_at": now_utc().isoformat()})
+        SESSION_CACHE["leads"] = [({**l, "stage": target_stage, "updated_at": now_utc().isoformat()} if l.get("lead_id") == lead_id else l) for l in SESSION_CACHE["leads"]]
+
 # ---- Visits ----
 @api_router.post("/visits")
 async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
@@ -932,6 +952,8 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
     }
     result = sb_insert("visits", v)
     SESSION_CACHE["visits"].insert(0, result or v)
+    # Auto-sync lead stage to site_visit
+    sync_lead_stage(p.lead_id, "site_visit")
     return result or v
 
 @api_router.get("/visits")
@@ -998,6 +1020,8 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
     }
     result = sb_insert("bookings", b)
     SESSION_CACHE["bookings"].insert(0, result or b)
+    # Auto-sync lead stage to booking
+    sync_lead_stage(p.lead_id, "booking")
     return result or b
 
 @api_router.get("/bookings")
@@ -1043,6 +1067,8 @@ async def create_loan(p: LoanCreate, cu: User=Depends(get_current_user)):
     }
     result = sb_insert("loans", l)
     SESSION_CACHE["loans"].insert(0, result or l)
+    # Auto-sync lead stage to loan
+    sync_lead_stage(p.lead_id, "loan")
     return result or l
 
 @api_router.get("/loans")
