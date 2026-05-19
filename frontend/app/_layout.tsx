@@ -9,8 +9,9 @@ function useWebPrivacyShield(user: any, themeName: string) {
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
 
-    // 1. Inject global CSS to block text selection except in inputs
+    // 1. Inject global CSS to block text selection and print stylesheet
     const style = document.createElement('style');
+    style.id = 'privacy-shield-styles';
     style.innerHTML = `
       * {
         -webkit-user-select: none !important;
@@ -24,17 +25,25 @@ function useWebPrivacyShield(user: any, themeName: string) {
         -ms-user-select: text !important;
         user-select: text !important;
       }
+      @media print {
+        body, html, #root, div {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+        }
+      }
     `;
     document.head.appendChild(style);
 
     // 2. Setup dynamic watermark
     let watermarkOverlay: HTMLDivElement | null = null;
+    let watermarkUrl = '';
     if (user) {
       const email = user.email || 'confidential';
       const role = user.role || 'Staff';
       const formattedDate = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
       const watermarkText = `Umang CRM — CONFIDENTIAL — ${email} (${role}) — ${formattedDate}`;
-      const fillColor = themeName === 'dark' ? 'rgba(255, 255, 255, 0.038)' : 'rgba(0, 0, 0, 0.038)';
+      const fillColor = themeName === 'dark' ? 'rgba(255, 255, 255, 0.045)' : 'rgba(0, 0, 0, 0.045)';
       
       const svgString = `
         <svg xmlns="http://www.w3.org/2000/svg" width="400" height="300" viewBox="0 0 400 300">
@@ -44,7 +53,7 @@ function useWebPrivacyShield(user: any, themeName: string) {
         </svg>
       `;
       const encodedSvg = encodeURIComponent(svgString);
-      const watermarkUrl = `data:image/svg+xml;utf8,${encodedSvg}`;
+      watermarkUrl = `data:image/svg+xml;utf8,${encodedSvg}`;
 
       watermarkOverlay = document.createElement('div');
       watermarkOverlay.id = 'privacy-shield-watermark';
@@ -82,7 +91,9 @@ function useWebPrivacyShield(user: any, themeName: string) {
       if (
         e.key === 'F12' ||
         (e.ctrlKey && e.shiftKey && e.key === 'I') ||
-        (e.metaKey && e.altKey && e.key === 'i')
+        (e.ctrlKey && e.shiftKey && e.key === 'i') ||
+        (e.metaKey && e.altKey && e.key === 'i') ||
+        (e.metaKey && e.altKey && e.key === 'I')
       ) {
         e.preventDefault();
         alert("🔒 PRIVACY SHIELD: Developer tools access is blocked.");
@@ -122,15 +133,15 @@ function useWebPrivacyShield(user: any, themeName: string) {
       mask.style.left = '0';
       mask.style.width = '100vw';
       mask.style.height = '100vh';
-      mask.style.backdropFilter = 'blur(25px)';
-      mask.style.setProperty('-webkit-backdrop-filter', 'blur(25px)');
-      mask.style.backgroundColor = 'rgba(20, 12, 7, 0.6)';
+      mask.style.backdropFilter = 'blur(30px)';
+      mask.style.setProperty('-webkit-backdrop-filter', 'blur(30px)');
+      mask.style.backgroundColor = 'rgba(15, 10, 8, 0.75)';
       mask.style.zIndex = '999999';
       mask.style.display = 'flex';
       mask.style.flexDirection = 'column';
       mask.style.alignItems = 'center';
       mask.style.justifyContent = 'center';
-      mask.style.gap = '12px';
+      mask.style.gap = '16px';
 
       const title = document.createElement('h2');
       title.innerText = '🔒 Privacy Shield Active';
@@ -138,6 +149,7 @@ function useWebPrivacyShield(user: any, themeName: string) {
       title.style.fontFamily = 'sans-serif';
       title.style.margin = '0';
       title.style.fontSize = '24px';
+      title.style.fontWeight = 'bold';
       
       const sub = document.createElement('p');
       sub.innerText = 'Click anywhere on this screen to refocus and unlock the CRM';
@@ -163,6 +175,40 @@ function useWebPrivacyShield(user: any, themeName: string) {
       if (mask) mask.remove();
     };
 
+    // 8. MutationObserver to prevent tampering with security structures via DevTools
+    const observer = new MutationObserver(() => {
+      if (!document.getElementById('privacy-shield-styles')) {
+        document.head.appendChild(style);
+      }
+      if (watermarkOverlay && !document.getElementById('privacy-shield-watermark')) {
+        document.body.appendChild(watermarkOverlay);
+      }
+      if (watermarkOverlay) {
+        const expectedBg = `url("${watermarkUrl}")`;
+        if (
+          watermarkOverlay.style.display === 'none' ||
+          watermarkOverlay.style.visibility === 'hidden' ||
+          parseFloat(watermarkOverlay.style.opacity || '1') < 0.2 ||
+          watermarkOverlay.style.backgroundImage !== expectedBg ||
+          watermarkOverlay.style.zIndex !== '99999'
+        ) {
+          watermarkOverlay.style.display = 'block';
+          watermarkOverlay.style.visibility = 'visible';
+          watermarkOverlay.style.opacity = '1';
+          watermarkOverlay.style.position = 'fixed';
+          watermarkOverlay.style.top = '0';
+          watermarkOverlay.style.left = '0';
+          watermarkOverlay.style.width = '100vw';
+          watermarkOverlay.style.height = '100vh';
+          watermarkOverlay.style.pointerEvents = 'none';
+          watermarkOverlay.style.zIndex = '99999';
+          watermarkOverlay.style.backgroundImage = expectedBg;
+        }
+      }
+    });
+
+    observer.observe(document.body, { childList: true, subtree: true, attributes: true });
+
     document.addEventListener('contextmenu', handleContextMenu);
     document.addEventListener('dragstart', handleDrag);
     document.addEventListener('copy', handleCopy);
@@ -171,6 +217,7 @@ function useWebPrivacyShield(user: any, themeName: string) {
     window.addEventListener('focus', handleFocus);
 
     return () => {
+      observer.disconnect();
       style.remove();
       if (watermarkOverlay) watermarkOverlay.remove();
       document.removeEventListener('contextmenu', handleContextMenu);
