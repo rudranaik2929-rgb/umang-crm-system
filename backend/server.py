@@ -52,7 +52,7 @@ app.add_middleware(
 )
 api_router = APIRouter(prefix="/api")
 
-STAGES = ["new","contacted","positive","site_visit","booking","loan","registration","closed"]
+STAGES = ["new","positive","site_visit","booking","loan","registration","closed"]
 ROLES = ["admin","telecaller","site_visit","booking","loan","marketing"]
 
 # ---- Integration Config (from .env) ----
@@ -1391,8 +1391,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     # if not leads: leads = DEMO_LEADS
     
     hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])
-    warm = sum(1 for l in leads if l.get("stage") == "contacted")
-    cold = sum(1 for l in leads if l.get("stage") == "new")
+    cold = sum(1 for l in leads if l.get("stage") in ["new", "contacted"])
     negative = sum(1 for l in leads if l.get("status") == "negative")
     closed = sum(1 for l in leads if l.get("stage") == "closed")
 
@@ -1404,7 +1403,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
             "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
         },
-        "leads": {"hot": hot, "warm": warm, "cold": cold, "negative": negative, "closed": closed},
+        "leads": {"hot": hot, "warm": 0, "cold": cold, "negative": negative, "closed": closed},
         "recent_activities": activities[:15]
     }
 

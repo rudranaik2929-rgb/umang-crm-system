@@ -1,6 +1,5 @@
 export const STAGES = [
   { key: 'new', label: 'New Lead' },
-  { key: 'contacted', label: 'Contacted' },
   { key: 'positive', label: 'Positive' },
   { key: 'site_visit', label: 'Site Visit' },
   { key: 'booking', label: 'Booking' },
