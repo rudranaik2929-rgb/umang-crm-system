@@ -33,9 +33,10 @@ export default function Telecaller() {
   const filtered = leads.filter((l) => {
     if (l.status !== 'active') return false;
     if (!QUEUE_STAGES.includes(l.stage)) return false;
-    // Non-admin employees only see leads assigned to them
-    if (user?.role !== 'admin' && l.assigned_to && (user as any)?.acting_as_employee_id) {
-      return l.assigned_to === (user as any).acting_as_employee_id;
+    // Non-admin employees ONLY see leads assigned to them
+    if (user?.role !== 'admin') {
+      const myEmpId = (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
+      if (!myEmpId || l.assigned_to !== myEmpId) return false;
     }
     return true;
   });
