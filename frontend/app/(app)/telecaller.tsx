@@ -9,7 +9,7 @@ import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { StageBadge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
 
-const QUEUE_STAGES = ['new'];
+const QUEUE_STAGES = ['new', 'assigned'];
 
 export default function Telecaller() {
   const { colors } = useTheme();
@@ -31,7 +31,13 @@ export default function Telecaller() {
   useEffect(() => { load(); }, [load]);
 
   const filtered = leads.filter((l) => {
-    return l.status === 'active' && QUEUE_STAGES.includes(l.stage);
+    if (l.status !== 'active') return false;
+    if (!QUEUE_STAGES.includes(l.stage)) return false;
+    // Non-admin employees only see leads assigned to them
+    if (user?.role !== 'admin' && l.assigned_to && (user as any)?.acting_as_employee_id) {
+      return l.assigned_to === (user as any).acting_as_employee_id;
+    }
+    return true;
   });
 
   return (

@@ -25,6 +25,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [loadingSummary, setLoadingSummary] = useState(false);
   const [showConfetti, setShowConfetti] = useState(false);
+  const [employees, setEmployees] = useState<any[]>([]);
+  const [showAssignDropdown, setShowAssignDropdown] = useState(false);
   const subAnim = React.useRef(new Animated.Value(0)).current;
   const confettiAnims = React.useRef([...Array(50)].map(() => new Animated.Value(0))).current;
 
@@ -54,6 +56,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
     if (visible && leadId) {
       load();
       setAiSummary(null);
+      setShowAssignDropdown(false);
+      api.get('/employees').then(r => setEmployees((r.data || []).filter((e: any) => e.active))).catch(() => {});
     }
   }, [visible, leadId, load]);
 
@@ -142,6 +146,19 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
       await api.post(`/leads/${leadId}/notes`, { text: note, type: 'call_note' });
       setNote('');
       await load(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const assignToEmployee = async (employeeId: string, employeeName: string) => {
+    if (!leadId) return;
+    setBusy('assign');
+    try {
+      await api.patch(`/leads/${leadId}`, { assigned_to: employeeId, stage: 'assigned' });
+      setShowAssignDropdown(false);
+      await load(true);
+      onChanged?.();
     } finally {
       setBusy(null);
     }
@@ -286,6 +303,65 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                     </Text>
                   )}
                 </View>
+
+                {/* Assign to Employee — Admin only */}
+                {userRole === 'admin' && (
+                  <View style={[styles.block, { borderColor: '#8B5CF6' + '40', backgroundColor: '#8B5CF6' + '08' }]}>
+                    <Text style={[styles.blockTitle, { color: '#8B5CF6' }]}>ASSIGN TO EMPLOYEE</Text>
+                    {lead.assigned_to ? (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                        <Ionicons name="person-circle" size={20} color="#8B5CF6" />
+                        <Text style={{ color: colors.text, fontSize: 13, flex: 1 }}>
+                          Assigned to: <Text style={{ fontWeight: '700' }}>{employees.find((e: any) => e.employee_id === lead.assigned_to)?.name || lead.assigned_to}</Text>
+                        </Text>
+                        <Pressable
+                          onPress={() => setShowAssignDropdown(!showAssignDropdown)}
+                          style={{ paddingHorizontal: 10, height: 28, borderRadius: 6, borderWidth: 1, borderColor: '#8B5CF6' + '40', backgroundColor: '#8B5CF6' + '12', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <Text style={{ color: '#8B5CF6', fontSize: 11, fontWeight: '600' }}>Reassign</Text>
+                        </Pressable>
+                      </View>
+                    ) : (
+                      <Pressable
+                        onPress={() => setShowAssignDropdown(!showAssignDropdown)}
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8, borderWidth: 1, borderColor: '#8B5CF6' + '40', backgroundColor: '#8B5CF6' + '12' }}
+                      >
+                        <Ionicons name="person-add" size={16} color="#8B5CF6" />
+                        <Text style={{ color: '#8B5CF6', fontSize: 13, fontWeight: '600' }}>Select Employee</Text>
+                      </Pressable>
+                    )}
+                    {showAssignDropdown && (
+                      <View style={{ marginTop: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceAlt, overflow: 'hidden' }}>
+                        {employees.map((emp: any) => (
+                          <Pressable
+                            key={emp.employee_id}
+                            onPress={() => assignToEmployee(emp.employee_id, emp.name)}
+                            disabled={busy === 'assign'}
+                            style={({ pressed }: any) => [{
+                              flexDirection: 'row', alignItems: 'center', gap: 10, padding: 10,
+                              borderBottomWidth: 1, borderBottomColor: colors.border,
+                              backgroundColor: pressed ? colors.primary + '10' : (emp.employee_id === lead.assigned_to ? '#8B5CF6' + '15' : 'transparent'),
+                            }]}
+                          >
+                            <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#8B5CF6' + '20', alignItems: 'center', justifyContent: 'center' }}>
+                              <Text style={{ fontSize: 13, fontWeight: '700', color: '#8B5CF6' }}>{emp.name?.[0]?.toUpperCase()}</Text>
+                            </View>
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '500' }}>{emp.name}</Text>
+                              <Text style={{ color: colors.textMuted, fontSize: 11 }}>{emp.role} · {emp.department || emp.role}</Text>
+                            </View>
+                            {emp.employee_id === lead.assigned_to && (
+                              <Ionicons name="checkmark-circle" size={18} color="#8B5CF6" />
+                            )}
+                          </Pressable>
+                        ))}
+                        {employees.length === 0 && (
+                          <Text style={{ padding: 12, color: colors.textMuted, fontSize: 12, textAlign: 'center' }}>No active employees found</Text>
+                        )}
+                      </View>
+                    )}
+                  </View>
+                )}
 
                 {/* Details */}
                 <View style={[styles.block, { borderColor: colors.border }]}>

@@ -52,7 +52,7 @@ app.add_middleware(
 )
 api_router = APIRouter(prefix="/api")
 
-STAGES = ["new","positive","site_visit","booking","loan","registration","closed"]
+STAGES = ["new","assigned","positive","site_visit","booking","loan","registration","closed"]
 ROLES = ["admin","telecaller","site_visit","booking","loan","marketing"]
 
 # ---- Integration Config (from .env) ----
@@ -418,10 +418,11 @@ def log_activity(actor, type_, text, lead_id=None):
 async def create_lead_public(p: LeadCreatePublic):
     lid = gen_id("lead")
     assigned_to = assign_lead_round_robin()
+    initial_stage = "assigned" if assigned_to else "new"
     lead = {
         "lead_id": lid, "name": p.name, "phone": p.phone, "email": p.email,
         "budget": p.budget, "location": p.location, "property_type": p.property_type,
-        "notes": p.notes, "source": "website", "stage": "new", "status": "active",
+        "notes": p.notes, "source": "website", "stage": initial_stage, "status": "active",
         "assigned_to": assigned_to, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
     }
     result = sb_insert("leads", lead)
@@ -812,6 +813,18 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     data["updated_at"] = now_utc().isoformat()
+    
+    # Auto-set stage to 'assigned' when admin assigns a lead that's at 'new' stage
+    if p.assigned_to and old_lead.get("stage") == "new":
+        data["stage"] = "assigned"
+    
+    # Log assignment activity
+    if p.assigned_to and p.assigned_to != old_lead.get("assigned_to"):
+        emp_name = p.assigned_to
+        emps = sb_select("employees", {"employee_id": f"eq.{p.assigned_to}", "select": "name"})
+        if emps: emp_name = emps[0]["name"]
+        log_activity(cu, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
+    
     updated = sb_update("leads", "lead_id", lead_id, data)
     
     # Always update cache for immediate UI feedback
@@ -1391,6 +1404,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     # if not leads: leads = DEMO_LEADS
     
     hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])
+    warm = sum(1 for l in leads if l.get("stage") == "assigned")
     cold = sum(1 for l in leads if l.get("stage") in ["new", "contacted"])
     negative = sum(1 for l in leads if l.get("status") == "negative")
     closed = sum(1 for l in leads if l.get("stage") == "closed")
@@ -1403,7 +1417,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
             "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
         },
-        "leads": {"hot": hot, "warm": 0, "cold": cold, "negative": negative, "closed": closed},
+        "leads": {"hot": hot, "warm": warm, "cold": cold, "negative": negative, "closed": closed},
         "recent_activities": activities[:15]
     }
 

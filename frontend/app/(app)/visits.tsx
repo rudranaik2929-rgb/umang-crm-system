@@ -6,6 +6,7 @@ import { api } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../../src/auth/AuthContext';
 
 const STATUS_COLOR: Record<string, string> = {
   scheduled: '#0284C7',
@@ -16,6 +17,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 export default function Visits() {
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [visits, setVisits] = useState<any[]>([]);
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -25,7 +27,12 @@ export default function Visits() {
   const load = useCallback(async () => {
     try {
       const [v, l] = await Promise.all([api.get('/visits'), api.get('/leads')]);
-      const visitData = v.data || [];
+      let visitData = v.data || [];
+      // Non-admin: only show visits for leads assigned to this employee
+      if (user?.role !== 'admin' && (user as any)?.acting_as_employee_id) {
+        const myLeadIds = new Set((l.data || []).filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id).map((x: any) => x.lead_id));
+        visitData = visitData.filter((x: any) => myLeadIds.has(x.lead_id));
+      }
       setVisits(visitData);
       // Filter out leads that already have an active visit (scheduled or rescheduled)
       const activeVisitLeadIds = new Set(
@@ -37,7 +44,7 @@ export default function Visits() {
         (l.data || []).filter((x: any) => x.status !== 'negative' && !activeVisitLeadIds.has(x.lead_id))
       );
     } finally { setLoading(false); }
-  }, []);
+  }, [user]);
 
   useEffect(() => { load(); }, [load]);
 

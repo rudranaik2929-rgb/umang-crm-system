@@ -6,6 +6,7 @@ import { api } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../../src/auth/AuthContext';
 
 const STAGE_PROGRESS: Record<string, number> = {
   documentation: 25,
@@ -19,6 +20,7 @@ const STATUS_COLOR: Record<string, string> = {
 
 export default function Loans() {
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [loans, setLoans] = useState<any[]>([]);
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,10 +30,16 @@ export default function Loans() {
   const load = useCallback(async () => {
     try {
       const [lo, l] = await Promise.all([api.get('/loans'), api.get('/leads')]);
-      setLoans(lo.data || []);
+      let loanData = lo.data || [];
+      // Non-admin: only show loans for leads assigned to this employee
+      if (user?.role !== 'admin' && (user as any)?.acting_as_employee_id) {
+        const myLeadIds = new Set((l.data || []).filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id).map((x: any) => x.lead_id));
+        loanData = loanData.filter((x: any) => myLeadIds.has(x.lead_id));
+      }
+      setLoans(loanData);
       setLeads((l.data || []).filter((x: any) => x.status !== 'negative'));
     } finally { setLoading(false); }
-  }, []);
+  }, [user]);
   useEffect(() => { load(); }, [load]);
 
   const advance = async (loan: any) => {

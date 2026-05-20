@@ -6,11 +6,13 @@ import { api } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
+import { useAuth } from '../../src/auth/AuthContext';
 
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };
 
 export default function Bookings() {
   const { colors } = useTheme();
+  const { user } = useAuth();
   const [bookings, setBookings] = useState<any[]>([]);
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -21,10 +23,16 @@ export default function Bookings() {
   const load = useCallback(async () => {
     try {
       const [b, l] = await Promise.all([api.get('/bookings'), api.get('/leads')]);
-      setBookings(b.data || []);
+      let bookingData = b.data || [];
+      // Non-admin: only show bookings for leads assigned to this employee
+      if (user?.role !== 'admin' && (user as any)?.acting_as_employee_id) {
+        const myLeadIds = new Set((l.data || []).filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id).map((x: any) => x.lead_id));
+        bookingData = bookingData.filter((x: any) => myLeadIds.has(x.lead_id));
+      }
+      setBookings(bookingData);
       setLeads((l.data || []).filter((x: any) => x.status !== 'negative'));
     } finally { setLoading(false); }
-  }, []);
+  }, [user]);
 
   useEffect(() => { load(); }, [load]);
 

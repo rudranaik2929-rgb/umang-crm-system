@@ -1,5 +1,6 @@
 export const STAGES = [
   { key: 'new', label: 'New Lead' },
+  { key: 'assigned', label: 'Assigned' },
   { key: 'positive', label: 'Positive' },
   { key: 'site_visit', label: 'Site Visit' },
   { key: 'booking', label: 'Booking' },
@@ -10,6 +11,7 @@ export const STAGES = [
 
 export const STAGE_COLORS: Record<string, string> = {
   new: '#0284C7',
+  assigned: '#8B5CF6',
   contacted: '#6366F1',
   positive: '#059669',
   site_visit: '#D4AF37',
