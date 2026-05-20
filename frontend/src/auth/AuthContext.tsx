@@ -74,6 +74,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // One-time cleanup: remove old localStorage tokens that cause cross-tab bleeding
+    try {
+      if (typeof window !== 'undefined') {
+        window.localStorage.removeItem('umang_session_token');
+        window.localStorage.removeItem('umang_acting_as_id');
+      }
+    } catch {}
     refresh();
     checkLocation();
   }, [refresh, checkLocation]);
