@@ -160,26 +160,71 @@ async def get_session_token(request: Request):
     if auth and auth.startswith("Bearer "): return auth[7:]
     return None
 
+# Hardcoded user registry — map user_id to their user object for cold-start recovery
+HARDCODED_USERS = {
+    "user_admin001": {
+        "user_id": "user_admin001", "email": "htshpatil13@gmail.com",
+        "name": "Umang Admin", "role": "admin", "created_at": "2026-01-01T00:00:00+00:00",
+    },
+    "user_mukesh001": {
+        "user_id": "user_mukesh001", "email": "mukesh@umang.com",
+        "name": "Mukesh Sharma", "role": "telecaller",
+        "employee_id": "emp_1b7760567ae6", "acting_as_employee_id": "emp_1b7760567ae6",
+        "created_at": "2026-01-01T00:00:00+00:00",
+    },
+    "user_manager001": {
+        "user_id": "user_manager001", "email": "rohitsingh241993@gmail.com",
+        "name": "Rohit Singh", "role": "manager", "created_at": "2026-01-01T00:00:00+00:00",
+    },
+}
+
 async def get_current_user(request: Request) -> User:
     token = await get_session_token(request)
     if not token: raise HTTPException(401, "Not authenticated")
     
-    # Try local fallback first
+    # 1. Check in-memory cache first (fastest)
     if token in LOCAL_SESSIONS:
         sess = LOCAL_SESSIONS[token]
         if datetime.fromisoformat(sess["expires_at"].replace("Z","+00:00")) <= now_utc():
+            del LOCAL_SESSIONS[token]
             raise HTTPException(401, "Session expired")
-        return User(**sess["user"])
+        u = dict(sess["user"])
+        # Apply X-Acting-As header override (per-request, not persisted)
+        act_as = request.headers.get("X-Acting-As")
+        if act_as:
+            u["acting_as_employee_id"] = act_as
+        return User(**u)
 
+    # 2. Look up session in Supabase
     rows = sb_select("sessions", {"session_token": f"eq.{token}", "select": "*"})
     if not rows: raise HTTPException(401, "Invalid session")
     sess = rows[0]
     exp = sess.get("expires_at", "")
     if exp and datetime.fromisoformat(exp.replace("Z","+00:00")) <= now_utc():
         raise HTTPException(401, "Session expired")
-    users = sb_select("users", {"user_id": f"eq.{sess['user_id']}", "select": "*"})
+    
+    uid = sess["user_id"]
+    
+    # 3. Try hardcoded users first (survives server restart)
+    if uid in HARDCODED_USERS:
+        u = dict(HARDCODED_USERS[uid])
+        # Re-cache locally for speed
+        LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
+        act_as = request.headers.get("X-Acting-As")
+        if act_as:
+            u["acting_as_employee_id"] = act_as
+        return User(**u)
+    
+    # 4. Look up in users table (real database users)
+    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "*"})
     if not users: raise HTTPException(401, "User not found")
-    return User(**users[0])
+    u = users[0]
+    # Cache for next time
+    LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
+    act_as = request.headers.get("X-Acting-As")
+    if act_as:
+        u["acting_as_employee_id"] = act_as
+    return User(**u)
 
 # ---- Auth Endpoints ----
 @api_router.post("/auth/session")
@@ -313,6 +358,7 @@ async def auth_logout(request: Request, response: Response):
     t = await get_session_token(request)
     if t:
         sb_delete("sessions", "session_token", t)
+        LOCAL_SESSIONS.pop(t, None)  # Clear in-memory cache
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
 
@@ -340,9 +386,12 @@ async def ping_location(request: Request, cu: User=Depends(get_current_user)):
 
 @api_router.post("/auth/act-as")
 async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
-    updated = sb_update("users", "user_id", cu.user_id, {"acting_as_employee_id": payload.employee_id})
-    if not updated: raise HTTPException(500, "Failed to update")
-    return User(**updated).model_dump(mode="json")
+    # act-as is per-device: the frontend stores the employee_id in localStorage
+    # and sends it as X-Acting-As header on every request.
+    # We just return the user with the acting_as field set — no global state mutation.
+    u = cu.model_dump(mode="json")
+    u["acting_as_employee_id"] = payload.employee_id
+    return u
 
 # ---- WhatsApp Service Layer (Interakt) ----
 class WhatsAppService:
