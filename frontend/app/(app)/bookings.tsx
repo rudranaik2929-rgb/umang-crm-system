@@ -7,6 +7,7 @@ import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
+import { canSeeRevenue } from '../../src/lib/constants';
 
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };
 
@@ -85,12 +86,15 @@ export default function Bookings() {
                       <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
                     </View>
                   </View>
+                  {canSeeRevenue(user?.role) && (
                   <View style={{ alignItems: 'flex-end' }}>
                     <Text style={[styles.bigVal, { color: colors.text }]}>₹{(b.booking_amount || 0).toLocaleString('en-IN')}</Text>
                     <Text style={[styles.cardSub, { color: colors.textMuted }]}>Booking amount</Text>
                   </View>
+                  )}
                 </View>
 
+                {canSeeRevenue(user?.role) && (
                 <View style={{ marginTop: 14 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{(b.token_received || 0).toLocaleString('en-IN')}</Text>
@@ -100,8 +104,10 @@ export default function Bookings() {
                     <View style={[styles.fill, { width: `${b.payment_progress}%`, backgroundColor: colors.positive }]} />
                   </View>
                 </View>
+                )}
 
-                {/* Brokerage Input & Percentage Calculation */}
+                {/* Brokerage Input & Percentage Calculation — hidden for manager */}
+                {canSeeRevenue(user?.role) && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12, flexWrap: 'wrap' }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE (₹)</Text>
@@ -130,6 +136,7 @@ export default function Bookings() {
                     </Text>
                   )}
                 </View>
+                )}
 
                 <View style={styles.actions}>
                   {/* 1. Login File */}
@@ -172,13 +179,15 @@ export default function Bookings() {
                   </>}
                 </Pressable>
 
-                {/* 7. Amt Recieved/Receipt */}
+                {/* 7. Amt Recieved/Receipt — hidden for manager */}
+                {canSeeRevenue(user?.role) && (
                 <Pressable testID={`booking-amt-${b.booking_id}`} onPress={() => update(b.booking_id, { token_received: b.token_received + (b.booking_amount * 0.1) }, 'amt')} style={[styles.act, { borderColor: '#10B98160', backgroundColor: '#10B98110' }]}>
                   {busy === `${b.booking_id}-amt` ? <ActivityIndicator size="small" color="#10B981" /> : <>
                     <Ionicons name="wallet-outline" size={13} color={'#10B981'} />
                     <Text style={{ color: '#10B981', fontSize: 11, fontWeight: '600' }}>Amt Recieved / Receipt</Text>
                   </>}
                 </Pressable>
+                )}
 
                 {/* 2. Cancellation */}
                 <Pressable testID={`booking-cancel-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'cancellation' }, 'cancel')} style={[styles.act, { borderColor: colors.negative + '60', backgroundColor: colors.negative + '10' }]}>

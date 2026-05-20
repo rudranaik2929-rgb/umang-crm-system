@@ -7,6 +7,7 @@ import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
+import { canSeeRevenue } from '../../src/lib/constants';
 
 const STAGE_PROGRESS: Record<string, number> = {
   documentation: 25,
@@ -89,7 +90,7 @@ export default function Loans() {
                     </View>
                     <View style={{ flex: 1 }}>
                       <Text style={[styles.cardTitle, { color: colors.text }]}>{lo.lead_name}</Text>
-                      <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Loan source pending'}  ·  ₹{(lo.amount || 0).toLocaleString('en-IN')}</Text>
+                      <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Loan source pending'}{canSeeRevenue(user?.role) ? `  ·  ₹${(lo.amount || 0).toLocaleString('en-IN')}` : ''}</Text>
                       <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
                         <Badge text={(lo.application_status || 'pending').toUpperCase()} color={STATUS_COLOR[lo.application_status] || colors.primary} />
                         <Badge text={(lo.bank_stage || 'setup').toUpperCase()} color={colors.info} />

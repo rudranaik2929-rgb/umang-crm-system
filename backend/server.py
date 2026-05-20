@@ -53,7 +53,7 @@ app.add_middleware(
 api_router = APIRouter(prefix="/api")
 
 STAGES = ["new","assigned","positive","site_visit","booking","loan","registration","closed"]
-ROLES = ["admin","telecaller","site_visit","booking","loan","marketing"]
+ROLES = ["admin","manager","telecaller","site_visit","booking","loan","marketing"]
 
 # ---- Integration Config (from .env) ----
 INTERAKT_API_KEY = os.environ.get("INTERAKT_API_KEY", "")
@@ -225,6 +225,31 @@ async def auth_session(request: Request, response: Response):
             "role": "telecaller",
             "employee_id": "emp_1b7760567ae6",
             "acting_as_employee_id": "emp_1b7760567ae6",
+            "created_at": now_utc().isoformat(),
+        }
+        token = gen_id("sess")
+        expires = (now_utc() + timedelta(days=7)).isoformat()
+        LOCAL_SESSIONS[token] = {"user": u, "expires_at": expires}
+        sb_insert("sessions", {
+            "session_token": token,
+            "user_id": u["user_id"],
+            "created_at": now_utc().isoformat(),
+            "expires_at": expires,
+        })
+        response.set_cookie(
+            key="session_token", value=token, 
+            max_age=604800, httponly=True, 
+            samesite="none", path="/", secure=True
+        )
+        return {"user": u, "session_token": token}
+
+    # Hardcoded manager: Rohit Singh
+    if email == "rohitsingh241993@gmail.com" and password == "umang@manager":
+        u = {
+            "user_id": "user_manager001",
+            "email": email,
+            "name": "Rohit Singh",
+            "role": "manager",
             "created_at": now_utc().isoformat(),
         }
         token = gen_id("sess")

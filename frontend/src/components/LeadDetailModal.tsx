@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { StageBadge, Badge } from './Badge';
-import { STAGES } from '../lib/constants';
+import { STAGES, isAdmin } from '../lib/constants';
 
 interface Props {
   leadId: string | null;
@@ -215,7 +215,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                   </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {userRole === 'admin' && (
+                  {isAdmin(userRole) && (
                     <Pressable
                       testID="lead-delete-btn"
                       onPress={() => setShowDeleteConfirm(true)}
@@ -305,7 +305,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                 </View>
 
                 {/* Assign to Employee — Admin only */}
-                {userRole === 'admin' && (
+                {isAdmin(userRole) && (
                   <View style={[styles.block, { borderColor: '#8B5CF6' + '40', backgroundColor: '#8B5CF6' + '08' }]}>
                     <Text style={[styles.blockTitle, { color: '#8B5CF6' }]}>ASSIGN TO EMPLOYEE</Text>
                     {lead.assigned_to ? (

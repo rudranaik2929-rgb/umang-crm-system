@@ -28,6 +28,7 @@ export const ROLES = [
   { key: 'site_visit', label: 'Site Visit Executive', dept: 'Site Visit Team' },
   { key: 'booking', label: 'Booking Team', dept: 'Booking Department' },
   { key: 'loan', label: 'Loan Officer', dept: 'Loan Department' },
+  { key: 'manager', label: 'Manager', dept: 'Management' },
   { key: 'marketing', label: 'Marketing Team', dept: 'Marketing Team' },
 ];
 
@@ -59,6 +60,7 @@ export const NAV_ITEMS = [
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
   admin: ['dashboard', 'my-dashboard', 'admin-analytics', 'pipeline', 'telecaller', 'visits', 'bookings', 'loans', 'tracking', 'employees', 'negative'],
+  manager: ['dashboard', 'my-dashboard', 'admin-analytics', 'pipeline', 'telecaller', 'visits', 'bookings', 'loans', 'tracking', 'employees', 'negative'],
   telecaller: ['dashboard', 'my-dashboard', 'telecaller', 'pipeline', 'negative'],
   site_visit: ['dashboard', 'my-dashboard', 'visits', 'pipeline'],
   booking: ['dashboard', 'my-dashboard', 'bookings', 'pipeline'],
@@ -73,6 +75,10 @@ export function visibleNavFor(role?: string | null) {
 }
 
 export function isAdmin(role?: string | null) {
+  return role === 'admin' || role === 'manager';
+}
+
+export function canSeeRevenue(role?: string | null) {
   return role === 'admin';
 }
 

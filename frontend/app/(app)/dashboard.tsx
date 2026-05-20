@@ -9,6 +9,7 @@ import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LineChart } from '../../src/components/LineChart';
+import { canSeeRevenue } from '../../src/lib/constants';
 
 const GOLD = '#D4A843';
 const GOLD_DIM = '#D4A84340';
@@ -124,12 +125,14 @@ export default function Dashboard() {
             </View>
           </View>
 
-          {/* Total Revenue */}
+          {/* Total Revenue — hidden for manager */}
+          {canSeeRevenue(user?.role) && (
           <View style={[s.card, { flex: 0.7, justifyContent: 'center' }]}>
             <Text style={[s.cardTitle, { fontSize: 11 }]}>Total Revenue</Text>
             <Text style={s.smallLabel}>This month</Text>
             <Text style={s.revenueValue}>₹{revenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
           </View>
+          )}
         </View>
 
         {/* ====== ROW 2: New Leads | Follow-ups | Site Visits ====== */}
