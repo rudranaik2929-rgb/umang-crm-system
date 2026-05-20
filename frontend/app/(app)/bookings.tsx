@@ -31,7 +31,7 @@ export default function Bookings() {
         bookingData = bookingData.filter((x: any) => myLeadIds.has(x.lead_id));
       }
       setBookings(bookingData);
-      setLeads((l.data || []).filter((x: any) => x.status !== 'negative'));
+      setLeads((l.data || []).filter((x: any) => x.status !== 'negative' && ['booking'].includes(x.stage)));
     } finally { setLoading(false); }
   }, [user]);
 

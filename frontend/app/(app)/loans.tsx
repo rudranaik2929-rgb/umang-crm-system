@@ -38,7 +38,7 @@ export default function Loans() {
         loanData = loanData.filter((x: any) => myLeadIds.has(x.lead_id));
       }
       setLoans(loanData);
-      setLeads((l.data || []).filter((x: any) => x.status !== 'negative'));
+      setLeads((l.data || []).filter((x: any) => x.status !== 'negative' && ['loan'].includes(x.stage)));
     } finally { setLoading(false); }
   }, [user]);
   useEffect(() => { load(); }, [load]);

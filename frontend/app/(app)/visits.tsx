@@ -41,7 +41,7 @@ export default function Visits() {
           .map((x: any) => x.lead_id)
       );
       setLeads(
-        (l.data || []).filter((x: any) => x.status !== 'negative' && !activeVisitLeadIds.has(x.lead_id))
+        (l.data || []).filter((x: any) => x.status !== 'negative' && !activeVisitLeadIds.has(x.lead_id) && ['positive', 'site_visit'].includes(x.stage))
       );
     } finally { setLoading(false); }
   }, [user]);
