@@ -12,10 +12,16 @@ export const api = axios.create({
 const TOKEN_KEY = 'umang_session_token';
 const ACT_AS_KEY = 'umang_acting_as_id';
 
+// sessionStorage = per-tab (each tab keeps its own login)
+// localStorage   = fallback for new tabs (auto-login with last used account)
+// This ensures: Tab1=Admin, Tab2=Manager → refresh either tab → stays correct
+
 async function getToken(): Promise<string | null> {
     try {
           if (Platform.OS === 'web' && typeof window !== 'undefined') {
-                  return window.localStorage.getItem(TOKEN_KEY);
+                  // Per-tab first, then fallback to shared
+                  return window.sessionStorage.getItem(TOKEN_KEY)
+                      || window.localStorage.getItem(TOKEN_KEY);
           }
           return await AsyncStorage.getItem(TOKEN_KEY);
     } catch {
@@ -26,7 +32,8 @@ async function getToken(): Promise<string | null> {
 async function getActAsId(): Promise<string | null> {
     try {
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            return window.localStorage.getItem(ACT_AS_KEY);
+            return window.sessionStorage.getItem(ACT_AS_KEY)
+                || window.localStorage.getItem(ACT_AS_KEY);
         }
         return await AsyncStorage.getItem(ACT_AS_KEY);
     } catch { return null; }
@@ -35,8 +42,14 @@ async function getActAsId(): Promise<string | null> {
 export async function setToken(t: string | null) {
     try {
           if (Platform.OS === 'web' && typeof window !== 'undefined') {
-                  if (t) window.localStorage.setItem(TOKEN_KEY, t);
-                  else window.localStorage.removeItem(TOKEN_KEY);
+                  if (t) {
+                      // Save to BOTH: sessionStorage (this tab) + localStorage (new tabs)
+                      window.sessionStorage.setItem(TOKEN_KEY, t);
+                      window.localStorage.setItem(TOKEN_KEY, t);
+                  } else {
+                      window.sessionStorage.removeItem(TOKEN_KEY);
+                      window.localStorage.removeItem(TOKEN_KEY);
+                  }
                   return;
           }
           if (t) await AsyncStorage.setItem(TOKEN_KEY, t);
@@ -47,8 +60,13 @@ export async function setToken(t: string | null) {
 export async function setActAsId(id: string | null) {
     try {
         if (Platform.OS === 'web' && typeof window !== 'undefined') {
-            if (id) window.localStorage.setItem(ACT_AS_KEY, id);
-            else window.localStorage.removeItem(ACT_AS_KEY);
+            if (id) {
+                window.sessionStorage.setItem(ACT_AS_KEY, id);
+                window.localStorage.setItem(ACT_AS_KEY, id);
+            } else {
+                window.sessionStorage.removeItem(ACT_AS_KEY);
+                window.localStorage.removeItem(ACT_AS_KEY);
+            }
             return;
         }
         if (id) await AsyncStorage.setItem(ACT_AS_KEY, id);
