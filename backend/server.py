@@ -216,6 +216,33 @@ async def auth_session(request: Request, response: Response):
         )
         return {"user": u, "session_token": token}
 
+    # Hardcoded sample employee: Mukesh Sharma (telecaller)
+    if email == "mukesh@umang.com" and password == "mukesh@123":
+        u = {
+            "user_id": "user_mukesh001",
+            "email": email,
+            "name": "Mukesh Sharma",
+            "role": "telecaller",
+            "employee_id": "emp_1b7760567ae6",
+            "acting_as_employee_id": "emp_1b7760567ae6",
+            "created_at": now_utc().isoformat(),
+        }
+        token = gen_id("sess")
+        expires = (now_utc() + timedelta(days=7)).isoformat()
+        LOCAL_SESSIONS[token] = {"user": u, "expires_at": expires}
+        sb_insert("sessions", {
+            "session_token": token,
+            "user_id": u["user_id"],
+            "created_at": now_utc().isoformat(),
+            "expires_at": expires,
+        })
+        response.set_cookie(
+            key="session_token", value=token, 
+            max_age=604800, httponly=True, 
+            samesite="none", path="/", secure=True
+        )
+        return {"user": u, "session_token": token}
+
     # Alias mapping: allow shorthand "umang@admin" to resolve to the real admin email
     EMAIL_ALIASES = {
         "umang@admin": "htshpatil13@gmail.com",
