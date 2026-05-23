@@ -5,7 +5,7 @@ import { ThemeProvider, useTheme } from '../src/theme/ThemeContext';
 import { AuthProvider, useAuth } from '../src/auth/AuthContext';
 import { StatusBar } from 'expo-status-bar';
 
-function useWebPrivacyShield(user: any, themeName: string) {
+function useWebPrivacyShield() {
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return;
 
@@ -35,60 +35,27 @@ function useWebPrivacyShield(user: any, themeName: string) {
     `;
     document.head.appendChild(style);
 
-    // 2. Setup dynamic watermark (Denser and Highly Visible)
-    let watermarkOverlay: HTMLDivElement | null = null;
-    let watermarkUrl = '';
-    if (user) {
-      const email = user.email || 'confidential';
-      const role = user.role || 'Staff';
-      const formattedDate = new Date().toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-      const watermarkText = `Umang CRM — CONFIDENTIAL — ${email} (${role}) — ${formattedDate}`;
-      
-      // Increased opacity from 0.045 to 0.085 for extremely clear visibility
-      const fillColor = themeName === 'dark' ? 'rgba(255, 255, 255, 0.085)' : 'rgba(0, 0, 0, 0.085)';
-      
-      // Reduced canvas dimensions from 400x300 to 300x200 to repeat the pattern much more densely across the screen
-      const svgString = `
-        <svg xmlns="http://www.w3.org/2000/svg" width="300" height="200" viewBox="0 0 300 200">
-          <text x="50%" y="50%" fill="${fillColor}" font-size="11" font-family="sans-serif" font-weight="600" text-anchor="middle" transform="rotate(-28 150 100)">
-            ${watermarkText}
-          </text>
-        </svg>
-      `;
-      const encodedSvg = encodeURIComponent(svgString);
-      watermarkUrl = `data:image/svg+xml;utf8,${encodedSvg}`;
+    // Remove the old web background watermark if a previous build already added it.
+    document.getElementById('privacy-shield-watermark')?.remove();
 
-      watermarkOverlay = document.createElement('div');
-      watermarkOverlay.id = 'privacy-shield-watermark';
-      watermarkOverlay.style.position = 'fixed';
-      watermarkOverlay.style.top = '0';
-      watermarkOverlay.style.left = '0';
-      watermarkOverlay.style.width = '100vw';
-      watermarkOverlay.style.height = '100vh';
-      watermarkOverlay.style.pointerEvents = 'none';
-      watermarkOverlay.style.zIndex = '99999';
-      watermarkOverlay.style.backgroundImage = `url("${watermarkUrl}")`;
-      document.body.appendChild(watermarkOverlay);
-    }
-
-    // 3. Prevent right-click context menu
+    // 2. Prevent right-click context menu
     const handleContextMenu = (e: MouseEvent) => {
       e.preventDefault();
       alert("🔒 PRIVACY SHIELD: Right-click context menu is disabled for security.");
     };
 
-    // 4. Prevent dragging content
+    // 3. Prevent dragging content
     const handleDrag = (e: DragEvent) => {
       e.preventDefault();
     };
 
-    // 5. Prevent copying text
+    // 4. Prevent copying text
     const handleCopy = (e: ClipboardEvent) => {
       e.preventDefault();
       alert("🔒 PRIVACY SHIELD: Copying CRM data is disabled for security.");
     };
 
-    // 6. Intercept key combinations (Print, DevTools, PrintScreen)
+    // 5. Intercept key combinations (Print, DevTools, PrintScreen)
     const handleKeyDown = (e: KeyboardEvent) => {
       // Block F12 and Ctrl+Shift+I / Cmd+Opt+I (Developer Tools)
       if (
@@ -124,7 +91,7 @@ function useWebPrivacyShield(user: any, themeName: string) {
       }
     };
 
-    // 7. Blur screen on tab/window unfocus (Switcher Security Mask)
+    // 6. Blur screen on tab/window unfocus (Switcher Security Mask)
     const handleBlur = () => {
       const existing = document.getElementById('privacy-shield-blur-mask');
       if (existing) return;
@@ -178,36 +145,12 @@ function useWebPrivacyShield(user: any, themeName: string) {
       if (mask) mask.remove();
     };
 
-    // 8. MutationObserver to prevent tampering with security structures via DevTools
+    // 7. MutationObserver to prevent tampering with security structures via DevTools
     const observer = new MutationObserver(() => {
       if (!document.getElementById('privacy-shield-styles')) {
         document.head.appendChild(style);
       }
-      if (watermarkOverlay && !document.getElementById('privacy-shield-watermark')) {
-        document.body.appendChild(watermarkOverlay);
-      }
-      if (watermarkOverlay) {
-        const expectedBg = `url("${watermarkUrl}")`;
-        if (
-          watermarkOverlay.style.display === 'none' ||
-          watermarkOverlay.style.visibility === 'hidden' ||
-          parseFloat(watermarkOverlay.style.opacity || '1') < 0.2 ||
-          watermarkOverlay.style.backgroundImage !== expectedBg ||
-          watermarkOverlay.style.zIndex !== '99999'
-        ) {
-          watermarkOverlay.style.display = 'block';
-          watermarkOverlay.style.visibility = 'visible';
-          watermarkOverlay.style.opacity = '1';
-          watermarkOverlay.style.position = 'fixed';
-          watermarkOverlay.style.top = '0';
-          watermarkOverlay.style.left = '0';
-          watermarkOverlay.style.width = '100vw';
-          watermarkOverlay.style.height = '100vh';
-          watermarkOverlay.style.pointerEvents = 'none';
-          watermarkOverlay.style.zIndex = '99999';
-          watermarkOverlay.style.backgroundImage = expectedBg;
-        }
-      }
+      document.getElementById('privacy-shield-watermark')?.remove();
     });
 
     observer.observe(document.body, { childList: true, subtree: true, attributes: true });
@@ -222,7 +165,7 @@ function useWebPrivacyShield(user: any, themeName: string) {
     return () => {
       observer.disconnect();
       style.remove();
-      if (watermarkOverlay) watermarkOverlay.remove();
+      document.getElementById('privacy-shield-watermark')?.remove();
       document.removeEventListener('contextmenu', handleContextMenu);
       document.removeEventListener('dragstart', handleDrag);
       document.removeEventListener('copy', handleCopy);
@@ -230,15 +173,15 @@ function useWebPrivacyShield(user: any, themeName: string) {
       window.removeEventListener('blur', handleBlur);
       window.removeEventListener('focus', handleFocus);
     };
-  }, [user, themeName]);
+  }, []);
 }
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
-  const { exchangeSession, refresh, user } = useAuth();
+  const { exchangeSession, refresh } = useAuth();
   const [bootstrapping, setBootstrapping] = useState(true);
-  const { colors, themeName } = useTheme();
+  const { colors } = useTheme();
 
-  useWebPrivacyShield(user, themeName);
+  useWebPrivacyShield();
 
   useEffect(() => {
     (async () => {
@@ -288,4 +231,3 @@ export default function RootLayout() {
     </ThemeProvider>
   );
 }
-

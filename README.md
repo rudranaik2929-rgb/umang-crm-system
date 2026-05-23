@@ -2,35 +2,36 @@
 
 Premium real-estate workflow management dashboard. Lead Capture → Telecaller → Site Visit → Booking → Loan → Closed.
 
-📖 **Full system documentation**: see [`PROJECT_DOCS.md`](./PROJECT_DOCS.md)
+Start with [`UNDERSTAND.md`](./UNDERSTAND.md) for the handover map, folder guide, and where to add new code.
+Full older system notes are in [`docs/PROJECT_DOCS.md`](./docs/PROJECT_DOCS.md).
 
 ## Quick start (local)
 
 ```bash
-# Terminal 1 — MongoDB
-mongod --dbpath ./data/db
-
-# Terminal 2 — Backend (FastAPI)
+# Terminal 1 — Backend (FastAPI)
 cd backend
 pip install -r requirements.txt
-# backend/.env must contain: MONGO_URL=mongodb://localhost:27017  DB_NAME=umang_crm
+# backend/.env should contain SUPABASE_URL, SUPABASE_KEY, OPENAI_API_KEY, INTERAKT_API_KEY as needed.
 uvicorn server:app --host 0.0.0.0 --port 8001 --reload
 
-# Terminal 3 — Frontend (Expo Web)
+# Terminal 2 — Frontend (Expo Web)
 cd frontend
-yarn install
+npm install
 # frontend/.env must contain: EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
-yarn start          # press 'w' for web
+npm run web
 ```
 
-Open `http://localhost:3000` → sign in with Google → first user becomes admin.
+Open the Expo web URL shown in the terminal.
 
 ## What's inside
-- **Backend**: `backend/server.py` (FastAPI + MongoDB + Local Auth)
+- **Backend entry**: `backend/server.py` compatibility wrapper.
+- **Backend app**: `backend/app/main.py` (FastAPI + Supabase/PostgREST + Local Auth)
 - **Frontend**: `frontend/app/` (Expo Router screens) + `frontend/src/` (theme, auth, components)
+- **Docs**: `UNDERSTAND.md` first, then `docs/`
+- **Scripts**: `scripts/demo/` for demo data and `scripts/scratch/` for old debugging utilities
 - **Admin PIN**: `9999` (gates the Admin Analytics page; configurable in `frontend/app/(app)/admin-analytics.tsx`)
-- **Roles**: admin · telecaller · site_visit · booking · loan · marketing
+- **Roles**: admin · manager · telecaller · site_visit · booking · loan · marketing
 
-See [`PROJECT_DOCS.md`](./PROJECT_DOCS.md) for the full architecture, API, models, workflow handoff matrix, and scoring formulas.
+See [`UNDERSTAND.md`](./UNDERSTAND.md) for the current folder structure and code ownership guide.
 
 <!-- Rebuild trigger: 2026-05-14T22:35:00Z -->

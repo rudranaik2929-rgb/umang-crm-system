@@ -7,6 +7,7 @@ import { api } from '../../src/lib/api';
 import { STAGES, STAGE_COLORS, stageLabel } from '../../src/lib/constants';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
+import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function Pipeline() {
@@ -31,6 +32,18 @@ export default function Pipeline() {
     acc[s.key] = leads.filter((l) => l.stage === s.key);
     return acc;
   }, {});
+
+  const deleteLead = async (lead: any) => {
+    const ok = typeof window === 'undefined' || window.confirm(`Delete lead ${lead.name}?`);
+    if (!ok) return;
+    await api.delete(`/leads/${lead.lead_id}`);
+    await load();
+  };
+
+  const toggleStar = async (lead: any) => {
+    await api.patch(`/leads/${lead.lead_id}`, { starred: !lead.starred });
+    await load();
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -60,7 +73,15 @@ export default function Pipeline() {
               </View>
               <ScrollView style={{ flex: 1 }} contentContainerStyle={{ gap: 10, paddingBottom: 10 }}>
                 {grouped[s.key].map((l) => (
-                  <KanbanCard key={l.lead_id} lead={l} colors={colors} onPress={() => setOpenLead(l.lead_id)} />
+                  <KanbanCard
+                    key={l.lead_id}
+                    lead={l}
+                    colors={colors}
+                    onPress={() => setOpenLead(l.lead_id)}
+                    onEdit={() => setOpenLead(l.lead_id)}
+                    onToggleStar={() => toggleStar(l)}
+                    onDelete={() => deleteLead(l)}
+                  />
                 ))}
                 {grouped[s.key].length === 0 && (
                   <Text style={{ color: colors.textMuted, fontSize: 11, padding: 14, textAlign: 'center' }}>
@@ -83,7 +104,7 @@ export default function Pipeline() {
   );
 }
 
-function KanbanCard({ lead, colors, onPress }: any) {
+function KanbanCard({ lead, colors, onPress, onEdit, onToggleStar, onDelete }: any) {
   const [hovered, setHovered] = useState(false);
   const pulseAnim = React.useRef(new Animated.Value(0)).current;
 
@@ -125,6 +146,7 @@ function KanbanCard({ lead, colors, onPress }: any) {
       >
         <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' }}>
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+            {lead.starred ? <Ionicons name="star" size={13} color={colors.warning} /> : null}
             <Text style={[styles.cardName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
             {isHot && (
               <Animated.View style={[
@@ -140,13 +162,14 @@ function KanbanCard({ lead, colors, onPress }: any) {
               </Animated.View>
             )}
           </View>
-          {hovered && (
-            <View style={{ flexDirection: 'row', gap: 6 }}>
-               <Pressable style={styles.miniBtn} onPress={() => {}}>
-                 <Ionicons name="call-outline" size={10} color={colors.primary} />
-               </Pressable>
-            </View>
-          )}
+          <CardActionMenu
+            colors={colors}
+            isStarred={!!lead.starred}
+            onEdit={onEdit}
+            onToggleStar={onToggleStar}
+            onDelete={onDelete}
+            testIDPrefix={`lead-${lead.lead_id}`}
+          />
         </View>
         <View style={styles.cardMeta}>
           <Ionicons name="call-outline" size={11} color={colors.textMuted} />
@@ -183,6 +206,5 @@ const styles = StyleSheet.create({
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   cardMetaText: { fontSize: 11 },
   budget: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
-  miniBtn: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#f1f5f910', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#e2e8f030' },
   hotBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
 });

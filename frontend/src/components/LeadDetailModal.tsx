@@ -417,7 +417,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                             label="Cold Lead" 
                             sub="Interested but not urgent"
                             onPress={async () => {
-                              await updateLead({ stage: 'positive', status: 'active' }, 'cold');
+                              await updateLead({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold');
                               onClose();
                             }}
                             busy={busy === 'cold'}
@@ -427,7 +427,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                             label="Hot Lead 🔥" 
                             sub="Active with Urgent requirement"
                             onPress={async () => {
-                              await updateLead({ stage: 'positive', status: 'active' }, 'hot');
+                              await updateLead({ stage: 'positive', status: 'active', priority: 'hot' }, 'hot');
                               onClose();
                             }}
                             busy={busy === 'hot'}
@@ -452,7 +452,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                           <SubActionBtn 
                             label="Low Budget" 
                             onPress={async () => {
-                              await updateLead({ status: 'negative' }, 'low_budget');
+                              await updateLead({ status: 'negative', priority: 'low_budget' }, 'low_budget');
                               onClose();
                             }}
                             busy={busy === 'low_budget'}
@@ -461,7 +461,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                           <SubActionBtn 
                             label="Other Location" 
                             onPress={async () => {
-                              await updateLead({ status: 'negative' }, 'other_loc');
+                              await updateLead({ status: 'negative', priority: 'other_location' }, 'other_loc');
                               onClose();
                             }}
                             busy={busy === 'other_loc'}
@@ -470,7 +470,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                           <SubActionBtn 
                             label="Already Purchased" 
                             onPress={async () => {
-                              await updateLead({ status: 'negative' }, 'purchased');
+                              await updateLead({ status: 'negative', priority: 'already_purchased' }, 'purchased');
                               onClose();
                             }}
                             busy={busy === 'purchased'}

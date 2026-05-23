@@ -5,11 +5,26 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { api } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
+import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
 import { canSeeRevenue } from '../../src/lib/constants';
 
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };
+const BOOKING_TASKS = [
+  { key: 'login_file', label: 'Login File', status: 'login file', icon: 'folder-open-outline', color: '#0284C7' },
+  { key: 'sanctioned', label: 'Sanctioned', status: 'sanctioned', icon: 'checkmark-done-outline', color: '#111827' },
+  { key: 'registration', label: 'Registration', status: 'registration', icon: 'document-text-outline', color: '#7C3AED' },
+  { key: 'disbursement', label: 'Disbursement', status: 'disbursement', icon: 'cash-outline', color: '#059669' },
+  { key: 'bill_submitted', label: 'Bill Submitted', status: 'bill submitted', icon: 'receipt-outline', color: '#D97706' },
+  { key: 'amount_received', label: 'Amt Received / Receipt', status: 'amount received', icon: 'wallet-outline', color: '#10B981' },
+];
+
+function completedTasksFor(booking: any): string[] {
+  if (Array.isArray(booking.completed_tasks)) return booking.completed_tasks;
+  const fromStatus = BOOKING_TASKS.find((task) => task.status === booking.status);
+  return fromStatus ? [fromStatus.key] : [];
+}
 
 export default function Bookings() {
   const { colors } = useTheme();
@@ -18,6 +33,7 @@ export default function Bookings() {
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingBooking, setEditingBooking] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [localBrokerage, setLocalBrokerage] = useState<Record<string, string>>({});
 
@@ -41,6 +57,42 @@ export default function Bookings() {
     setBusy(`${id}-${key}`);
     try { await api.patch(`/bookings/${id}`, payload); await load(); }
     finally { setBusy(null); }
+  };
+
+  const completeTask = async (booking: any, task: typeof BOOKING_TASKS[number]) => {
+    const current = completedTasksFor(booking);
+    if (current.includes(task.key)) return;
+    const next = Array.from(new Set([...current, task.key]));
+    const payload: any = { completed_tasks: next, status: task.status };
+    if (task.key === 'amount_received') {
+      const bookingAmount = Number(booking.booking_amount || 0);
+      payload.token_received = bookingAmount > 0 ? Math.max(Number(booking.token_received || 0), bookingAmount) : Number(booking.token_received || 0);
+      payload.payment_status = 'received';
+      payload.payment_progress = 100;
+    }
+    if ('token_received' in payload || booking.booking_amount) {
+      const amount = Number(booking.booking_amount || 0);
+      const token = Number(payload.token_received ?? booking.token_received ?? 0);
+      if (task.key !== 'amount_received') {
+        payload.payment_progress = amount ? Math.min(100, Math.round((token / amount) * 100)) : 0;
+      }
+    }
+    setBookings((items) => items.map((item) => (
+      item.booking_id === booking.booking_id ? { ...item, ...payload } : item
+    )));
+    await update(booking.booking_id, payload, task.key);
+  };
+
+  const toggleStar = async (booking: any) => {
+    await api.patch(`/bookings/${booking.booking_id}`, { starred: !booking.starred });
+    await load();
+  };
+
+  const deleteBooking = async (booking: any) => {
+    const ok = typeof window === 'undefined' || window.confirm(`Delete booking for ${booking.lead_name || booking.property_name}?`);
+    if (!ok) return;
+    await api.delete(`/bookings/${booking.booking_id}`);
+    await load();
   };
 
   return (
@@ -71,6 +123,10 @@ export default function Bookings() {
             const realAgreementStatus = rawAgreement.split(' | ')[0] || 'pending';
             const brokerageMatch = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
             const brokerageAmount = brokerageMatch ? parseFloat(brokerageMatch[1]) : 0;
+            const completed = completedTasksFor(b);
+            const completedSet = new Set(completed);
+            const completedLabels = BOOKING_TASKS.filter((task) => completedSet.has(task.key));
+            const paymentProgress = completedSet.has('amount_received') ? 100 : Number(b.payment_progress || 0);
 
             return (
               <View key={b.booking_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -79,7 +135,10 @@ export default function Bookings() {
                     <Ionicons name="document-text" size={18} color={colors.warning} />
                   </View>
                   <View style={{ flex: 1 }}>
-                    <Text style={[styles.cardTitle, { color: colors.text }]}>{b.property_name}</Text>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                      {b.starred ? <Ionicons name="star" size={14} color={colors.warning} /> : null}
+                      <Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>{b.property_name}</Text>
+                    </View>
                     <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
                     <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                       <Badge text={`AGREEMENT: ${realAgreementStatus.toUpperCase()}`} color={AGREEMENT_COLOR[realAgreementStatus] || colors.info} />
@@ -92,16 +151,43 @@ export default function Bookings() {
                     <Text style={[styles.cardSub, { color: colors.textMuted }]}>Booking amount</Text>
                   </View>
                   )}
+                  <CardActionMenu
+                    colors={colors}
+                    isStarred={!!b.starred}
+                    onEdit={() => setEditingBooking(b)}
+                    onToggleStar={() => toggleStar(b)}
+                    onDelete={() => deleteBooking(b)}
+                    testIDPrefix={`booking-${b.booking_id}`}
+                  />
+                </View>
+
+                <View style={[styles.checkSummary, { backgroundColor: colors.surfaceAlt, borderColor: colors.borderSoft }]}>
+                  <View style={[styles.completedBadge, { backgroundColor: colors.positive + '16', borderColor: colors.positive + '45' }]}>
+                    <Ionicons name="checkmark-circle" size={14} color={colors.positive} />
+                    <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '800' }}>
+                      {completed.length}/{BOOKING_TASKS.length} Completed
+                    </Text>
+                  </View>
+                  <View style={styles.completedChips}>
+                    {completedLabels.length === 0 ? (
+                      <Text style={{ color: colors.textMuted, fontSize: 11 }}>No checklist task completed yet</Text>
+                    ) : completedLabels.map((task) => (
+                      <View key={task.key} style={[styles.doneChip, { borderColor: task.color + '55', backgroundColor: task.color + '10' }]}>
+                        <Ionicons name="checkmark" size={11} color={task.color} />
+                        <Text style={{ color: task.color, fontSize: 10, fontWeight: '800' }}>{task.label}</Text>
+                      </View>
+                    ))}
+                  </View>
                 </View>
 
                 {canSeeRevenue(user?.role) && (
                 <View style={{ marginTop: 14 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{(b.token_received || 0).toLocaleString('en-IN')}</Text>
-                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{b.payment_progress || 0}%</Text>
+                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{paymentProgress}%</Text>
                   </View>
                   <View style={[styles.track, { backgroundColor: colors.surfaceAlt }]}>
-                    <View style={[styles.fill, { width: `${b.payment_progress}%`, backgroundColor: colors.positive }]} />
+                    <View style={[styles.fill, { width: `${paymentProgress}%`, backgroundColor: colors.positive }]} />
                   </View>
                 </View>
                 )}
@@ -139,55 +225,33 @@ export default function Bookings() {
                 )}
 
                 <View style={styles.actions}>
-                  {/* 1. Login File */}
-                <Pressable testID={`booking-login-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'login file' }, 'login')} style={[styles.act, { borderColor: colors.info + '60', backgroundColor: colors.info + '10' }]}>
-                  {busy === `${b.booking_id}-login` ? <ActivityIndicator size="small" color={colors.info} /> : <>
-                    <Ionicons name="folder-open-outline" size={13} color={colors.info} />
-                    <Text style={{ color: colors.info, fontSize: 11, fontWeight: '600' }}>Login File</Text>
-                  </>}
-                </Pressable>
-
-                {/* 3. Sanctioned */}
-                <Pressable testID={`booking-sanc-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'sanctioned' }, 'sanc')} style={[styles.act, { borderColor: colors.primary + '60', backgroundColor: colors.primary + '10' }]}>
-                  {busy === `${b.booking_id}-sanc` ? <ActivityIndicator size="small" color={colors.primary} /> : <>
-                    <Ionicons name="checkmark-done-outline" size={13} color={colors.primary} />
-                    <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>Sanctioned</Text>
-                  </>}
-                </Pressable>
-
-                {/* 4. Registration */}
-                <Pressable testID={`booking-reg-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'registration' }, 'reg')} style={[styles.act, { borderColor: '#7C3AED60', backgroundColor: '#7C3AED10' }]}>
-                  {busy === `${b.booking_id}-reg` ? <ActivityIndicator size="small" color="#7C3AED" /> : <>
-                    <Ionicons name="document-text-outline" size={13} color={'#7C3AED'} />
-                    <Text style={{ color: '#7C3AED', fontSize: 11, fontWeight: '600' }}>Registration</Text>
-                  </>}
-                </Pressable>
-
-                {/* 5. Disbursement */}
-                <Pressable testID={`booking-disb-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'disbursement' }, 'disb')} style={[styles.act, { borderColor: colors.positive + '60', backgroundColor: colors.positive + '10' }]}>
-                  {busy === `${b.booking_id}-disb` ? <ActivityIndicator size="small" color={colors.positive} /> : <>
-                    <Ionicons name="cash-outline" size={13} color={colors.positive} />
-                    <Text style={{ color: colors.positive, fontSize: 11, fontWeight: '600' }}>Disbursement</Text>
-                  </>}
-                </Pressable>
-
-                {/* 6. Bill Submitted */}
-                <Pressable testID={`booking-bill-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'bill submitted' }, 'bill')} style={[styles.act, { borderColor: colors.warning + '60', backgroundColor: colors.warning + '10' }]}>
-                  {busy === `${b.booking_id}-bill` ? <ActivityIndicator size="small" color={colors.warning} /> : <>
-                    <Ionicons name="receipt-outline" size={13} color={colors.warning} />
-                    <Text style={{ color: colors.warning, fontSize: 11, fontWeight: '600' }}>Bill Submitted</Text>
-                  </>}
-                </Pressable>
-
-                {/* 7. Amt Recieved/Receipt — hidden for manager */}
-                {canSeeRevenue(user?.role) && (
-                <Pressable testID={`booking-amt-${b.booking_id}`} onPress={() => update(b.booking_id, { token_received: b.token_received + (b.booking_amount * 0.1) }, 'amt')} style={[styles.act, { borderColor: '#10B98160', backgroundColor: '#10B98110' }]}>
-                  {busy === `${b.booking_id}-amt` ? <ActivityIndicator size="small" color="#10B981" /> : <>
-                    <Ionicons name="wallet-outline" size={13} color={'#10B981'} />
-                    <Text style={{ color: '#10B981', fontSize: 11, fontWeight: '600' }}>Amt Recieved / Receipt</Text>
-                  </>}
-                </Pressable>
-                )}
+                {BOOKING_TASKS.map((task) => {
+                  if (task.key === 'amount_received' && !canSeeRevenue(user?.role)) return null;
+                  const done = completedSet.has(task.key);
+                  return (
+                    <Pressable
+                      key={task.key}
+                      testID={`booking-task-${task.key}-${b.booking_id}`}
+                      onPress={() => completeTask(b, task)}
+                      disabled={done || busy !== null}
+                      style={[
+                        styles.act,
+                        {
+                          borderColor: done ? colors.positive + '70' : task.color + '60',
+                          backgroundColor: done ? colors.positive + '14' : task.color + '10',
+                          opacity: busy !== null && !done ? 0.65 : 1,
+                        },
+                      ]}
+                    >
+                      {busy === `${b.booking_id}-${task.key}` ? <ActivityIndicator size="small" color={task.color} /> : <>
+                        <Ionicons name={done ? 'checkmark-circle' : task.icon as any} size={13} color={done ? colors.positive : task.color} />
+                        <Text style={{ color: done ? colors.positive : task.color, fontSize: 11, fontWeight: '700' }}>
+                          {done ? 'Completed' : task.label}
+                        </Text>
+                      </>}
+                    </Pressable>
+                  );
+                })}
 
                 {/* 2. Cancellation */}
                 <Pressable testID={`booking-cancel-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'cancellation' }, 'cancel')} style={[styles.act, { borderColor: colors.negative + '60', backgroundColor: colors.negative + '10' }]}>
@@ -207,6 +271,13 @@ export default function Bookings() {
         onClose={() => setShowCreate(false)}
         onCreated={async () => { setShowCreate(false); await load(); }}
         leads={leads}
+        colors={colors}
+      />
+      <EditBookingModal
+        booking={editingBooking}
+        visible={!!editingBooking}
+        onClose={() => setEditingBooking(null)}
+        onSaved={async () => { setEditingBooking(null); await load(); }}
         colors={colors}
       />
     </View>
@@ -279,6 +350,67 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
   );
 }
 
+function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
+  const [property, setProperty] = useState('');
+  const [amount, setAmount] = useState('');
+  const [token, setToken] = useState('');
+  const [status, setStatus] = useState('');
+  const [agreement, setAgreement] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!booking) return;
+    setProperty(booking.property_name || '');
+    setAmount(String(booking.booking_amount || 0));
+    setToken(String(booking.token_received || 0));
+    setStatus(booking.status || 'active');
+    setAgreement((booking.agreement_status || 'pending').split(' | ')[0]);
+  }, [booking]);
+
+  const submit = async () => {
+    if (!booking) return;
+    setBusy(true);
+    try {
+      await api.patch(`/bookings/${booking.booking_id}`, {
+        property_name: property,
+        booking_amount: parseFloat(amount) || 0,
+        token_received: parseFloat(token) || 0,
+        status,
+        agreement_status: agreement,
+      });
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable
+          onPress={(event: any) => event?.stopPropagation?.()}
+          style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        >
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Booking</Text>
+          <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
+          <FormField label="BOOKING AMOUNT (₹)" testID="edit-booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
+          <FormField label="TOKEN RECEIVED (₹)" testID="edit-booking-token" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
+          <FormField label="STATUS" testID="edit-booking-status" value={status} onChange={setStatus} colors={colors} />
+          <FormField label="AGREEMENT STATUS" testID="edit-booking-agreement" value={agreement} onChange={setAgreement} colors={colors} />
+          <Pressable
+            testID="edit-booking-submit"
+            onPress={submit}
+            disabled={busy}
+            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}
+          >
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Booking</Text>}
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 function FormField({ label, value, onChange, colors, keyboardType, testID, placeholder }: any) {
   return (
     <View>
@@ -303,6 +435,10 @@ const styles = StyleSheet.create({
   cardSub: { fontSize: 12, marginTop: 2 },
   iconBig: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
   bigVal: { fontSize: 20, fontWeight: '700' },
+  checkSummary: { marginTop: 14, borderRadius: 8, borderWidth: 1, padding: 10, gap: 8 },
+  completedBadge: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderRadius: 999, paddingHorizontal: 9, height: 26 },
+  completedChips: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  doneChip: { flexDirection: 'row', alignItems: 'center', gap: 4, borderWidth: 1, borderRadius: 999, paddingHorizontal: 8, height: 24 },
   track: { height: 8, borderRadius: 4, overflow: 'hidden' },
   fill: { height: '100%', borderRadius: 4 },
   actions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 14 },

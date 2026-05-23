@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, TextInput, Modal, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Modal, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
@@ -9,6 +9,8 @@ import { useRouter } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
 import { ImportLeadsModal } from './ImportLeadsModal';
 
+const ACCENT_OPTIONS: AccentColor[] = ['mono', 'sky', 'forest', 'lavender', 'sunset', 'rose'];
+
 interface Props {
   title: string;
   subtitle?: string;
@@ -16,7 +18,7 @@ interface Props {
 }
 
 export function TopBar({ title, subtitle, rightAction }: Props) {
-  const { colors, themeName, toggle, accentColor, setAccentColor } = useTheme();
+  const { colors, themeName, setThemeMode, accentColor, setAccentColor } = useTheme();
   const { user, logout, setRole, actAs } = useAuth();
   const [menuOpen, setMenuOpen] = useState(false);
   const [roleOpen, setRoleOpen] = useState(false);
@@ -87,7 +89,13 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         ) : null}
       </View>
 
-      <View style={styles.actions}>
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+        style={styles.actionsScroll}
+        contentContainerStyle={styles.actions}
+      >
         {rightAction}
 
         {isAdminOrOwner && (
@@ -152,9 +160,44 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
           </View>
         ) : null}
 
+        <View style={[styles.themeModeGroup, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+          <Pressable
+            onPress={() => { setThemeMode('dark'); setAccentColor('mono'); }}
+            testID="theme-mode-dark"
+            style={[
+              styles.themeModeBtn,
+              {
+                backgroundColor: themeName === 'dark' && accentColor === 'mono' ? '#111827' : 'transparent',
+                borderColor: themeName === 'dark' && accentColor === 'mono' ? '#111827' : 'transparent',
+              },
+            ]}
+          >
+            <View style={[styles.themeSwatch, { backgroundColor: '#111827', borderColor: '#111827' }]} />
+            <Text style={[styles.themeModeText, { color: themeName === 'dark' && accentColor === 'mono' ? '#FFFFFF' : colors.textSecondary }]}>
+              Dark
+            </Text>
+          </Pressable>
+          <Pressable
+            onPress={() => { setThemeMode('light'); setAccentColor('mono'); }}
+            testID="theme-mode-white"
+            style={[
+              styles.themeModeBtn,
+              {
+                backgroundColor: themeName === 'light' && accentColor === 'mono' ? '#FFFFFF' : 'transparent',
+                borderColor: themeName === 'light' && accentColor === 'mono' ? '#CBD5E1' : 'transparent',
+              },
+            ]}
+          >
+            <View style={[styles.themeSwatch, { backgroundColor: '#FFFFFF', borderColor: '#CBD5E1' }]} />
+            <Text style={[styles.themeModeText, { color: themeName === 'light' && accentColor === 'mono' ? '#111827' : colors.textSecondary }]}>
+              White
+            </Text>
+          </Pressable>
+        </View>
+
         {/* Accent color picker */}
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginRight: 6 }}>
-          {(['sky', 'forest', 'lavender', 'sunset', 'rose'] as AccentColor[]).map((acc) => {
+        <View style={[styles.accentRow, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+          {ACCENT_OPTIONS.map((acc) => {
             const isSelected = accentColor === acc;
             const dotColor = ACCENT_THEMES[acc][themeName].primary;
             return (
@@ -165,24 +208,22 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
                 style={[
                   styles.dotBtn,
                   {
-                    backgroundColor: dotColor,
+                    backgroundColor: acc === 'mono' ? 'transparent' : dotColor,
                     borderColor: isSelected ? colors.text : 'rgba(0,0,0,0.15)',
                     borderWidth: isSelected ? 2 : 1,
                   }
                 ]}
-              />
+              >
+                {acc === 'mono' ? (
+                  <>
+                    <View style={{ flex: 1, backgroundColor: '#FFFFFF' }} />
+                    <View style={{ flex: 1, backgroundColor: '#111827' }} />
+                  </>
+                ) : null}
+              </Pressable>
             );
           })}
         </View>
-
-        {/* Theme toggle */}
-        <Pressable
-          onPress={toggle}
-          testID="toggle-theme-btn"
-          style={[styles.iconBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
-        >
-          <Ionicons name={themeName === 'dark' ? 'sunny-outline' : 'moon-outline'} size={16} color={colors.text} />
-        </Pressable>
 
         {/* User menu */}
         <Pressable
@@ -192,12 +233,15 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         >
           <Ionicons name="person-circle-outline" size={20} color={colors.text} />
         </Pressable>
-      </View>
+      </ScrollView>
 
       {/* User menu modal */}
       <Modal transparent visible={menuOpen} animationType="fade" onRequestClose={() => setMenuOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setMenuOpen(false)}>
-          <View style={[styles.menu, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Pressable
+            onPress={(e: any) => e.stopPropagation?.()}
+            style={[styles.menu, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
             <Text style={[styles.menuTitle, { color: colors.text }]}>{user?.name}</Text>
             <Text style={[styles.menuSub, { color: colors.textMuted }]}>{user?.email}</Text>
             <View style={[styles.divider, { backgroundColor: colors.border }]} />
@@ -205,14 +249,17 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
               <Ionicons name="log-out-outline" size={16} color={colors.negative} />
               <Text style={{ color: colors.negative, fontWeight: '500' }}>Sign out</Text>
             </Pressable>
-          </View>
+          </Pressable>
         </Pressable>
       </Modal>
 
       {/* Act-as picker */}
       <Modal transparent visible={actAsOpen} animationType="fade" onRequestClose={() => setActAsOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setActAsOpen(false)}>
-          <Pressable style={[styles.roleMenu, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Pressable
+            onPress={(e: any) => e.stopPropagation?.()}
+            style={[styles.roleMenu, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
             <Text style={[styles.menuTitle, { color: colors.text, marginBottom: 4 }]}>Act on behalf of an employee</Text>
             <Text style={[styles.menuSub, { color: colors.textMuted, marginBottom: 12 }]}>
               Every action you take will be credited to that employee for performance tracking.
@@ -266,7 +313,10 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
       {/* Role chooser */}
       <Modal transparent visible={roleOpen} animationType="fade" onRequestClose={() => setRoleOpen(false)}>
         <Pressable style={styles.backdrop} onPress={() => setRoleOpen(false)}>
-          <Pressable style={[styles.roleMenu, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Pressable
+            onPress={(e: any) => e.stopPropagation?.()}
+            style={[styles.roleMenu, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
             <Text style={[styles.menuTitle, { color: colors.text, marginBottom: 4 }]}>Switch Role</Text>
             <Text style={[styles.menuSub, { color: colors.textMuted, marginBottom: 12 }]}>
               You can act as any department for this demo.
@@ -333,7 +383,8 @@ const styles = StyleSheet.create({
   },
   title: { fontSize: 17, fontWeight: '700' },
   subtitle: { fontSize: 12, marginTop: 2 },
-  actions: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  actionsScroll: { flexGrow: 0, maxWidth: '78%' },
+  actions: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 12 },
   pill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 12, height: 34, borderRadius: 8, borderWidth: 1,
@@ -343,10 +394,46 @@ const styles = StyleSheet.create({
     width: 34, height: 34, borderRadius: 8, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
   },
+  themeModeGroup: {
+    height: 34,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 8,
+    padding: 3,
+    gap: 3,
+  },
+  themeModeBtn: {
+    height: 26,
+    borderRadius: 6,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  themeSwatch: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 1,
+  },
+  themeModeText: { fontSize: 11, fontWeight: '700' },
+  accentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    height: 34,
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 8,
+  },
   dotBtn: {
     width: 18,
     height: 18,
     borderRadius: 9,
+    flexDirection: 'row',
+    overflow: 'hidden',
   },
   backdrop: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.4)',

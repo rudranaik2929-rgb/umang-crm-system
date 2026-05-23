@@ -24,6 +24,12 @@ export default function NegativeLeads() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  const reactivate = async (lead: any) => {
+    await api.patch(`/leads/${lead.lead_id}`, { status: 'active', stage: 'assigned', priority: 'follow_up' });
+    await api.post(`/leads/${lead.lead_id}/notes`, { text: 'Lead reactivated from negative leads for future follow-up.', type: 'reactivated' });
+    await load();
+  };
+
   return (
     <View style={{ flex: 1 }}>
       <TopBar title="Negative Leads" subtitle="Reservoir for future re-engagement campaigns" />
@@ -60,10 +66,17 @@ export default function NegativeLeads() {
                     <Badge text="NEGATIVE" color={colors.negative} />
                   </View>
                   <View style={{ width: 110, alignItems: 'flex-end' }}>
-                    <View style={[styles.openBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '14' }]}>
+                    <Pressable
+                      onPress={(event: any) => {
+                        event?.stopPropagation?.();
+                        reactivate(l);
+                      }}
+                      style={[styles.openBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '14' }]}
+                      testID={`neg-reactivate-${l.lead_id}`}
+                    >
                       <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>Reactivate</Text>
                       <Ionicons name="refresh" size={11} color={colors.primary} />
-                    </View>
+                    </Pressable>
                   </View>
                 </Pressable>
               ))}

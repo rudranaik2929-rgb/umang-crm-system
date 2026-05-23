@@ -45,7 +45,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
       <View style={[styles.brand, { borderBottomColor: colors.border }]}>
         <Image 
           source={require('../../assets/images/logo.jpeg')} 
-          style={styles.logoImage} 
+          style={[styles.logoImage, collapsed && { width: 38, height: 38 }]}
           resizeMode="contain" 
         />
         {!collapsed && (
@@ -54,14 +54,29 @@ export function Sidebar({ collapsed, onToggle }: Props) {
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>Real Estate CRM</Text>
           </View>
         )}
-        <Pressable onPress={onToggle} testID="sidebar-toggle" style={styles.collapseBtn} hitSlop={8}>
+      </View>
+
+      <Pressable
+        onPress={onToggle}
+        testID="sidebar-toggle"
+        hitSlop={10}
+        style={({ hovered }: any) => [
+          styles.floatingToggle,
+          {
+            backgroundColor: hovered ? colors.primary : colors.surface,
+            borderColor: hovered ? colors.primary : colors.border,
+            right: -14,
+          },
+        ]}
+      >
+        {({ hovered }: any) => (
           <Ionicons
             name={collapsed ? 'chevron-forward' : 'chevron-back'}
             size={16}
-            color={colors.textSecondary}
+            color={hovered ? '#fff' : colors.textSecondary}
           />
-        </Pressable>
-      </View>
+        )}
+      </Pressable>
 
       {/* Nav */}
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 12 }}>
@@ -134,6 +149,8 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRightWidth: 1,
     flexDirection: 'column',
+    position: 'relative',
+    zIndex: 10,
   },
   brand: {
     flexDirection: 'row',
@@ -150,7 +167,17 @@ const styles = StyleSheet.create({
   },
   brandTitle: { fontSize: 14, fontWeight: '700' },
   brandSub: { fontSize: 11, marginTop: 1 },
-  collapseBtn: { padding: 4 },
+  floatingToggle: {
+    position: 'absolute',
+    top: 72,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 20,
+  },
   section: {
     fontSize: 10, fontWeight: '700', letterSpacing: 1.4,
     paddingHorizontal: 18, marginBottom: 6, marginTop: 4,

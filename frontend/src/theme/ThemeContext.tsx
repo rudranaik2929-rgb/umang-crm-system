@@ -3,9 +3,43 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import { ThemeName, lightColors, darkColors, ThemeColors } from './tokens';
 
-export type AccentColor = 'sky' | 'forest' | 'lavender' | 'sunset' | 'rose';
+export type AccentColor = 'mono' | 'sky' | 'forest' | 'lavender' | 'sunset' | 'rose';
 
 export const ACCENT_THEMES = {
+  mono: {
+    light: {
+      ...lightColors,
+      background: '#F8FAFC',
+      surface: '#FFFFFF',
+      surfaceAlt: '#F1F5F9',
+      sidebar: '#FFFFFF',
+      primary: '#111827',
+      primaryHover: '#374151',
+      accent: '#0F172A',
+      text: '#0F172A',
+      textSecondary: '#334155',
+      textMuted: '#64748B',
+      border: '#E2E8F0',
+      borderSoft: '#F1F5F9',
+      shadow: 'rgba(15,23,42,0.08)',
+    },
+    dark: {
+      ...darkColors,
+      background: '#050505',
+      surface: '#111111',
+      surfaceAlt: '#1F1F1F',
+      sidebar: '#080808',
+      primary: '#374151',
+      primaryHover: '#4B5563',
+      accent: '#F8FAFC',
+      text: '#FFFFFF',
+      textSecondary: '#D1D5DB',
+      textMuted: '#9CA3AF',
+      border: '#2F2F2F',
+      borderSoft: '#1A1A1A',
+      shadow: 'rgba(0,0,0,0.45)',
+    },
+  },
   sky: {
     light: {
       ...lightColors,
@@ -182,6 +216,7 @@ interface ThemeContextType {
   themeName: ThemeName;
   colors: ThemeColors;
   toggle: () => void;
+  setThemeMode: (theme: ThemeName) => void;
   accentColor: AccentColor;
   setAccentColor: (color: AccentColor) => void;
 }
@@ -190,6 +225,7 @@ const ThemeContext = createContext<ThemeContextType>({
   themeName: 'light',
   colors: ACCENT_THEMES.sky.light,
   toggle: () => {},
+  setThemeMode: () => {},
   accentColor: 'sky',
   setAccentColor: () => {},
 });
@@ -253,6 +289,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const setThemeMode = useCallback((theme: ThemeName) => {
+    setThemeName(theme);
+    setStored(theme);
+  }, []);
+
   const setAccentColor = useCallback((color: AccentColor) => {
     setAccentColorState(color);
     const saveAccent = async () => {
@@ -270,11 +311,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const colors = ACCENT_THEMES[accentColor][themeName];
 
   return (
-    <ThemeContext.Provider value={{ themeName, colors, toggle, accentColor, setAccentColor }}>
+    <ThemeContext.Provider value={{ themeName, colors, toggle, setThemeMode, accentColor, setAccentColor }}>
       {children}
     </ThemeContext.Provider>
   );
 }
 
 export const useTheme = () => useContext(ThemeContext);
-

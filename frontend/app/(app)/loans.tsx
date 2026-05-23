@@ -5,6 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { api } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
+import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
 import { canSeeRevenue } from '../../src/lib/constants';
@@ -26,6 +27,7 @@ export default function Loans() {
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingLoan, setEditingLoan] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -53,6 +55,18 @@ export default function Loans() {
       await api.patch(`/loans/${loan.loan_id}`, { bank_stage: next, application_status: status, progress: STAGE_PROGRESS[next] });
       await load();
     } finally { setBusy(null); }
+  };
+
+  const toggleStar = async (loan: any) => {
+    await api.patch(`/loans/${loan.loan_id}`, { starred: !loan.starred });
+    await load();
+  };
+
+  const deleteLoan = async (loan: any) => {
+    const ok = typeof window === 'undefined' || window.confirm(`Delete loan application for ${loan.lead_name}?`);
+    if (!ok) return;
+    await api.delete(`/loans/${loan.loan_id}`);
+    await load();
   };
 
   return (
@@ -89,7 +103,10 @@ export default function Loans() {
                       <Ionicons name="business" size={18} color={'#7C3AED'} />
                     </View>
                     <View style={{ flex: 1 }}>
-                      <Text style={[styles.cardTitle, { color: colors.text }]}>{lo.lead_name}</Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        {lo.starred ? <Ionicons name="star" size={14} color={colors.warning} /> : null}
+                        <Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>{lo.lead_name}</Text>
+                      </View>
                       <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Loan source pending'}{canSeeRevenue(user?.role) ? `  ·  ₹${(lo.amount || 0).toLocaleString('en-IN')}` : ''}</Text>
                       <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
                         <Badge text={(lo.application_status || 'pending').toUpperCase()} color={STATUS_COLOR[lo.application_status] || colors.primary} />
@@ -100,6 +117,14 @@ export default function Loans() {
                       <Text style={[styles.bigVal, { color: colors.text }]}>{lo.progress}%</Text>
                       <Text style={[styles.cardSub, { color: colors.textMuted }]}>Progress</Text>
                     </View>
+                    <CardActionMenu
+                      colors={colors}
+                      isStarred={!!lo.starred}
+                      onEdit={() => setEditingLoan(lo)}
+                      onToggleStar={() => toggleStar(lo)}
+                      onDelete={() => deleteLoan(lo)}
+                      testIDPrefix={`loan-${lo.loan_id}`}
+                    />
                   </View>
 
                   {/* Progress bar */}
@@ -269,6 +294,13 @@ export default function Loans() {
         leads={leads}
         colors={colors}
       />
+      <EditLoanModal
+        loan={editingLoan}
+        visible={!!editingLoan}
+        onClose={() => setEditingLoan(null)}
+        onSaved={async () => { setEditingLoan(null); await load(); }}
+        colors={colors}
+      />
     </View>
   );
 }
@@ -329,6 +361,83 @@ function CreateLoanModal({ visible, onClose, onCreated, leads, colors }: any) {
         </Pressable>
       </Pressable>
     </Modal>
+  );
+}
+
+function EditLoanModal({ visible, onClose, onSaved, loan, colors }: any) {
+  const [bank, setBank] = useState('');
+  const [amount, setAmount] = useState('');
+  const [status, setStatus] = useState('');
+  const [stage, setStage] = useState('');
+  const [progress, setProgress] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!loan) return;
+    setBank(loan.bank_name || '');
+    setAmount(String(loan.amount || 0));
+    setStatus(loan.application_status || 'pending');
+    setStage(loan.bank_stage || 'documentation');
+    setProgress(String(loan.progress || 0));
+  }, [loan]);
+
+  const submit = async () => {
+    if (!loan) return;
+    setBusy(true);
+    try {
+      await api.patch(`/loans/${loan.loan_id}`, {
+        bank_name: bank,
+        amount: parseFloat(amount) || 0,
+        application_status: status,
+        bank_stage: stage,
+        progress: parseInt(progress, 10) || 0,
+      });
+      onSaved();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable
+          onPress={(event: any) => event?.stopPropagation?.()}
+          style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        >
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Loan Application</Text>
+          <LoanField label="BANK NAME" testID="edit-loan-bank" value={bank} onChange={setBank} colors={colors} />
+          <LoanField label="AMOUNT (₹)" testID="edit-loan-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
+          <LoanField label="APPLICATION STATUS" testID="edit-loan-status" value={status} onChange={setStatus} colors={colors} />
+          <LoanField label="BANK STAGE" testID="edit-loan-stage" value={stage} onChange={setStage} colors={colors} />
+          <LoanField label="PROGRESS (%)" testID="edit-loan-progress" value={progress} onChange={setProgress} colors={colors} keyboardType="numeric" />
+          <Pressable
+            testID="edit-loan-submit"
+            onPress={submit}
+            disabled={busy}
+            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}
+          >
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Application</Text>}
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function LoanField({ label, value, onChange, colors, keyboardType, testID }: any) {
+  return (
+    <View>
+      <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>{label}</Text>
+      <TextInput
+        testID={testID}
+        value={value}
+        onChangeText={onChange}
+        keyboardType={keyboardType}
+        placeholderTextColor={colors.textMuted}
+        style={{ height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt }}
+      />
+    </View>
   );
 }
 

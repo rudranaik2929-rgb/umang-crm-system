@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -9,12 +9,25 @@ import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LineChart } from '../../src/components/LineChart';
-import { canSeeRevenue } from '../../src/lib/constants';
+import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/constants';
 
-const GOLD = '#D4A843';
-const GOLD_DIM = '#D4A84340';
-const CARD_BG = '#0D1B2A';
-const CARD_BORDER = '#1B2E45';
+const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
+const WARM_STAGES = ['assigned'];
+const COLD_STAGES = ['new'];
+
+function formatCurrency(value: number) {
+  if (!value) return '₹0';
+  if (value >= 10000000) return `₹${(value / 10000000).toFixed(2)} Cr`;
+  if (value >= 100000) return `₹${(value / 100000).toFixed(2)} L`;
+  return `₹${Math.round(value).toLocaleString('en-IN')}`;
+}
+
+function formatCompact(value: number) {
+  if (value >= 10000000) return `${(value / 10000000).toFixed(1)}Cr`;
+  if (value >= 100000) return `${(value / 100000).toFixed(1)}L`;
+  if (value >= 1000) return `${Math.round(value / 1000)}K`;
+  return `${Math.round(value || 0)}`;
+}
 
 export default function Dashboard() {
   const { colors } = useTheme();
@@ -34,153 +47,162 @@ export default function Dashboard() {
         api.get('/stats/dashboard/graph'),
         api.get('/leads'),
       ]);
-      setStats(s.data);
-      setGraphData(g.data);
+      setStats(s.data || {});
+      setGraphData(g.data || {});
       setLeads(Array.isArray(l.data) ? l.data : []);
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const model = useMemo(() => {
+    const sd = stats?.stage_distribution || {};
+    const activeLeads = leads.filter((l) => l.status !== 'negative');
+    const totalLeads = Number(stats?.total_leads || activeLeads.length || 0);
+    const todayStr = new Date().toISOString().slice(0, 10);
+
+    const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
+    const warm = activeLeads.filter((l) => WARM_STAGES.includes(l.stage)).length || Number(sd.assigned || 0);
+    const cold = activeLeads.filter((l) => COLD_STAGES.includes(l.stage)).length || Number(sd.new || 0);
+    const temperatureTotal = Math.max(1, hot + warm + cold);
+    const conversionScore = totalLeads ? Math.min(100, Math.round((hot / totalLeads) * 100)) : 0;
+
+    return {
+      activeLeads,
+      totalLeads,
+      hot,
+      warm,
+      cold,
+      temperatureTotal,
+      conversionScore,
+      newToday: leads.filter((l) => l.created_at?.slice(0, 10) === todayStr).length,
+      positiveLeads: Number(stats?.positive_leads || hot || 0),
+      negativeLeads: Number(stats?.negative_leads || 0),
+      visits: Number(stats?.site_visits || 0),
+      completedVisits: Number(stats?.completed_visits || 0),
+      bookings: Number(stats?.bookings || 0),
+      confirmedBookings: Number(stats?.confirmed_bookings || 0),
+      loans: Number(stats?.loans || 0),
+      disbursedLoans: Number(stats?.disbursed_loans || 0),
+      employees: Number(stats?.employees || 0),
+      campaigns: Number(stats?.campaigns || 0),
+      revenue: Number(stats?.revenue_pipeline || 0),
+    };
+  }, [leads, stats]);
 
   if (loading) {
     return (
       <View style={{ flex: 1 }}>
         <TopBar title="Dashboard" />
-        <View style={{ padding: 60, alignItems: 'center' }}><ActivityIndicator color={GOLD} size="large" /></View>
+        <View style={[styles.loadingWrap, { backgroundColor: colors.background }]}>
+          <ActivityIndicator color={colors.primary} size="large" />
+        </View>
       </View>
     );
   }
 
-  const sd = stats?.stage_distribution || {};
-  const totalLeads = stats?.total_leads || 0;
-  const hotCount = (sd.positive || 0) + (sd.site_visit || 0) + (sd.booking || 0) + (sd.loan || 0) + (sd.registration || 0) + (sd.closed || 0);
-  const warmCount = sd.contacted || 0;
-  const coldCount = sd.new || 0;
-  const totalTemp = hotCount + warmCount + coldCount || 1;
-  const perfScore = totalLeads > 0 ? Math.min(100, Math.round((hotCount / totalLeads) * 100)) : 0;
-  const revenue = stats?.revenue_pipeline || 0;
-
-  // Today leads count (simulate — leads created today)
-  const todayStr = new Date().toISOString().slice(0, 10);
-  const newLeadsToday = leads.filter(l => l.created_at?.slice(0, 10) === todayStr).length || sd.new || 0;
-  const followupsToday = sd.contacted || 0;
-  const visitsScheduled = stats?.site_visits || 0;
-
-  // Kanban
-  const STAGES = ['new', 'contacted', 'positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
-  const STAGE_LABELS: Record<string, string> = {
-    new: 'New', contacted: 'Contacted', positive: 'Positive', site_visit: 'Site Visit',
-    booking: 'Booking', loan: 'Loan', registration: 'Registration', closed: 'Closed',
-  };
-  const STAGE_COLORS: Record<string, string> = {
-    new: '#3B82F6', contacted: '#F59E0B', positive: '#10B981', site_visit: '#06B6D4',
-    booking: '#8B5CF6', loan: '#EC4899', registration: '#EF4444', closed: '#10B981',
-  };
+  const chartLeadData = (graphData?.leads_by_day || []).map((d: any) => ({
+    label: String(d.date || '').slice(8) || '-',
+    value: Number(d.count || 0),
+  }));
+  const chartRevenueData = (graphData?.revenue_by_month || []).map((d: any) => ({
+    label: new Date(`${d.month}-01`).toLocaleString('en', { month: 'short' }),
+    value: Number(d.revenue || 0),
+  }));
 
   return (
-    <View style={{ flex: 1 }}>
-      <TopBar title="Dashboard" subtitle="Daily snapshot — what needs your attention right now" />
-      <ScrollView contentContainerStyle={s.content}>
+    <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <TopBar title="Dashboard" subtitle="Pipeline, revenue and team performance snapshot" />
+      <ScrollView contentContainerStyle={styles.content}>
+        <View style={styles.heroGrid}>
+          <ScorePanel
+            score={model.conversionScore}
+            hot={model.hot}
+            warm={model.warm}
+            cold={model.cold}
+          />
 
-        {/* ====== ROW 1: Performance Score | Lead Temperature | Total Revenue ====== */}
-        <View style={s.topRow}>
-          {/* Performance Score */}
-          <View style={[s.card, s.perfCard]}>
-            <Text style={s.cardTitle}>Performance Score</Text>
-            <View style={s.perfBody}>
-              <GaugeChart score={perfScore} />
-              <View style={s.perfLegend}>
-                <LegendDot color="#EF4444" label="Hot" />
-                <LegendDot color="#F59E0B" label="Warm" />
-                <LegendDot color="#3B82F6" label="Cold" />
-              </View>
-            </View>
-          </View>
-
-          {/* Lead Temperature */}
-          <View style={[s.card, { flex: 1.2 }]}>
-            <Text style={s.cardTitle}>Lead Temperature</Text>
-            <View style={s.tempBarRow}>
-              <Text style={[s.tempLabel, { color: '#EF4444' }]}>Hot</Text>
-              <View style={s.tempBarTrack}>
-                <View style={[s.tempBarSeg, { flex: hotCount / totalTemp, backgroundColor: '#EF4444' }]} />
-                <View style={[s.tempBarSeg, { flex: warmCount / totalTemp, backgroundColor: '#F59E0B' }]} />
-                <View style={[s.tempBarSeg, { flex: coldCount / totalTemp, backgroundColor: '#3B82F6' }]} />
-              </View>
-              <Text style={[s.tempLabel, { color: '#3B82F6' }]}>Cold</Text>
-            </View>
-            <View style={s.tempNumbers}>
-              <View style={s.tempNumItem}>
-                <View style={[s.tempDot, { backgroundColor: '#EF4444' }]} />
-                <Text style={s.tempNumText}>{hotCount} Hot</Text>
-              </View>
-              <View style={s.tempNumItem}>
-                <View style={[s.tempDot, { backgroundColor: '#F59E0B' }]} />
-                <Text style={s.tempNumText}>{warmCount} Warm</Text>
-              </View>
-              <View style={s.tempNumItem}>
-                <View style={[s.tempDot, { backgroundColor: '#3B82F6' }]} />
-                <Text style={s.tempNumText}>{coldCount} Cold</Text>
-              </View>
-            </View>
-          </View>
-
-          {/* Total Revenue — hidden for manager */}
           {canSeeRevenue(user?.role) && (
-          <View style={[s.card, { flex: 0.7, justifyContent: 'center' }]}>
-            <Text style={[s.cardTitle, { fontSize: 11 }]}>Total Revenue</Text>
-            <Text style={s.smallLabel}>This month</Text>
-            <Text style={s.revenueValue}>₹{revenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</Text>
-          </View>
+            <RevenuePanel
+              revenue={model.revenue}
+              bookings={model.bookings}
+              confirmedBookings={model.confirmedBookings}
+              disbursedLoans={model.disbursedLoans}
+            />
           )}
+
+          <HealthPanel
+            hot={model.hot}
+            warm={model.warm}
+            cold={model.cold}
+            total={model.temperatureTotal}
+          />
         </View>
 
-        {/* ====== ROW 2: New Leads | Follow-ups | Site Visits ====== */}
-        <View style={s.statRow}>
-          <MiniStat label="Total Leads" sub="Source Breakdown" value={totalLeads} color={GOLD} onPress={() => setSourceModalVisible(true)} />
-          <MiniStat label="New Leads" sub="Today" value={newLeadsToday} color={GOLD} />
-          <MiniStat label="Follow-ups" sub="Today" value={followupsToday} color={GOLD} />
-          <MiniStat label="Site Visits" sub="Scheduled" value={visitsScheduled} color={GOLD} />
+        <View style={styles.metricGrid}>
+          <MetricCard icon="people-outline" label="Total Leads" value={model.totalLeads} accent={colors.info} onPress={() => setSourceModalVisible(true)} helper="Tap for sources" />
+          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Fresh enquiries" />
+          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Moved forward" />
+          <MetricCard icon="remove-circle-outline" label="Negative Leads" value={model.negativeLeads} accent={colors.negative} helper="Remarketing pool" />
+          <MetricCard icon="location-outline" label="Site Visits" value={model.visits} accent="#06B6D4" helper={`${model.completedVisits} completed`} />
+          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper={`${model.confirmedBookings} confirmed`} />
+          <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} />
+          <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} />
         </View>
 
-        {/* ====== KANBAN BOARD ====== */}
-        <View style={[s.card, { padding: 16 }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={s.cardTitle}>Kanban Board</Text>
-            <Pressable onPress={() => router.push('/(app)/pipeline' as any)}>
-              <Text style={{ color: GOLD, fontSize: 18 }}>⋯</Text>
+        <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.panelHeader}>
+            <View>
+              <Text style={[styles.panelTitle, { color: colors.text }]}>Pipeline Board</Text>
+              <Text style={[styles.panelSub, { color: colors.textMuted }]}>Stage-wise leads with quick open actions</Text>
+            </View>
+            <Pressable
+              onPress={() => router.push('/(app)/pipeline' as any)}
+              style={[styles.iconAction, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+            >
+              <Ionicons name="arrow-forward" size={16} color={colors.primary} />
             </Pressable>
           </View>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-            <View style={s.kanbanRow}>
-              {STAGES.map(stage => {
-                const stageLeads = leads.filter(l => l.stage === stage);
-                const stageColor = STAGE_COLORS[stage] || '#888';
+            <View style={styles.kanbanRow}>
+              {STAGES.map((stage) => {
+                const stageLeads = model.activeLeads.filter((l) => l.stage === stage.key);
                 return (
-                  <View key={stage} style={s.kanbanCol}>
-                    <View style={[s.kanbanHeader, { borderBottomColor: stageColor }]}>
-                      <Text style={[s.kanbanHeaderText, { color: stageColor }]}>{STAGE_LABELS[stage]}</Text>
-                      <Text style={s.kanbanCount}>{stageLeads.length}</Text>
+                  <View key={stage.key} style={[styles.kanbanCol, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+                    <View style={styles.kanbanHead}>
+                      <View style={[styles.stageDot, { backgroundColor: STAGE_COLORS[stage.key] || colors.primary }]} />
+                      <Text style={[styles.kanbanTitle, { color: colors.text }]} numberOfLines={1}>{stageLabel(stage.key)}</Text>
+                      <Text style={[styles.kanbanCount, { color: colors.textMuted }]}>{stageLeads.length}</Text>
                     </View>
-                    {stageLeads.slice(0, 3).map(lead => (
+                    {stageLeads.slice(0, 4).map((lead) => (
                       <Pressable
                         key={lead.lead_id}
-                        style={s.kanbanCard}
                         onPress={() => setOpenLead(lead.lead_id)}
+                        style={({ hovered }: any) => [
+                          styles.leadCard,
+                          {
+                            backgroundColor: colors.surface,
+                            borderColor: hovered ? colors.primary : colors.border,
+                          },
+                        ]}
                       >
-                        <Text style={s.kanbanName} numberOfLines={1}>{lead.name}</Text>
-                        <Text style={s.kanbanDetail} numberOfLines={1}>
-                          {lead.property_type} · {lead.budget}
+                        <Text style={[styles.leadName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
+                        <Text style={[styles.leadMeta, { color: colors.textMuted }]} numberOfLines={1}>
+                          {[lead.property_type, lead.budget].filter(Boolean).join(' | ') || 'Requirement pending'}
                         </Text>
-                        <Text style={s.kanbanDetail} numberOfLines={1}>{lead.location}</Text>
+                        <Text style={[styles.leadMeta, { color: colors.textMuted }]} numberOfLines={1}>
+                          {lead.location || lead.phone || 'No location'}
+                        </Text>
                       </Pressable>
                     ))}
-                    {stageLeads.length > 3 && (
-                      <Text style={s.kanbanMore}>+{stageLeads.length - 3} more</Text>
-                    )}
-                    {stageLeads.length === 0 && (
-                      <Text style={s.kanbanEmpty}>No leads</Text>
-                    )}
+                    {stageLeads.length > 4 ? (
+                      <Text style={[styles.moreText, { color: colors.primary }]}>+{stageLeads.length - 4} more</Text>
+                    ) : null}
+                    {stageLeads.length === 0 ? (
+                      <Text style={[styles.emptyText, { color: colors.textMuted }]}>No leads</Text>
+                    ) : null}
                   </View>
                 );
               })}
@@ -188,33 +210,27 @@ export default function Dashboard() {
           </ScrollView>
         </View>
 
-        {/* ====== ROW 3: Charts ====== */}
-        <View style={s.chartRow}>
-          {graphData?.leads_by_day && (
+        <View style={styles.chartRow}>
+          <LineChart
+            title="Lead Volume"
+            subtitle="Daily lead count across the last 30 days"
+            data={chartLeadData.length ? chartLeadData : [{ label: '0', value: 0 }]}
+            color={colors.info}
+            testID="leads-chart"
+          />
+          {canSeeRevenue(user?.role) && (
             <LineChart
-              title="Leads per Day"
-              subtitle="Last 30 days"
-              data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(8), value: d.count }))}
-              color="#3B82F6"
-              testID="leads-chart"
-            />
-          )}
-          {graphData?.revenue_by_month && (
-            <LineChart
-              title="Revenue per Month"
-              subtitle="Past 12 months"
-              data={graphData.revenue_by_month.map((d: any) => ({
-                label: new Date(d.month + '-01').toLocaleString('en', { month: 'short' }),
-                value: d.revenue,
-              }))}
-              color="#D4A843"
-              formatValue={(v: number) => v >= 100000 ? `${(v / 100000).toFixed(1)}L` : `${Math.round(v / 1000)}K`}
+              title="Revenue Pipeline"
+              subtitle="Monthly booking and loan value"
+              data={chartRevenueData.length ? chartRevenueData : [{ label: '0', value: 0 }]}
+              color={colors.warning}
+              formatValue={formatCompact}
               testID="revenue-chart"
             />
           )}
         </View>
-
       </ScrollView>
+
       <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
       <LeadDetailModal
         leadId={openLead}
@@ -227,38 +243,157 @@ export default function Dashboard() {
   );
 }
 
-/* ====== GAUGE CHART COMPONENT ====== */
-function GaugeChart({ score }: { score: number }) {
-  const angle = (score / 100) * 180;
-  const isWeb = Platform.OS === 'web';
+function ScorePanel({ score, hot, warm, cold }: { score: number; hot: number; warm: number; cold: number }) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.panel, styles.heroPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={styles.panelHeader}>
+        <View>
+          <Text style={[styles.panelTitle, { color: colors.text }]}>Performance Score</Text>
+          <Text style={[styles.panelSub, { color: colors.textMuted }]}>Hot lead conversion health</Text>
+        </View>
+        <Ionicons name="speedometer-outline" size={20} color={colors.primary} />
+      </View>
+      <View style={styles.scoreBody}>
+        <GaugeChart score={score} />
+        <View style={styles.scoreLegend}>
+          <LegendDot color="#EF4444" label={`${hot} Hot`} />
+          <LegendDot color="#F59E0B" label={`${warm} Warm`} />
+          <LegendDot color="#3B82F6" label={`${cold} Cold`} />
+        </View>
+      </View>
+    </View>
+  );
+}
 
-  if (!isWeb) {
+function RevenuePanel({ revenue, bookings, confirmedBookings, disbursedLoans }: { revenue: number; bookings: number; confirmedBookings: number; disbursedLoans: number }) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.panel, styles.heroPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={styles.panelHeader}>
+        <View>
+          <Text style={[styles.panelTitle, { color: colors.text }]}>Revenue Pipeline</Text>
+          <Text style={[styles.panelSub, { color: colors.textMuted }]}>Bookings plus disbursed loan value</Text>
+        </View>
+        <Ionicons name="cash-outline" size={20} color={colors.warning} />
+      </View>
+      <Text style={[styles.revenueValue, { color: colors.text }]} numberOfLines={1} adjustsFontSizeToFit>
+        {formatCurrency(revenue)}
+      </Text>
+      <View style={styles.revenueStats}>
+        <TinyStat label="Bookings" value={bookings} color={colors.warning} />
+        <TinyStat label="Confirmed" value={confirmedBookings} color={colors.positive} />
+        <TinyStat label="Disbursed" value={disbursedLoans} color="#8B5CF6" />
+      </View>
+    </View>
+  );
+}
+
+function HealthPanel({ hot, warm, cold, total }: { hot: number; warm: number; cold: number; total: number }) {
+  const { colors } = useTheme();
+  return (
+    <View style={[styles.panel, styles.heroPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      <View style={styles.panelHeader}>
+        <View>
+          <Text style={[styles.panelTitle, { color: colors.text }]}>Lead Temperature</Text>
+          <Text style={[styles.panelSub, { color: colors.textMuted }]}>Current quality split</Text>
+        </View>
+        <Ionicons name="thermometer-outline" size={20} color={colors.negative} />
+      </View>
+      <View style={[styles.tempTrack, { backgroundColor: colors.surfaceAlt }]}>
+        <View style={{ flex: hot / total, backgroundColor: '#EF4444' }} />
+        <View style={{ flex: warm / total, backgroundColor: '#F59E0B' }} />
+        <View style={{ flex: cold / total, backgroundColor: '#3B82F6' }} />
+      </View>
+      <View style={styles.tempGrid}>
+        <TinyStat label="Hot" value={hot} color="#EF4444" />
+        <TinyStat label="Warm" value={warm} color="#F59E0B" />
+        <TinyStat label="Cold" value={cold} color="#3B82F6" />
+      </View>
+    </View>
+  );
+}
+
+function MetricCard({ icon, label, value, accent, helper, onPress }: { icon: any; label: string; value: number; accent: string; helper: string; onPress?: () => void }) {
+  const { colors } = useTheme();
+  const content = (
+    <>
+      <View style={[styles.metricIcon, { backgroundColor: `${accent}18` }]}>
+        <Ionicons name={icon} size={18} color={accent} />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.metricLabel, { color: colors.textMuted }]}>{label}</Text>
+        <Text style={[styles.metricValue, { color: colors.text }]}>{value.toLocaleString('en-IN')}</Text>
+        <Text style={[styles.metricHelper, { color: colors.textMuted }]} numberOfLines={1}>{helper}</Text>
+      </View>
+    </>
+  );
+
+  if (onPress) {
     return (
-      <View style={{ alignItems: 'center', justifyContent: 'center', width: 120, height: 80 }}>
-        <Text style={{ color: '#fff', fontSize: 32, fontWeight: '700' }}>{score}%</Text>
+      <Pressable
+        onPress={onPress}
+        style={({ hovered }: any) => [
+          styles.metricCard,
+          {
+            backgroundColor: colors.surface,
+            borderColor: hovered ? accent : colors.border,
+          },
+        ]}
+      >
+        {content}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.metricCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+      {content}
+    </View>
+  );
+}
+
+function TinyStat({ label, value, color }: { label: string; value: number; color: string }) {
+  const { colors } = useTheme();
+  return (
+    <View style={styles.tinyStat}>
+      <View style={[styles.tinyDot, { backgroundColor: color }]} />
+      <View>
+        <Text style={[styles.tinyValue, { color: colors.text }]}>{value.toLocaleString('en-IN')}</Text>
+        <Text style={[styles.tinyLabel, { color: colors.textMuted }]}>{label}</Text>
+      </View>
+    </View>
+  );
+}
+
+function GaugeChart({ score }: { score: number }) {
+  const { colors } = useTheme();
+  const angle = (score / 100) * 180;
+
+  if (Platform.OS !== 'web') {
+    return (
+      <View style={styles.nativeGauge}>
+        <Text style={[styles.nativeGaugeText, { color: colors.text }]}>{score}%</Text>
       </View>
     );
   }
 
   return (
-    <View style={{ alignItems: 'center', width: 140, height: 90 }}>
-      <svg viewBox="0 0 200 110" style={{ width: 140, height: 90 } as any}>
-        {/* Background arc */}
-        <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke="#1B2E45" strokeWidth="14" strokeLinecap="round" />
-        {/* Score arc */}
+    <View style={styles.gaugeWrap}>
+      <svg viewBox="0 0 200 118" style={{ width: 150, height: 94 } as any}>
+        <path d="M 20 100 A 80 80 0 0 1 180 100" fill="none" stroke={colors.border} strokeWidth="15" strokeLinecap="round" />
         <path
           d={describeArc(100, 100, 80, 180, 180 + angle)}
           fill="none"
-          stroke={GOLD}
-          strokeWidth="14"
+          stroke={colors.primary}
+          strokeWidth="15"
           strokeLinecap="round"
         />
-        {/* Score text */}
-        <text x="100" y="90" textAnchor="middle" fill="#ffffff" fontSize="28" fontWeight="700" fontFamily="sans-serif">
+        <text x="100" y="86" textAnchor="middle" fill={colors.text} fontSize="30" fontWeight="700" fontFamily="sans-serif">
           {score}%
         </text>
-        <text x="100" y="106" textAnchor="middle" fill="#ffffff80" fontSize="10" fontFamily="sans-serif">
-          {score}%
+        <text x="100" y="106" textAnchor="middle" fill={colors.textMuted} fontSize="11" fontFamily="sans-serif">
+          score
         </text>
       </svg>
     </View>
@@ -275,101 +410,58 @@ function describeArc(cx: number, cy: number, r: number, startAngle: number, endA
   return `M ${x1} ${y1} A ${r} ${r} 0 ${large} 1 ${x2} ${y2}`;
 }
 
-/* ====== LEGEND DOT ====== */
 function LegendDot({ color, label }: { color: string; label: string }) {
+  const { colors } = useTheme();
   return (
-    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-      <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: color }} />
-      <Text style={{ color: '#ffffffB0', fontSize: 11 }}>{label}</Text>
+    <View style={styles.legendItem}>
+      <View style={[styles.legendDot, { backgroundColor: color }]} />
+      <Text style={[styles.legendText, { color: colors.textSecondary }]}>{label}</Text>
     </View>
   );
 }
 
-/* ====== MINI STAT CARD ====== */
-function MiniStat({ label, sub, value, color, onPress }: { label: string; sub: string; value: number; color: string; onPress?: () => void }) {
-  const Wrapper = onPress ? Pressable : View;
-  return (
-    <Wrapper 
-      onPress={onPress}
-      style={[s.card, s.miniCard, onPress && { borderColor: color + '80', borderStyle: 'dashed' }]}
-    >
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <View style={[s.miniDot, { backgroundColor: color }]} />
-        <View>
-          <Text style={s.miniLabel}>{label}</Text>
-          <Text style={s.miniSub}>{sub}</Text>
-        </View>
-      </View>
-      <View style={{ alignItems: 'flex-end' }}>
-        <Text style={[s.miniValue, { color }]}>{value}</Text>
-        {onPress && <Text style={{ color: color, fontSize: 8, fontWeight: '700' }}>VIEW DETAILS</Text>}
-      </View>
-    </Wrapper>
-  );
-}
-
-
-/* ====== STYLES ====== */
-const s = StyleSheet.create({
+const styles = StyleSheet.create({
+  loadingWrap: { flex: 1, padding: 60, alignItems: 'center', justifyContent: 'center' },
   content: { padding: 20, gap: 16 },
-
-  /* Cards */
-  card: {
-    backgroundColor: CARD_BG,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: CARD_BORDER,
-    padding: 20,
-  },
-  cardTitle: { color: '#ffffffE0', fontSize: 14, fontWeight: '700', letterSpacing: 0.3 },
-  smallLabel: { color: '#ffffff60', fontSize: 10, marginTop: 2 },
-
-  /* Top row */
-  topRow: { flexDirection: 'row', gap: 14 },
-  perfCard: { flex: 1 },
-  perfBody: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 10 },
-  perfLegend: { gap: 6 },
-
-  /* Temperature */
-  tempBarRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 18 },
-  tempLabel: { fontSize: 10, fontWeight: '700' },
-  tempBarTrack: { flex: 1, height: 10, borderRadius: 5, flexDirection: 'row', overflow: 'hidden' },
-  tempBarSeg: { height: '100%' },
-  tempNumbers: { flexDirection: 'row', gap: 16, marginTop: 14 },
-  tempNumItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
-  tempDot: { width: 8, height: 8, borderRadius: 4 },
-  tempNumText: { color: '#ffffffB0', fontSize: 11 },
-
-  /* Revenue */
-  revenueValue: { color: GOLD, fontSize: 28, fontWeight: '700', letterSpacing: -0.5, marginTop: 8 },
-
-  /* Stat row */
-  statRow: { flexDirection: 'row', gap: 14 },
-  miniCard: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14 },
-  miniDot: { width: 6, height: 6, borderRadius: 3 },
-  miniLabel: { color: '#ffffffD0', fontSize: 12, fontWeight: '600' },
-  miniSub: { color: '#ffffff60', fontSize: 9 },
-  miniValue: { fontSize: 28, fontWeight: '700', letterSpacing: -0.5 },
-
-  /* Kanban */
-  kanbanRow: { flexDirection: 'row', gap: 10 },
-  kanbanCol: { width: 150, minHeight: 160 },
-  kanbanHeader: { borderBottomWidth: 2, paddingBottom: 8, marginBottom: 8, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  kanbanHeaderText: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
-  kanbanCount: { color: '#ffffff50', fontSize: 10, fontWeight: '600' },
-  kanbanCard: {
-    backgroundColor: '#0A1628',
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#1B2E4580',
-    padding: 10,
-    marginBottom: 6,
-  },
-  kanbanName: { color: '#ffffffD0', fontSize: 11, fontWeight: '600' },
-  kanbanDetail: { color: '#ffffff60', fontSize: 9, marginTop: 2 },
-  kanbanMore: { color: GOLD, fontSize: 10, fontWeight: '600', marginTop: 4 },
-  kanbanEmpty: { color: '#ffffff30', fontSize: 10, fontStyle: 'italic' },
-
-  /* Charts */
-  chartRow: { flexDirection: 'row', gap: 14 },
+  heroGrid: { flexDirection: 'row', gap: 16, flexWrap: 'wrap' },
+  heroPanel: { flex: 1, minWidth: 280, minHeight: 196 },
+  panel: { borderWidth: 1, borderRadius: 10, padding: 18 },
+  panelHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  panelTitle: { fontSize: 15, fontWeight: '700' },
+  panelSub: { fontSize: 11, marginTop: 3 },
+  scoreBody: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 18, gap: 14 },
+  scoreLegend: { gap: 8, minWidth: 90 },
+  gaugeWrap: { width: 154, height: 100, alignItems: 'center', justifyContent: 'center' },
+  nativeGauge: { width: 140, height: 86, alignItems: 'center', justifyContent: 'center' },
+  nativeGaugeText: { fontSize: 32, fontWeight: '700' },
+  legendItem: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  legendDot: { width: 8, height: 8, borderRadius: 4 },
+  legendText: { fontSize: 12, fontWeight: '600' },
+  revenueValue: { fontSize: 34, fontWeight: '800', marginTop: 24, letterSpacing: 0 },
+  revenueStats: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginTop: 18 },
+  tempTrack: { height: 14, borderRadius: 7, flexDirection: 'row', overflow: 'hidden', marginTop: 28 },
+  tempGrid: { flexDirection: 'row', justifyContent: 'space-between', gap: 10, marginTop: 20 },
+  tinyStat: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 72 },
+  tinyDot: { width: 8, height: 8, borderRadius: 4 },
+  tinyValue: { fontSize: 16, fontWeight: '800' },
+  tinyLabel: { fontSize: 10, marginTop: 1 },
+  metricGrid: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  metricCard: { minWidth: 210, flex: 1, borderWidth: 1, borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  metricIcon: { width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  metricLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.7, textTransform: 'uppercase' },
+  metricValue: { fontSize: 25, fontWeight: '800', marginTop: 2 },
+  metricHelper: { fontSize: 11, marginTop: 1 },
+  iconAction: { width: 34, height: 34, borderWidth: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  kanbanRow: { flexDirection: 'row', gap: 12, paddingTop: 14 },
+  kanbanCol: { width: 178, minHeight: 214, borderWidth: 1, borderRadius: 10, padding: 10 },
+  kanbanHead: { flexDirection: 'row', alignItems: 'center', gap: 7, marginBottom: 10 },
+  stageDot: { width: 8, height: 8, borderRadius: 4 },
+  kanbanTitle: { flex: 1, fontSize: 12, fontWeight: '700' },
+  kanbanCount: { fontSize: 11, fontWeight: '800' },
+  leadCard: { borderWidth: 1, borderRadius: 8, padding: 10, marginBottom: 8 },
+  leadName: { fontSize: 12, fontWeight: '700' },
+  leadMeta: { fontSize: 10, marginTop: 3 },
+  moreText: { fontSize: 11, fontWeight: '700', marginTop: 2 },
+  emptyText: { fontSize: 11, fontStyle: 'italic', paddingVertical: 18, textAlign: 'center' },
+  chartRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
 });
