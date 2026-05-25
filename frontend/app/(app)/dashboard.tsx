@@ -9,6 +9,7 @@ import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LineChart } from '../../src/components/LineChart';
+import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/constants';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
@@ -36,20 +37,23 @@ export default function Dashboard() {
   const [stats, setStats] = useState<any>(null);
   const [graphData, setGraphData] = useState<any>(null);
   const [leads, setLeads] = useState<any[]>([]);
+  const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [s, g, l] = await Promise.all([
+      const [s, g, l, e] = await Promise.all([
         api.get('/stats/dashboard'),
         api.get('/stats/dashboard/graph'),
         api.get('/leads'),
+        api.get('/stats/employees'),
       ]);
       setStats(s.data || {});
       setGraphData(g.data || {});
       setLeads(Array.isArray(l.data) ? l.data : []);
+      setEmployees(Array.isArray(e.data) ? e.data : []);
     } finally {
       setLoading(false);
     }
@@ -124,7 +128,7 @@ export default function Dashboard() {
             cold={model.cold}
           />
 
-          {canSeeRevenue(user?.role) && (
+          {canSeeRevenue(user?.role, user?.email) && (
             <RevenuePanel
               revenue={model.revenue}
               bookings={model.bookings}
@@ -151,6 +155,8 @@ export default function Dashboard() {
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} />
           <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} />
         </View>
+
+        <EmployeePerformance employees={employees} />
 
         <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={styles.panelHeader}>
@@ -218,7 +224,7 @@ export default function Dashboard() {
             color={colors.info}
             testID="leads-chart"
           />
-          {canSeeRevenue(user?.role) && (
+          {canSeeRevenue(user?.role, user?.email) && (
             <LineChart
               title="Revenue Pipeline"
               subtitle="Monthly booking and loan value"

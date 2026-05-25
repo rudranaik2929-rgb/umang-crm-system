@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../src/theme/ThemeContext';
 import { useAuth } from '../src/auth/AuthContext';
-import { ROLES } from '../src/lib/constants';
+import { defaultRouteFor, ROLES } from '../src/lib/constants';
 
 export default function SelectRole() {
   const { colors } = useTheme();
@@ -14,13 +14,13 @@ export default function SelectRole() {
 
   React.useEffect(() => {
     if (!loading && !user) router.replace('/' as any);
-    if (!loading && user?.role) router.replace('/(app)/dashboard' as any);
+    if (!loading && user?.role) router.replace(defaultRouteFor(user.role, user.email) as any);
   }, [user, loading, router]);
 
   const choose = async (r: string) => {
     setPending(r);
     await setRole(r);
-    router.replace('/(app)/dashboard' as any);
+    router.replace(defaultRouteFor(r, user?.email) as any);
   };
 
   return (

@@ -204,7 +204,6 @@ Main authenticated screens:
 
 ```text
 frontend/app/(app)/dashboard.tsx
-frontend/app/(app)/admin-analytics.tsx
 frontend/app/(app)/admin-tracking.tsx
 frontend/app/(app)/my-dashboard.tsx
 frontend/app/(app)/pipeline.tsx

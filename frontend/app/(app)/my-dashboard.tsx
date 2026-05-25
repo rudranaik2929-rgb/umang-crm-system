@@ -11,6 +11,7 @@ import { roleLabel } from '../../src/lib/constants';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
+  manager: '#14B8A6',
   telecaller: '#0284C7',
   site_visit: '#0EA5E9',
   booking: '#D97706',
@@ -19,6 +20,7 @@ const ROLE_ACCENT: Record<string, string> = {
 };
 
 const ROLE_HIGHLIGHT: Record<string, string[]> = {
+  manager: ['actions_total', 'positives', 'visits', 'bookings_done', 'loans_done'],
   telecaller: ['positives', 'negatives', 'followups', 'call_notes'],
   site_visit: ['visits'],
   booking: ['bookings_done'],
@@ -27,12 +29,13 @@ const ROLE_HIGHLIGHT: Record<string, string[]> = {
 };
 
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
+  manager: { label: 'Review lead pipeline', route: '/(app)/pipeline' },
   telecaller: { label: 'Open my telecaller queue', route: '/(app)/telecaller' },
   site_visit: { label: 'View my site visits', route: '/(app)/visits' },
   booking: { label: 'Open bookings', route: '/(app)/bookings' },
   loan: { label: 'Open loan applications', route: '/(app)/loans' },
   marketing: { label: 'Negative leads', route: '/(app)/negative-leads' },
-  admin: { label: 'Admin analytics', route: '/(app)/admin-analytics' },
+  admin: { label: 'Open owner dashboard', route: '/(app)/dashboard' },
 };
 
 export default function MyDashboard() {
@@ -101,7 +104,9 @@ export default function MyDashboard() {
             </View>
             <Text style={[styles.heroDesc, { color: colors.textSecondary }]}>
               {role === 'admin'
-                ? 'You can see and control every department. Use Admin Analytics for the full picture.'
+                ? 'You can see and control every department from the owner dashboard.'
+                : role === 'manager'
+                ? 'Monitor team movement, review department queues, and keep the pipeline moving.'
                 : role === 'telecaller'
                 ? 'Every new enquiry lands in your queue. Mark hot leads positive, schedule follow-ups, send the rest to site visits.'
                 : role === 'site_visit'
@@ -268,7 +273,7 @@ function LivePulse() {
         Animated.timing(pulseAnim, { toValue: 0, duration: 1000, easing: Easing.inOut(Easing.ease), useNativeDriver: false }),
       ])
     ).start();
-  }, []);
+  }, [pulseAnim]);
 
   return (
     <View style={styles.livePulseWrap}>

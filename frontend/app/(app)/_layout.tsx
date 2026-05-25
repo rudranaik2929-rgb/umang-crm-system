@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react';
-import { View, StyleSheet, ActivityIndicator, Dimensions } from 'react-native';
+import { View, StyleSheet, ActivityIndicator } from 'react-native';
 import { Slot, useRouter, usePathname } from 'expo-router';
 import { useAuth } from '../../src/auth/AuthContext';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { Sidebar } from '../../src/components/Sidebar';
+import { canAccess, defaultRouteFor, pageKeyFromPathname } from '../../src/lib/constants';
 
 export default function AppLayout() {
   const { user, loading } = useAuth();
@@ -13,8 +14,20 @@ export default function AppLayout() {
   const [collapsed, setCollapsed] = useState(false);
 
   useEffect(() => {
-    if (!loading && !user) router.replace('/' as any);
-    else if (!loading && user && !user.role) router.replace('/select-role' as any);
+    if (loading) return;
+    if (!user) {
+      router.replace('/' as any);
+      return;
+    }
+    if (!user.role) {
+      router.replace('/select-role' as any);
+      return;
+    }
+
+    const pageKey = pageKeyFromPathname(pathname);
+    if (pageKey && !canAccess(user.role, pageKey, user.email)) {
+      router.replace(defaultRouteFor(user.role, user.email) as any);
+    }
   }, [user, loading, router, pathname]);
 
   if (loading || !user) {

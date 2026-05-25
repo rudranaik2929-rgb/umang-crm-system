@@ -16,8 +16,8 @@ Public Enquiry ──► Telecaller ──► Site Visit ──► Booking ─�
                        └──► Negative Leads (re-engagement pool for WhatsApp)
 ```
 
-- **Admin** sees and controls everything (full sidebar, Admin Analytics with PIN gate, Employees CRUD, Act-as-employee mode for credit attribution)
-- **Each role** (Telecaller / Site Visit / Booking / Loan / Marketing) has a personal "My Dashboard" with a **/10 performance score**, hot/warm/cold lead funnel, and access only to their department panel + the shared Lead Pipeline
+- **Owner/Admin** sees the owner Dashboard, department panels, Employees CRUD, Employee Tracking, and Act-as-employee mode for credit attribution.
+- **Manager and assigned staff** use "My Dashboard" for personal KPIs, plus their allowed department panels and the shared Lead Pipeline.
 
 ---
 
@@ -48,9 +48,8 @@ Public Enquiry ──► Telecaller ──► Site Visit ──► Booking ─�
 │   │   ├── select-role.tsx          # First-login role chooser (only if not auto-linked to employee)
 │   │   └── (app)/                   # AUTHENTICATED shell with sidebar + topbar
 │   │       ├── _layout.tsx          # Auth guard + role-based default route
-│   │       ├── dashboard.tsx        # Simple "what needs attention" admin overview
-│   │       ├── admin-analytics.tsx  # PIN-gated (9999) deep analytics + Employee Performance grid
-│   │       ├── my-dashboard.tsx     # Personal /10 score + hot/warm/cold + per-role KPIs
+│   │       ├── dashboard.tsx        # Owner overview + Employee Performance grid
+│   │       ├── my-dashboard.tsx     # Manager workspace + hot/warm/cold + KPIs
 │   │       ├── pipeline.tsx         # 8-column kanban
 │   │       ├── telecaller.tsx       # Lead queue + action modal
 │   │       ├── visits.tsx           # Schedule + complete visits
@@ -145,8 +144,8 @@ Standard CRUD on `/employees`, `/templates`, `/campaigns`. `POST /campaigns/{id}
 |------|---------|
 | GET `/stats/dashboard` | Aggregate counts + `stage_distribution` + `revenue_pipeline` |
 | GET `/stats/me` | Personal performance for current user: `personal{actions_total, positives, negatives, visits, bookings_done, loans_done, closed_deals, call_notes, score_10, last_activity}` + `leads{hot, warm, cold, negative, closed}` + `employee` + `role` |
-| GET `/stats/employees` | Per-employee metrics for the Admin Analytics card grid |
-| GET `/activities?limit=` | Recent activity feed (used in Admin Analytics live feed) |
+| GET `/stats/employees` | Per-employee metrics for the Dashboard Employee Performance grid |
+| GET `/activities?limit=` | Recent activity feed |
 
 ---
 
@@ -266,5 +265,3 @@ mongod --dbpath ./data/db
 ## 12. Test credentials
 
 This app uses Email/Password login. To bypass for automated tests, see `/app/memory/test_credentials.md` for the insertion snippet.
-
-The Admin Analytics page is gated by a **simple 4-digit PIN: `9999`** (constant in `admin-analytics.tsx`). Change `ADMIN_PIN` there for production.

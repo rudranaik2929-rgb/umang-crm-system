@@ -45,7 +45,6 @@ export function stageLabel(stage?: string): string {
 export const NAV_ITEMS = [
   { key: 'dashboard', path: '/(app)/dashboard', label: 'Dashboard', icon: 'dashboard' },
   { key: 'my-dashboard', path: '/(app)/my-dashboard', label: 'My Dashboard', icon: 'person' },
-  { key: 'admin-analytics', path: '/(app)/admin-analytics', label: 'Admin Analytics', icon: 'admin' },
   { key: 'pipeline', path: '/(app)/pipeline', label: 'Lead Pipeline', icon: 'pipeline' },
   { key: 'telecaller', path: '/(app)/telecaller', label: 'Telecaller', icon: 'phone' },
   { key: 'visits', path: '/(app)/visits', label: 'Site Visits', icon: 'visit' },
@@ -59,30 +58,58 @@ export const NAV_ITEMS = [
 
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
-  admin: ['dashboard', 'my-dashboard', 'admin-analytics', 'pipeline', 'telecaller', 'visits', 'bookings', 'loans', 'tracking', 'employees', 'negative'],
-  manager: ['dashboard', 'my-dashboard', 'pipeline', 'bookings', 'loans', 'employees'],
-  telecaller: ['dashboard', 'my-dashboard', 'telecaller', 'pipeline', 'negative'],
-  site_visit: ['dashboard', 'my-dashboard', 'visits', 'pipeline'],
-  booking: ['dashboard', 'my-dashboard', 'bookings', 'pipeline'],
-  loan: ['dashboard', 'my-dashboard', 'loans', 'pipeline'],
-  marketing: ['dashboard', 'my-dashboard', 'negative', 'pipeline'],
+  admin: ['dashboard', 'my-dashboard', 'pipeline', 'telecaller', 'visits', 'bookings', 'loans', 'tracking', 'employees', 'negative'],
+  manager: ['my-dashboard', 'pipeline', 'bookings', 'loans', 'employees'],
+  telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
+  site_visit: ['my-dashboard', 'visits', 'pipeline'],
+  booking: ['my-dashboard', 'bookings', 'pipeline'],
+  loan: ['my-dashboard', 'loans', 'pipeline'],
+  marketing: ['my-dashboard', 'negative', 'pipeline'],
 };
 
-export function visibleNavFor(role?: string | null) {
-  const r = role || 'admin';
-  const allowed = ROLE_ACCESS[r] || ROLE_ACCESS.admin;
-  return NAV_ITEMS.filter((n) => allowed.includes(n.key));
+export const OWNER_EMAILS = ['htshpatil13@gmail.com', 'umang@admin'];
+
+export function isOwner(role?: string | null, email?: string | null) {
+  return role === 'admin' || (!!email && OWNER_EMAILS.includes(email.toLowerCase()));
+}
+
+const DEFAULT_ROUTES: Record<string, string> = {
+  admin: '/(app)/dashboard',
+  manager: '/(app)/my-dashboard',
+  telecaller: '/(app)/telecaller',
+  site_visit: '/(app)/visits',
+  booking: '/(app)/bookings',
+  loan: '/(app)/loans',
+  marketing: '/(app)/negative-leads',
+};
+
+const ROUTE_ITEMS = NAV_ITEMS;
+
+export function visibleNavFor(role?: string | null, email?: string | null) {
+  return NAV_ITEMS.filter((n) => canAccess(role, n.key, email));
 }
 
 export function isAdmin(role?: string | null) {
   return role === 'admin' || role === 'manager';
 }
 
-export function canSeeRevenue(role?: string | null) {
-  return role === 'admin';
+export function canSeeRevenue(role?: string | null, email?: string | null) {
+  return isOwner(role, email);
 }
 
-export function canAccess(role: string | null | undefined, page: string): boolean {
+export function canAccess(role: string | null | undefined, page: string, email?: string | null): boolean {
+  if (page === 'dashboard') return isOwner(role, email);
   const r = role || 'admin';
   return (ROLE_ACCESS[r] || ROLE_ACCESS.admin).includes(page);
+}
+
+export function pageKeyFromPathname(pathname?: string | null): string | null {
+  const slug = pathname?.split('/').filter(Boolean).pop();
+  if (!slug) return null;
+  return ROUTE_ITEMS.find((item) => item.path.split('/').pop() === slug)?.key || null;
+}
+
+export function defaultRouteFor(role?: string | null, email?: string | null): string {
+  if (isOwner(role, email)) return DEFAULT_ROUTES.admin;
+  return DEFAULT_ROUTES[role || ''] || '/(app)/my-dashboard';
 }

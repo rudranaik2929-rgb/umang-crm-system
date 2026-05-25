@@ -29,7 +29,6 @@ Open the Expo web URL shown in the terminal.
 - **Frontend**: `frontend/app/` (Expo Router screens) + `frontend/src/` (theme, auth, components)
 - **Docs**: `UNDERSTAND.md` first, then `docs/`
 - **Scripts**: `scripts/demo/` for demo data and `scripts/scratch/` for old debugging utilities
-- **Admin PIN**: `9999` (gates the Admin Analytics page; configurable in `frontend/app/(app)/admin-analytics.tsx`)
 - **Roles**: admin · manager · telecaller · site_visit · booking · loan · marketing
 
 See [`UNDERSTAND.md`](./UNDERSTAND.md) for the current folder structure and code ownership guide.

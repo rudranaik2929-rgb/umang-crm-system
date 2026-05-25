@@ -145,7 +145,7 @@ export default function Bookings() {
                       <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
                     </View>
                   </View>
-                  {canSeeRevenue(user?.role) && (
+                  {canSeeRevenue(user?.role, user?.email) && (
                   <View style={{ alignItems: 'flex-end' }}>
                     <Text style={[styles.bigVal, { color: colors.text }]}>₹{(b.booking_amount || 0).toLocaleString('en-IN')}</Text>
                     <Text style={[styles.cardSub, { color: colors.textMuted }]}>Booking amount</Text>
@@ -180,7 +180,7 @@ export default function Bookings() {
                   </View>
                 </View>
 
-                {canSeeRevenue(user?.role) && (
+                {canSeeRevenue(user?.role, user?.email) && (
                 <View style={{ marginTop: 14 }}>
                   <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
                     <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{(b.token_received || 0).toLocaleString('en-IN')}</Text>
@@ -193,7 +193,7 @@ export default function Bookings() {
                 )}
 
                 {/* Brokerage Input & Percentage Calculation — hidden for manager */}
-                {canSeeRevenue(user?.role) && (
+                {canSeeRevenue(user?.role, user?.email) && (
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12, flexWrap: 'wrap' }}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                     <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE (₹)</Text>
@@ -226,7 +226,7 @@ export default function Bookings() {
 
                 <View style={styles.actions}>
                 {BOOKING_TASKS.map((task) => {
-                  if (task.key === 'amount_received' && !canSeeRevenue(user?.role)) return null;
+                  if (task.key === 'amount_received' && !canSeeRevenue(user?.role, user?.email)) return null;
                   const done = completedSet.has(task.key);
                   return (
                     <Pressable

@@ -107,7 +107,7 @@ export default function Loans() {
                         {lo.starred ? <Ionicons name="star" size={14} color={colors.warning} /> : null}
                         <Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>{lo.lead_name}</Text>
                       </View>
-                      <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Loan source pending'}{canSeeRevenue(user?.role) ? `  ·  ₹${(lo.amount || 0).toLocaleString('en-IN')}` : ''}</Text>
+                      <Text style={[styles.cardSub, { color: colors.textMuted }]}>{lo.bank_name || 'Loan source pending'}{canSeeRevenue(user?.role, user?.email) ? `  ·  ₹${(lo.amount || 0).toLocaleString('en-IN')}` : ''}</Text>
                       <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
                         <Badge text={(lo.application_status || 'pending').toUpperCase()} color={STATUS_COLOR[lo.application_status] || colors.primary} />
                         <Badge text={(lo.bank_stage || 'setup').toUpperCase()} color={colors.info} />

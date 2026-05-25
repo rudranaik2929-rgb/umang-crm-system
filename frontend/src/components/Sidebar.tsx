@@ -33,7 +33,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
   const pathname = usePathname();
 
   const role = ROLES.find((r) => r.key === user?.role);
-  const items = visibleNavFor(user?.role);
+  const items = visibleNavFor(user?.role, user?.email);
 
   return (
     <View style={[styles.wrap, {

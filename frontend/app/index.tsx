@@ -1,15 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, ScrollView, Platform, Dimensions, TextInput, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../src/theme/ThemeContext';
 import { useAuth } from '../src/auth/AuthContext';
+import { defaultRouteFor } from '../src/lib/constants';
 
 const HERO_IMG = 'https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/35dda4ad3fda80d98d3e686fde61d9fcf2b36147d133e43a32eed389dcf53913.png';
 
 export default function Index() {
   const router = useRouter();
-  const { user, loading, exchangeSession } = useAuth();
+  const { user, exchangeSession } = useAuth();
   const { colors, themeName, toggle } = useTheme();
   const { width } = Dimensions.get('window');
   const isWide = width >= 900;
@@ -40,11 +41,11 @@ export default function Index() {
       });
       if (loggedInUser) {
         if (!loggedInUser.role) router.replace('/select-role' as any);
-        else router.replace('/(app)/dashboard' as any);
+        else router.replace(defaultRouteFor(loggedInUser.role, loggedInUser.email) as any);
       } else {
         alert('Login failed. Please check your credentials.');
       }
-    } catch (err) {
+    } catch {
       alert('An error occurred during login. Please try again.');
     } finally {
       setIsLoggingIn(false);
@@ -54,7 +55,7 @@ export default function Index() {
   const onContinue = () => {
     if (user) {
       if (!user.role) router.replace('/select-role' as any);
-      else router.replace('/(app)/dashboard' as any);
+      else router.replace(defaultRouteFor(user.role, user.email) as any);
     }
   };
 
