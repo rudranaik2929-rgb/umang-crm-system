@@ -1,4 +1,4 @@
-"""Umang Properties – Real Estate CRM Backend (Supabase Production)"""
+"""Umang Hometech LLP – Real Estate CRM Backend (Supabase Production)"""
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from starlette.middleware.cors import CORSMiddleware
 import uuid, logging, random, os, httpx, csv, io, openpyxl
@@ -27,11 +27,11 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
-app = FastAPI(title="Umang Properties CRM")
+app = FastAPI(title="Umang Hometech LLP CRM")
 
 @app.get("/")
 async def root_health():
-    return {"status": "online", "message": "Umang CRM Backend is running", "timestamp": datetime.now().isoformat()}
+    return {"status": "online", "message": "Umang Hometech LLP CRM Backend is running", "timestamp": datetime.now().isoformat()}
 
 @app.get("/debug-config")
 async def debug_config():
@@ -452,7 +452,7 @@ class AIService:
                 {
                     "role": "system",
                     "content": """
-You are a professional real estate assistant for Umang Properties.
+You are a professional real estate assistant for Umang Hometech LLP.
 Your goal:
 - Sound human and friendly
 - Ask about budget, location, requirement
@@ -1874,7 +1874,7 @@ async def stats_employees(cu: User=Depends(get_current_user)):
 
 # ---- Health & Wiring ----
 @api_router.get("/")
-async def root(): return {"app": "Umang Properties CRM", "status": "ok", "database": "supabase"}
+async def root(): return {"app": "Umang Hometech LLP CRM", "status": "ok", "database": "supabase"}
 
 app.include_router(api_router)
 

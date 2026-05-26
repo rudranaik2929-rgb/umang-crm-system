@@ -95,7 +95,7 @@ export default function Loans() {
                 testIDAction="empty-create-loan"
               />
             ) : activeLoans.map((lo) => {
-              const hasSetup = lo.bank_name === 'Self Loan Adjustment' || lo.bank_name === 'Developer Loan Adjustment' || lo.bank_name === 'Umang Properties Loan';
+              const hasSetup = lo.bank_name === 'Self Loan Adjustment' || lo.bank_name === 'Developer Loan Adjustment' || lo.bank_name === 'Umang Hometech LLP Loan';
               return (
                 <View key={lo.loan_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                   <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
@@ -209,7 +209,7 @@ export default function Loans() {
                         setBusy(`${lo.loan_id}-umang`);
                         try {
                           await api.patch(`/loans/${lo.loan_id}`, {
-                            bank_name: "Umang Properties Loan",
+                            bank_name: "Umang Hometech LLP Loan",
                             application_status: "submitted",
                             bank_stage: "setup"
                           });
@@ -218,13 +218,13 @@ export default function Loans() {
                       }}
                       disabled={busy !== null}
                       style={[styles.act, {
-                        borderColor: lo.bank_name === 'Umang Properties Loan' ? colors.primary : colors.border,
-                        backgroundColor: lo.bank_name === 'Umang Properties Loan' ? colors.primary + '15' : colors.surfaceAlt,
+                        borderColor: lo.bank_name === 'Umang Hometech LLP Loan' ? colors.primary : colors.border,
+                        backgroundColor: lo.bank_name === 'Umang Hometech LLP Loan' ? colors.primary + '15' : colors.surfaceAlt,
                         opacity: busy !== null ? 0.6 : 1
                       }]}
                     >
-                      <Ionicons name="business-outline" size={12} color={lo.bank_name === 'Umang Properties Loan' ? colors.primary : colors.textMuted} />
-                      <Text style={{ color: lo.bank_name === 'Umang Properties Loan' ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>UMANG LOAN</Text>
+                      <Ionicons name="business-outline" size={12} color={lo.bank_name === 'Umang Hometech LLP Loan' ? colors.primary : colors.textMuted} />
+                      <Text style={{ color: lo.bank_name === 'Umang Hometech LLP Loan' ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>UMANG LOAN</Text>
                     </Pressable>
 
                     {/* 4. SANCTIONED Button */}

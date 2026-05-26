@@ -39,12 +39,12 @@ export default function Enquire() {
       <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
         <View style={styles.brandRow}>
           <Image 
-            source={require('../assets/images/logo.jpeg')} 
+            source={require('../assets/images/logo.png')} 
             style={styles.logoImage} 
             resizeMode="contain" 
           />
           <View>
-            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Properties</Text>
+            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Hometech LLP</Text>
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>New Property Enquiry</Text>
           </View>
         </View>

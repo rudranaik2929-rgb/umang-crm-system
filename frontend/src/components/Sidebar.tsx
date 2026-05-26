@@ -44,13 +44,13 @@ export function Sidebar({ collapsed, onToggle }: Props) {
       {/* Brand */}
       <View style={[styles.brand, { borderBottomColor: colors.border }]}>
         <Image 
-          source={require('../../assets/images/logo.jpeg')} 
+          source={require('../../assets/images/logo.png')} 
           style={[styles.logoImage, collapsed && { width: 38, height: 38 }]}
           resizeMode="contain" 
         />
         {!collapsed && (
           <View style={{ flex: 1 }}>
-            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Properties</Text>
+            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Hometech LLP</Text>
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>Real Estate CRM</Text>
           </View>
         )}

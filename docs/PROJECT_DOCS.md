@@ -1,4 +1,4 @@
-# Umang Properties — Real Estate CRM & Workflow Management
+# Umang Hometech LLP — Real Estate CRM & Workflow Management
 
 > Current handover note: this file was written before the latest folder cleanup and still contains some older MongoDB wording. For the current source-of-truth folder map, active entry points, and where to add new code, read [`../UNDERSTAND.md`](../UNDERSTAND.md) first. The active backend code currently uses Supabase/PostgREST in `backend/app/main.py`; the MongoDB files are preserved under `backend/legacy/`.
 

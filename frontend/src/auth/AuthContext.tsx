@@ -148,7 +148,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         </View>
         <Text style={{ color: '#fff', fontSize: 24, fontWeight: '700', textAlign: 'center', marginBottom: 12 }}>GPS Access Required</Text>
         <Text style={{ color: '#94A3B8', fontSize: 16, textAlign: 'center', lineHeight: 24, marginBottom: 32 }}>
-          To ensure accountability for site visits and fieldwork, you must enable location services to use the Umang CRM.
+          To ensure accountability for site visits and fieldwork, you must enable location services to use the Umang Hometech LLP CRM.
         </Text>
         <Pressable 
           onPress={checkLocation}

@@ -1,12 +1,12 @@
-# Umang CRM Handover Guide
+# Umang Hometech LLP CRM Handover Guide
 
-This file is the first-read guide for continuing the Umang Properties CRM project.
+This file is the first-read guide for continuing the Umang Hometech LLP CRM project.
 It explains the current folder structure, active code, legacy code, languages used,
 where to add new files, and the safest way to make changes without breaking logic.
 
 ## 1. What This Project Does
 
-Umang CRM is a real estate workflow system.
+Umang Hometech LLP CRM is a real estate workflow system.
 
 Business flow:
 

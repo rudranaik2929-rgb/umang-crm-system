@@ -70,11 +70,11 @@ export default function Index() {
           <View style={styles.heroOverlay}>
             <View style={styles.heroBrand}>
               <Image
-                source={require('../assets/images/logo.jpeg')}
+                source={require('../assets/images/logo.png')}
                 style={styles.logoImage}
                 resizeMode="contain"
               />
-              <Text style={styles.heroBrandTitle}>Umang Properties</Text>
+              <Text style={styles.heroBrandTitle}>Umang Hometech LLP</Text>
             </View>
             <View style={{ flex: 1 }} />
             <Text style={styles.heroTitle}>Premium real estate{`\n`}workflow, end-to-end.</Text>
@@ -102,11 +102,11 @@ export default function Index() {
           <View style={styles.topRow}>
             <View style={styles.brandRow}>
               <Image
-                source={require('../assets/images/logo.jpeg')}
+                source={require('../assets/images/logo.png')}
                 style={styles.logoImageSm}
                 resizeMode="contain"
               />
-              <Text style={[styles.brandText, { color: colors.text }]}>Umang Properties</Text>
+              <Text style={[styles.brandText, { color: colors.text }]}>Umang Hometech LLP</Text>
             </View>
             <Pressable
               onPress={toggle}
@@ -185,7 +185,7 @@ export default function Index() {
 
           <View style={{ flex: 1 }} />
           <Text style={[styles.footer, { color: colors.textMuted }]}>
-            © {new Date().getFullYear()} Umang Properties — Enterprise CRM
+            © {new Date().getFullYear()} Umang Hometech LLP — Enterprise CRM
           </Text>
         </View>
       </ScrollView>

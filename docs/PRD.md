@@ -1,9 +1,9 @@
-# PRD – Umang Properties CRM
+# PRD – Umang Hometech LLP CRM
 
 > Current handover note: this PRD is older and still says MongoDB in a few places. The active backend now lives in `backend/app/main.py` and uses Supabase/PostgREST. Read `../UNDERSTAND.md` first for current structure.
 
 ## Overview
-A premium real estate CRM & employee workflow management dashboard for Umang Properties. Built as Expo (React Native Web) for desktop browsers. Starts with **zero data** so the user can play every role and walk through the entire workflow end-to-end.
+A premium real estate CRM & employee workflow management dashboard for Umang Hometech LLP. Built as Expo (React Native Web) for desktop browsers. Starts with **zero data** so the user can play every role and walk through the entire workflow end-to-end.
 
 ## Workflow
 Lead Generated → Telecaller → Site Visit → Booking → Loan → Registration → Closed

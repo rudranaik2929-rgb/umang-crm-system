@@ -1,4 +1,4 @@
-# Umang Properties — Real Estate CRM
+# Umang Hometech LLP — Real Estate CRM
 
 Premium real-estate workflow management dashboard. Lead Capture → Telecaller → Site Visit → Booking → Loan → Closed.
 

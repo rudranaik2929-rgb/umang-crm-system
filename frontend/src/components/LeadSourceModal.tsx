@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Pressable, Animated, Dimensions, Platform, Modal,
 } from 'react-native';
@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 
-const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
+const { height: SCREEN_H } = Dimensions.get('window');
 
 const SOURCE_META: Record<string, { icon: any; color: string; label: string }> = {
   website:     { icon: 'globe-outline',         color: '#E88B35', label: 'Website' },
@@ -34,9 +34,43 @@ interface Props {
   onClose: () => void;
 }
 
+type LeadSourceData = {
+  total: number;
+  sources: { source: string; count: number; active: number; negative: number }[];
+};
+
+const DEMO_SOURCE_DATA: LeadSourceData = {
+  total: 47,
+  sources: [
+    { source: 'website', count: 14, active: 12, negative: 2 },
+    { source: 'facebook', count: 10, active: 8, negative: 2 },
+    { source: 'magicbricks', count: 8, active: 7, negative: 1 },
+    { source: '99acres', count: 6, active: 5, negative: 1 },
+    { source: 'referral', count: 5, active: 5, negative: 0 },
+    { source: 'direct', count: 4, active: 3, negative: 1 },
+  ],
+};
+
+function normalizeSourceData(payload: any): LeadSourceData {
+  const sources = Array.isArray(payload?.sources) ? payload.sources : [];
+  const normalizedSources: LeadSourceData['sources'] = sources.map((source: any) => ({
+    source: String(source?.source || 'direct'),
+    count: Number(source?.count || 0),
+    active: Number(source?.active || 0),
+    negative: Number(source?.negative || 0),
+  }));
+
+  return {
+    total: Number(
+      payload?.total ?? normalizedSources.reduce((sum, source) => sum + source.count, 0)
+    ),
+    sources: normalizedSources,
+  };
+}
+
 export function LeadSourceModal({ visible, onClose }: Props) {
   const { colors } = useTheme();
-  const [data, setData] = useState<{ total: number; sources: any[] } | null>(null);
+  const [data, setData] = useState<LeadSourceData | null>(null);
   const [loading, setLoading] = useState(false);
 
   // Animations
@@ -44,6 +78,25 @@ export function LeadSourceModal({ visible, onClose }: Props) {
   const slideAnim = useRef(new Animated.Value(60)).current;
   const scaleAnim = useRef(new Animated.Value(0.92)).current;
   const barAnims = useRef<Animated.Value[]>([]).current;
+
+  const setSourceData = useCallback((nextData: LeadSourceData) => {
+    barAnims.length = 0;
+    nextData.sources.forEach(() => barAnims.push(new Animated.Value(0)));
+    setData(nextData);
+  }, [barAnims]);
+
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setData(null);
+    try {
+      const res = await api.get('/stats/leads-by-source');
+      setSourceData(normalizeSourceData(res.data));
+    } catch {
+      setSourceData(DEMO_SOURCE_DATA);
+    } finally {
+      setLoading(false);
+    }
+  }, [setSourceData]);
 
   useEffect(() => {
     if (visible) {
@@ -60,49 +113,22 @@ export function LeadSourceModal({ visible, onClose }: Props) {
       slideAnim.setValue(60);
       scaleAnim.setValue(0.92);
     }
-  }, [visible]);
+  }, [backdropAnim, loadData, scaleAnim, slideAnim, visible]);
 
   useEffect(() => {
-    if (data?.sources) {
-      // Reset bar anims
-      barAnims.length = 0;
-      data.sources.forEach(() => barAnims.push(new Animated.Value(0)));
+    if (!data?.sources.length) return;
 
-      // Stagger bar animations
-      const anims = barAnims.map((anim, i) =>
-        Animated.timing(anim, {
-          toValue: 1,
-          duration: 500,
-          delay: i * 80,
-          useNativeDriver: false, // width animation can't use native driver
-        })
-      );
-      Animated.stagger(80, anims).start();
-    }
-  }, [data]);
-
-  const loadData = async () => {
-    setLoading(true);
-    try {
-      const res = await api.get('/stats/leads-by-source');
-      setData(res.data);
-    } catch {
-      // If endpoint doesn't exist, use demo data
-      setData({
-        total: 47,
-        sources: [
-          { source: 'website', count: 14, active: 12, negative: 2 },
-          { source: 'facebook', count: 10, active: 8, negative: 2 },
-          { source: 'magicbricks', count: 8, active: 7, negative: 1 },
-          { source: '99acres', count: 6, active: 5, negative: 1 },
-          { source: 'referral', count: 5, active: 5, negative: 0 },
-          { source: 'direct', count: 4, active: 3, negative: 1 },
-        ],
-      });
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Stagger bar animations after the rows have rendered with live Animated.Value refs.
+    const anims = barAnims.map((anim, i) =>
+      Animated.timing(anim, {
+        toValue: 1,
+        duration: 500,
+        delay: i * 80,
+        useNativeDriver: false, // width animation can't use native driver
+      })
+    );
+    Animated.stagger(80, anims).start();
+  }, [barAnims, data]);
 
   const handleClose = () => {
     Animated.parallel([
@@ -167,7 +193,7 @@ export function LeadSourceModal({ visible, onClose }: Props) {
           <View style={{ padding: 40, alignItems: 'center' }}>
             <Text style={{ color: colors.textMuted }}>Loading sources…</Text>
           </View>
-        ) : data?.sources.map((src, i) => {
+        ) : data?.sources.length ? data.sources.map((src, i) => {
           const meta = getMeta(src.source);
           const pct = data.total > 0 ? Math.round((src.count / data.total) * 100) : 0;
           const barWidth = barAnims[i] ? barAnims[i].interpolate({
@@ -181,7 +207,7 @@ export function LeadSourceModal({ visible, onClose }: Props) {
               style={[
                 st.sourceRow,
                 {
-                  opacity: barAnims[i] || 0,
+                  opacity: barAnims[i] || 1,
                 },
               ]}
             >
@@ -218,7 +244,11 @@ export function LeadSourceModal({ visible, onClose }: Props) {
               </View>
             </Animated.View>
           );
-        })}
+        }) : (
+          <View style={{ padding: 40, alignItems: 'center' }}>
+            <Text style={{ color: colors.textMuted }}>No lead sources yet.</Text>
+          </View>
+        )}
 
         {/* Footer */}
         <View style={[st.footer, { borderTopColor: colors.border }]}>
