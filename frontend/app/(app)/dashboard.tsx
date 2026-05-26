@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform, Modal } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
@@ -40,6 +40,9 @@ export default function Dashboard() {
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
+  const [followUpModalVisible, setFollowUpModalVisible] = useState(false);
+  const [followUps, setFollowUps] = useState<any[]>([]);
+  const [followUpsLoading, setFollowUpsLoading] = useState(false);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -60,6 +63,17 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+
+  const openFollowUps = useCallback(async () => {
+    setFollowUpModalVisible(true);
+    setFollowUpsLoading(true);
+    try {
+      const res = await api.get('/visit-followups');
+      setFollowUps(Array.isArray(res.data) ? res.data : []);
+    } finally {
+      setFollowUpsLoading(false);
+    }
+  }, []);
 
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
@@ -154,7 +168,7 @@ export default function Dashboard() {
           <MetricCard icon="remove-circle-outline" label="Negative Leads" value={model.negativeLeads} accent={colors.negative} helper="Remarketing pool" />
           <MetricCard icon="location-outline" label="Site Visits" value={model.visits} accent="#06B6D4" helper={`${model.completedVisits} completed`} />
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper={`${model.confirmedBookings} confirmed`} />
-          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} onPress={() => router.push('/(app)/visits' as any)} />
+          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} onPress={openFollowUps} />
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} />
           <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} />
         </View>
@@ -241,6 +255,13 @@ export default function Dashboard() {
       </ScrollView>
 
       <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
+      <FollowUpsModal
+        visible={followUpModalVisible}
+        onClose={() => setFollowUpModalVisible(false)}
+        items={followUps}
+        loading={followUpsLoading}
+        colors={colors}
+      />
       <LeadDetailModal
         leadId={openLead}
         visible={openLead !== null}
@@ -249,6 +270,59 @@ export default function Dashboard() {
         userRole={user?.role}
       />
     </View>
+  );
+}
+
+function FollowUpsModal({ visible, onClose, items, loading, colors }: any) {
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.modalBackdrop} onPress={onClose}>
+        <Pressable style={[styles.followModal, { backgroundColor: colors.surface, borderColor: colors.border }]} testID="dashboard-followups-modal">
+          <View style={styles.followModalHeader}>
+            <View>
+              <Text style={[styles.panelTitle, { color: colors.text }]}>Follow Ups</Text>
+              <Text style={[styles.panelSub, { color: colors.textMuted }]}>
+                {items.length.toLocaleString('en-IN')} scheduled
+              </Text>
+            </View>
+            <Pressable onPress={onClose} style={[styles.closeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <Ionicons name="close" size={18} color={colors.textSecondary} />
+            </Pressable>
+          </View>
+
+          {loading ? (
+            <View style={styles.followLoading}>
+              <ActivityIndicator color={colors.primary} />
+            </View>
+          ) : items.length === 0 ? (
+            <View style={styles.followEmpty}>
+              <Text style={[styles.emptyText, { color: colors.textMuted }]}>No follow ups scheduled.</Text>
+            </View>
+          ) : (
+            <ScrollView style={styles.followList} contentContainerStyle={{ gap: 10 }}>
+              {items.map((item: any) => (
+                <View key={item.followup_id || `${item.visit_id}-${item.follow_up_at}`} style={[styles.followRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+                  <View style={[styles.followIcon, { backgroundColor: '#F9731618' }]}>
+                    <Ionicons name="calendar-outline" size={16} color="#F97316" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.followLead, { color: colors.text }]} numberOfLines={1}>
+                      {item.lead_name || 'Lead'}
+                    </Text>
+                    <Text style={[styles.followMeta, { color: colors.textMuted }]} numberOfLines={1}>
+                      {item.follow_up_day || '-'} · {item.follow_up_date || '-'} · {item.follow_up_time || '-'}
+                    </Text>
+                    {item.notes ? (
+                      <Text style={[styles.followNotes, { color: colors.textSecondary }]} numberOfLines={2}>{item.notes}</Text>
+                    ) : null}
+                  </View>
+                </View>
+              ))}
+            </ScrollView>
+          )}
+        </Pressable>
+      </Pressable>
+    </Modal>
   );
 }
 
@@ -473,4 +547,16 @@ const styles = StyleSheet.create({
   moreText: { fontSize: 11, fontWeight: '700', marginTop: 2 },
   emptyText: { fontSize: 11, fontStyle: 'italic', paddingVertical: 18, textAlign: 'center' },
   chartRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 20 },
+  followModal: { width: '92%', maxWidth: 560, maxHeight: '82%', borderWidth: 1, borderRadius: 12, padding: 18 },
+  followModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 },
+  closeBtn: { width: 34, height: 34, borderWidth: 1, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  followLoading: { minHeight: 180, alignItems: 'center', justifyContent: 'center' },
+  followEmpty: { minHeight: 160, alignItems: 'center', justifyContent: 'center' },
+  followList: { maxHeight: 420 },
+  followRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, borderWidth: 1, borderRadius: 8, padding: 12 },
+  followIcon: { width: 34, height: 34, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  followLead: { fontSize: 13, fontWeight: '700' },
+  followMeta: { fontSize: 12, marginTop: 3, fontWeight: '600' },
+  followNotes: { fontSize: 11, marginTop: 5 },
 });
