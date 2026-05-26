@@ -589,6 +589,18 @@ def parse_follow_up_at(follow_up_date: str, follow_up_time: str) -> datetime:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed
 
+def follow_up_display_parts(value: Optional[str]):
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        parsed = now_utc()
+    return {
+        "follow_up_date": parsed.date().isoformat(),
+        "follow_up_time": parsed.strftime("%H:%M"),
+        "follow_up_day": parsed.strftime("%A"),
+        "follow_up_at": parsed.isoformat(),
+    }
+
 def ensure_visit_record(lead_id: str, lead_name: Optional[str] = None, assigned_to: Optional[str] = None):
     existing = first_related_record("visits", "visits", lead_id)
     if existing:
@@ -1420,11 +1432,37 @@ async def list_visit_followups(visit_id: Optional[str]=None, lead_id: Optional[s
     rows = sb_select("visit_followups", {"select": "*", "order": "follow_up_at.desc"})
     cache_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
     followups = SESSION_CACHE["followups"] + [f for f in rows if f.get("followup_id") not in cache_ids]
+
+    visits = sb_select("visits", {"select": "*", "status": "eq.follow_up", "order": "scheduled_at.desc"})
+    cache_visit_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
+    follow_up_visits = [v for v in SESSION_CACHE["visits"] if v.get("status") == "follow_up"]
+    follow_up_visits += [v for v in visits if v.get("visit_id") not in cache_visit_ids]
+
+    leads = sb_select("leads", {"select": "lead_id,name"})
+    lead_names = {l.get("lead_id"): l.get("name") for l in leads}
+    lead_names.update({l.get("lead_id"): l.get("name") for l in SESSION_CACHE["leads"]})
+
+    followup_visit_ids = {f.get("visit_id") for f in followups}
+    for visit in follow_up_visits:
+        if visit.get("visit_id") in followup_visit_ids:
+            continue
+        parts = follow_up_display_parts(visit.get("scheduled_at"))
+        followups.append({
+            "followup_id": f"visit_{visit.get('visit_id')}",
+            "visit_id": visit.get("visit_id"),
+            "lead_id": visit.get("lead_id"),
+            "lead_name": lead_names.get(visit.get("lead_id"), visit.get("lead_name", "Lead")),
+            "status": "scheduled",
+            "notes": visit.get("feedback"),
+            "created_at": visit.get("updated_at") or visit.get("created_at"),
+            **parts,
+        })
+
     if visit_id:
         followups = [f for f in followups if f.get("visit_id") == visit_id]
     if lead_id:
         followups = [f for f in followups if f.get("lead_id") == lead_id]
-    return followups
+    return sorted(followups, key=lambda f: f.get("follow_up_at") or "", reverse=True)
 
 # ---- Bookings ----
 @api_router.post("/bookings")
@@ -1800,10 +1838,11 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     rev = sum(float(b.get("booking_amount", 0) or 0) for b in bookings)
     rev += sum(float(l.get("amount", 0) or 0) for l in loans if l.get("application_status") == "disbursed" or l.get("bank_stage") == "disbursal")
     activity_followups = sum(1 for a in activities if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
-    follow_up_total = max(len(followups), activity_followups)
+    follow_up_visits = sum(1 for v in visits if v.get("status") == "follow_up")
+    follow_up_total = max(len(followups), activity_followups, follow_up_visits)
     pending_follow_up_total = (
         sum(1 for f in followups if str(f.get("status", "scheduled")).lower() in ["scheduled", "pending", "open"])
-        if followups else activity_followups
+        if followups else max(activity_followups, follow_up_visits)
     )
     
     return {
