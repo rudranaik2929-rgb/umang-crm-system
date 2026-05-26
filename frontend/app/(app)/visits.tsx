@@ -28,6 +28,43 @@ function dayNameFromDate(value: string) {
   return DAY_NAMES[parsed.getDay()];
 }
 
+function getLocalTimeZoneLabel() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-IN', { timeZoneName: 'short' }).formatToParts(new Date());
+    return parts.find((part) => part.type === 'timeZoneName')?.value || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+  } catch {
+    return 'Local';
+  }
+}
+
+function formatClockTime(value?: string | null) {
+  if (!value) return '-';
+  const [rawHour, rawMinute = '0'] = String(value).split(':');
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return String(value);
+
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+function formatFollowUpTime(value?: string | null, fallbackIso?: string | null) {
+  if (value) return `${formatClockTime(value)} ${getLocalTimeZoneLabel()}`;
+  if (fallbackIso) {
+    const parsed = new Date(fallbackIso);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleTimeString('en-IN', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZoneName: 'short',
+      });
+    }
+  }
+  return `- ${getLocalTimeZoneLabel()}`;
+}
+
 export default function Visits() {
   const { colors } = useTheme();
   const { user } = useAuth();
@@ -115,7 +152,7 @@ export default function Visits() {
                     </View>
                     {v.next_follow_up_date || v.next_follow_up_at ? (
                       <Text style={{ color: colors.warning, fontSize: 12, marginTop: 8, fontWeight: '600' }}>
-                        Next follow-up: {v.next_follow_up_date || new Date(v.next_follow_up_at).toLocaleDateString()} {v.next_follow_up_time || new Date(v.next_follow_up_at).toLocaleTimeString()} {v.next_follow_up_day ? `(${v.next_follow_up_day})` : ''}
+                        Next follow-up: {v.next_follow_up_date || new Date(v.next_follow_up_at).toLocaleDateString()} {formatFollowUpTime(v.next_follow_up_time, v.next_follow_up_at)} {v.next_follow_up_day ? `(${v.next_follow_up_day})` : ''}
                       </Text>
                     ) : null}
                     {v.feedback ? (
@@ -413,6 +450,9 @@ function FollowUpModal({ visible, visit, onClose, onCreated, colors }: any) {
               )}
             </View>
           </View>
+          <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 8 }}>
+            Time preview: {formatClockTime(time)} {getLocalTimeZoneLabel()}
+          </Text>
 
           <Text style={[styles.label, { color: colors.textMuted }]}>DAY *</Text>
           <TextInput

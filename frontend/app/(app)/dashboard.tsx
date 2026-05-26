@@ -30,6 +30,47 @@ function formatCompact(value: number) {
   return `${Math.round(value || 0)}`;
 }
 
+function getLocalTimeZoneLabel() {
+  try {
+    const parts = new Intl.DateTimeFormat('en-IN', { timeZoneName: 'short' }).formatToParts(new Date());
+    return parts.find((part) => part.type === 'timeZoneName')?.value || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
+  } catch {
+    return 'Local';
+  }
+}
+
+function formatClockTime(value?: string | null) {
+  if (!value) return '-';
+  const [rawHour, rawMinute = '0'] = String(value).split(':');
+  const hour = Number(rawHour);
+  const minute = Number(rawMinute);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return String(value);
+
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const displayHour = hour % 12 || 12;
+  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+function formatFollowUpTime(item: any) {
+  if (item.follow_up_time) {
+    return `${formatClockTime(item.follow_up_time)} ${getLocalTimeZoneLabel()}`;
+  }
+
+  if (item.follow_up_at) {
+    const parsed = new Date(item.follow_up_at);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleTimeString('en-IN', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true,
+        timeZoneName: 'short',
+      });
+    }
+  }
+
+  return '-';
+}
+
 export default function Dashboard() {
   const { colors } = useTheme();
   const router = useRouter();
@@ -310,7 +351,7 @@ function FollowUpsModal({ visible, onClose, items, loading, colors }: any) {
                       {item.lead_name || 'Lead'}
                     </Text>
                     <Text style={[styles.followMeta, { color: colors.textMuted }]} numberOfLines={1}>
-                      {item.follow_up_day || '-'} · {item.follow_up_date || '-'} · {item.follow_up_time || '-'}
+                      {item.follow_up_day || '-'} · {item.follow_up_date || '-'} · {formatFollowUpTime(item)}
                     </Text>
                     {item.notes ? (
                       <Text style={[styles.followNotes, { color: colors.textSecondary }]} numberOfLines={2}>{item.notes}</Text>
