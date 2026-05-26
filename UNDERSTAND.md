@@ -172,7 +172,7 @@ Main backend route groups:
 - Auth: `/api/auth/session`, `/api/auth/me`, `/api/auth/logout`, `/api/auth/set-role`, `/api/auth/act-as`, `/api/auth/ping-location`
 - Leads: `/api/leads/public`, `/api/leads`, `/api/leads/import`, `/api/leads/{lead_id}`, `/api/leads/{lead_id}/notes`, `/api/leads/{lead_id}/advance`
 - Webhooks: `/api/webhooks/facebook`, `/api/webhooks/{source}`, `/api/webhooks/whatsapp/reply`
-- Visits: `/api/visits`, `/api/visits/{visit_id}`
+- Visits: `/api/visits`, `/api/visits/{visit_id}`, `/api/visit-followups`
 - Bookings: `/api/bookings`, `/api/bookings/{booking_id}`
 - Loans: `/api/loans`, `/api/loans/{loan_id}`
 - Customers: `/api/customers`

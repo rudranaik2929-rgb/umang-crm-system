@@ -118,6 +118,22 @@ create table if not exists visits (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists visit_followups (
+  followup_id text primary key,
+  visit_id text not null,
+  lead_id text,
+  lead_name text,
+  follow_up_date date not null,
+  follow_up_time time not null,
+  follow_up_day text not null,
+  follow_up_at timestamptz not null,
+  status text not null default 'scheduled',
+  notes text,
+  created_by text,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists bookings (
   booking_id text primary key,
   lead_id text,
@@ -238,6 +254,18 @@ alter table visits add column if not exists feedback text;
 alter table visits add column if not exists interested boolean;
 alter table visits add column if not exists updated_at timestamptz not null default now();
 
+alter table visit_followups add column if not exists visit_id text;
+alter table visit_followups add column if not exists lead_id text;
+alter table visit_followups add column if not exists lead_name text;
+alter table visit_followups add column if not exists follow_up_date date;
+alter table visit_followups add column if not exists follow_up_time time;
+alter table visit_followups add column if not exists follow_up_day text;
+alter table visit_followups add column if not exists follow_up_at timestamptz;
+alter table visit_followups add column if not exists status text not null default 'scheduled';
+alter table visit_followups add column if not exists notes text;
+alter table visit_followups add column if not exists created_by text;
+alter table visit_followups add column if not exists updated_at timestamptz not null default now();
+
 alter table bookings add column if not exists unit_number text;
 alter table bookings add column if not exists tower text;
 alter table bookings add column if not exists payment_status text not null default 'pending';
@@ -267,7 +295,7 @@ do $$
 declare
   table_name text;
 begin
-  foreach table_name in array array['users', 'employees', 'leads', 'visits', 'bookings', 'loans', 'customers', 'templates', 'campaigns']
+  foreach table_name in array array['users', 'employees', 'leads', 'visits', 'visit_followups', 'bookings', 'loans', 'customers', 'templates', 'campaigns']
   loop
     execute format('drop trigger if exists trg_%I_updated_at on %I', table_name, table_name);
     execute format('create trigger trg_%I_updated_at before update on %I for each row execute function set_updated_at()', table_name, table_name);
@@ -284,6 +312,9 @@ create index if not exists idx_lead_notes_lead_id on lead_notes(lead_id);
 create index if not exists idx_activities_lead_id on activities(lead_id);
 create index if not exists idx_activities_user_id on activities(user_id);
 create index if not exists idx_visits_lead_id on visits(lead_id);
+create index if not exists idx_visit_followups_visit_id on visit_followups(visit_id);
+create index if not exists idx_visit_followups_lead_id on visit_followups(lead_id);
+create index if not exists idx_visit_followups_at on visit_followups(follow_up_at desc);
 create index if not exists idx_bookings_lead_id on bookings(lead_id);
 create index if not exists idx_loans_lead_id on loans(lead_id);
 create index if not exists idx_customers_lead_id on customers(lead_id);
@@ -292,6 +323,9 @@ create index if not exists idx_notifications_user_read on notifications(user_id,
 -- Compatibility views for the business workflow names.
 create or replace view site_visits as
 select * from visits;
+
+create or replace view site_visit_followups as
+select * from visit_followups;
 
 create or replace view loan_status as
 select * from loans;

@@ -131,6 +131,7 @@ db.user_sessions.insertOne({user_id:'u1', session_token:'TOKEN', expires_at:new 
 |--------|------|--------------|
 | POST | `/visits` | Creates visit AND moves lead.stage = `site_visit` |
 | GET / PATCH | `/visits/{id}` | Completing logs activity |
+| POST / GET | `/visit-followups` | Creates/list visit follow-ups with required date, time, day; dashboard counts them |
 | POST | `/bookings` | Creates booking, calculates `payment_progress`, moves lead.stage = `booking` |
 | GET / PATCH | `/bookings/{id}` | Token updates recompute progress |
 | POST | `/loans` | Creates with default `pending_documents=[PAN, Aadhaar, Income Proof, Bank Statements]`, moves lead.stage = `loan` |
@@ -142,8 +143,8 @@ Standard CRUD on `/employees`, `/templates`, `/campaigns`. `POST /campaigns/{id}
 ### Stats
 | Path | Purpose |
 |------|---------|
-| GET `/stats/dashboard` | Aggregate counts + `stage_distribution` + `revenue_pipeline` |
-| GET `/stats/me` | Personal performance for current user: `personal{actions_total, positives, negatives, visits, bookings_done, loans_done, closed_deals, call_notes, score_10, last_activity}` + `leads{hot, warm, cold, negative, closed}` + `employee` + `role` |
+| GET `/stats/dashboard` | Aggregate counts + `follow_ups`, `pending_follow_ups`, `stage_distribution` + `revenue_pipeline` |
+| GET `/stats/me` | Personal performance for current user: `personal{actions_total, positives, negatives, followups, visits, bookings_done, loans_done, closed_deals, call_notes, score_10, last_activity}` + `leads{hot, warm, cold, negative, closed}` + `employee` + `role` |
 | GET `/stats/employees` | Per-employee metrics for the Dashboard Employee Performance grid |
 | GET `/activities?limit=` | Recent activity feed |
 
@@ -157,6 +158,9 @@ Lead(lead_id, name, phone, email, budget, location, property_type, source='websi
      stage='new', status='active', assigned_to, notes, created_at, updated_at)
 SiteVisit(visit_id, lead_id, lead_name, scheduled_at, assigned_to, assigned_name,
           status='scheduled', feedback, interested, created_at)
+VisitFollowUp(followup_id, visit_id, lead_id, lead_name, follow_up_date,
+              follow_up_time, follow_up_day, follow_up_at, status='scheduled',
+              notes, created_by, created_at, updated_at)
 Booking(booking_id, lead_id, lead_name, property_name, booking_amount, token_received,
         agreement_status='pending', payment_progress=0, status='active', created_at)
 LoanApp(loan_id, lead_id, lead_name, bank_name, amount, application_status='pending',
@@ -211,6 +215,7 @@ ROLE_ACCESS = {
 | Public enquiry submitted | (anyone) | Lead → `stage=new`. Telecaller queue shows it. |
 | Telecaller "Mark Positive" | Telecaller | `stage=positive`. Visit team eligible to schedule. |
 | Telecaller "Schedule Site Visit" (lead modal) | Telecaller | POST `/visits` + lead.stage → `site_visit`. Visit team sees it on /visits. |
+| Visits "Follow Up" | Site Visit | POST `/visit-followups`, visit.status=`follow_up`, lead.follow_up_at updated. Dashboard Follow Ups count increments. |
 | Visits "Booking Ready" | Site Visit | visit.status=`completed`, interested=true, lead.stage → `booking`. Booking team sees it. |
 | Create Booking | Booking | Booking record + lead.stage → `booking`. |
 | Create Loan | Loan | Loan record + lead.stage → `loan`. |

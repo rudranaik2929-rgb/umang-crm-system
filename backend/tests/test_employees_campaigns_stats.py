@@ -79,13 +79,13 @@ def test_stats_dashboard(base_url, auth_client):
     data = r.json()
     expected = {"total_leads", "positive_leads", "negative_leads", "new_leads",
                 "site_visits", "completed_visits", "bookings", "confirmed_bookings",
-                "loans", "disbursed_loans", "employees", "campaigns",
+                "follow_ups", "pending_follow_ups", "loans", "disbursed_loans", "employees", "campaigns",
                 "revenue_pipeline", "stage_distribution"}
     assert expected.issubset(set(data.keys())), f"Missing keys: {expected - set(data.keys())}"
     assert isinstance(data["stage_distribution"], dict)
     assert "new" in data["stage_distribution"]
     # counts are non-negative ints
-    for k in ("total_leads", "site_visits", "bookings", "loans", "disbursed_loans", "employees"):
+    for k in ("total_leads", "site_visits", "bookings", "follow_ups", "pending_follow_ups", "loans", "disbursed_loans", "employees"):
         assert isinstance(data[k], int) and data[k] >= 0
 
 

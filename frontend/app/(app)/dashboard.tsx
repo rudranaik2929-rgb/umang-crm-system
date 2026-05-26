@@ -88,6 +88,8 @@ export default function Dashboard() {
       completedVisits: Number(stats?.completed_visits || 0),
       bookings: Number(stats?.bookings || 0),
       confirmedBookings: Number(stats?.confirmed_bookings || 0),
+      followUps: Number(stats?.follow_ups || 0),
+      pendingFollowUps: Number(stats?.pending_follow_ups || 0),
       loans: Number(stats?.loans || 0),
       disbursedLoans: Number(stats?.disbursed_loans || 0),
       employees: Number(stats?.employees || 0),
@@ -152,6 +154,7 @@ export default function Dashboard() {
           <MetricCard icon="remove-circle-outline" label="Negative Leads" value={model.negativeLeads} accent={colors.negative} helper="Remarketing pool" />
           <MetricCard icon="location-outline" label="Site Visits" value={model.visits} accent="#06B6D4" helper={`${model.completedVisits} completed`} />
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper={`${model.confirmedBookings} confirmed`} />
+          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} onPress={() => router.push('/(app)/visits' as any)} />
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} />
           <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} />
         </View>

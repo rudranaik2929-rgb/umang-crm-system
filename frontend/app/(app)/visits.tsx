@@ -12,8 +12,21 @@ const STATUS_COLOR: Record<string, string> = {
   scheduled: '#0284C7',
   completed: '#059669',
   rescheduled: '#D97706',
+  follow_up: '#D97706',
   cancelled: '#E11D48',
 };
+
+const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+function dateInputValue(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function dayNameFromDate(value: string) {
+  const parsed = new Date(`${value}T00:00:00`);
+  if (Number.isNaN(parsed.getTime())) return '';
+  return DAY_NAMES[parsed.getDay()];
+}
 
 export default function Visits() {
   const { colors } = useTheme();
@@ -22,6 +35,7 @@ export default function Visits() {
   const [leads, setLeads] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [followUpVisit, setFollowUpVisit] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -37,7 +51,7 @@ export default function Visits() {
       // Filter out leads that already have an active visit (scheduled or rescheduled)
       const activeVisitLeadIds = new Set(
         visitData
-          .filter((x: any) => x.status === 'scheduled' || x.status === 'rescheduled')
+          .filter((x: any) => x.status === 'scheduled' || x.status === 'rescheduled' || x.status === 'follow_up')
           .map((x: any) => x.lead_id)
       );
       setLeads(
@@ -95,9 +109,15 @@ export default function Visits() {
                     </Text>
                     <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
                       <Badge text={v.status.toUpperCase()} color={STATUS_COLOR[v.status] || colors.primary} />
+                      {v.followups_count > 0 && <Badge text={`${v.followups_count} FOLLOW UP${v.followups_count > 1 ? 'S' : ''}`} color={colors.warning} />}
                       {v.interested === true && <Badge text="INTERESTED" color={colors.positive} />}
                       {v.interested === false && <Badge text="NOT INTERESTED" color={colors.negative} />}
                     </View>
+                    {v.next_follow_up_date || v.next_follow_up_at ? (
+                      <Text style={{ color: colors.warning, fontSize: 12, marginTop: 8, fontWeight: '600' }}>
+                        Next follow-up: {v.next_follow_up_date || new Date(v.next_follow_up_at).toLocaleDateString()} {v.next_follow_up_time || new Date(v.next_follow_up_at).toLocaleTimeString()} {v.next_follow_up_day ? `(${v.next_follow_up_day})` : ''}
+                      </Text>
+                    ) : null}
                     {v.feedback ? (
                       <Text style={{ color: colors.textSecondary, fontSize: 12, marginTop: 8 }}>“{v.feedback}”</Text>
                     ) : null}
@@ -110,8 +130,8 @@ export default function Visits() {
                     testID={`visit-complete-${v.visit_id}`} />
                   
                   <ActBtn label="Follow Up" icon="calendar-outline" color={colors.warning}
-                    busy={busy === `${v.visit_id}-followup`}
-                    onPress={() => update(v.visit_id, { status: 'rescheduled' }, 'followup')}
+                    busy={false}
+                    onPress={() => setFollowUpVisit(v)}
                     testID={`visit-followup-${v.visit_id}`} />
 
                   <ActBtn label="Not Interested" icon="close-circle-outline" color={colors.negative}
@@ -150,6 +170,13 @@ export default function Visits() {
         onClose={() => setShowCreate(false)}
         leads={leads}
         onCreated={async () => { setShowCreate(false); await load(); }}
+        colors={colors}
+      />
+      <FollowUpModal
+        visible={!!followUpVisit}
+        visit={followUpVisit}
+        onClose={() => setFollowUpVisit(null)}
+        onCreated={async () => { setFollowUpVisit(null); await load(); }}
         colors={colors}
       />
     </View>
@@ -275,6 +302,159 @@ function CreateVisitModal({ visible, onClose, leads, onCreated, colors }: any) {
   );
 }
 
+function FollowUpModal({ visible, visit, onClose, onCreated, colors }: any) {
+  const tomorrow = new Date(Date.now() + 86400000);
+  const [date, setDate] = useState(dateInputValue(tomorrow));
+  const [time, setTime] = useState('11:00');
+  const [day, setDay] = useState(dayNameFromDate(dateInputValue(tomorrow)));
+  const [notes, setNotes] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible) return;
+    const nextDate = dateInputValue(new Date(Date.now() + 86400000));
+    setDate(nextDate);
+    setTime('11:00');
+    setDay(dayNameFromDate(nextDate));
+    setNotes('');
+    setError(null);
+  }, [visible]);
+
+  const onDateChange = (value: string) => {
+    setDate(value);
+    setDay(dayNameFromDate(value));
+  };
+
+  const submit = async () => {
+    setError(null);
+    if (!visit?.visit_id) { setError('Visit is required'); return; }
+    if (!date.trim()) { setError('Date is required'); return; }
+    if (!time.trim()) { setError('Time is required'); return; }
+    if (!day.trim()) { setError('Day is required'); return; }
+
+    setSubmitting(true);
+    try {
+      await api.post('/visit-followups', {
+        visit_id: visit.visit_id,
+        follow_up_date: date.trim(),
+        follow_up_time: time.trim(),
+        follow_up_day: day.trim(),
+        notes: notes.trim() || null,
+      });
+      onCreated();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Failed to create follow-up');
+    } finally { setSubmitting(false); }
+  };
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Schedule Follow Up</Text>
+          <Text style={{ color: colors.textMuted, marginTop: 6, fontSize: 12 }}>
+            {visit?.lead_name || 'Lead'} · required follow-up details
+          </Text>
+
+          <View style={styles.formRow}>
+            <View style={styles.formField}>
+              <Text style={[styles.label, { color: colors.textMuted }]}>DATE *</Text>
+              {Platform.OS === 'web' ? (
+                // @ts-ignore – render native HTML date picker on web
+                <input
+                  data-testid="followup-date-input"
+                  type="date"
+                  value={date}
+                  onChange={(e: any) => onDateChange(e.target.value)}
+                  required
+                  style={{
+                    height: 40, padding: 10, borderRadius: 8, fontSize: 14,
+                    border: `1px solid ${colors.border}`, color: colors.text,
+                    background: colors.surfaceAlt, outline: 'none',
+                  }}
+                />
+              ) : (
+                <TextInput
+                  testID="followup-date-input"
+                  value={date}
+                  onChangeText={onDateChange}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={colors.textMuted}
+                  style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+                />
+              )}
+            </View>
+            <View style={styles.formField}>
+              <Text style={[styles.label, { color: colors.textMuted }]}>TIME *</Text>
+              {Platform.OS === 'web' ? (
+                // @ts-ignore – render native HTML time picker on web
+                <input
+                  data-testid="followup-time-input"
+                  type="time"
+                  value={time}
+                  onChange={(e: any) => setTime(e.target.value)}
+                  required
+                  style={{
+                    height: 40, padding: 10, borderRadius: 8, fontSize: 14,
+                    border: `1px solid ${colors.border}`, color: colors.text,
+                    background: colors.surfaceAlt, outline: 'none',
+                  }}
+                />
+              ) : (
+                <TextInput
+                  testID="followup-time-input"
+                  value={time}
+                  onChangeText={setTime}
+                  placeholder="HH:MM"
+                  placeholderTextColor={colors.textMuted}
+                  style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+                />
+              )}
+            </View>
+          </View>
+
+          <Text style={[styles.label, { color: colors.textMuted }]}>DAY *</Text>
+          <TextInput
+            testID="followup-day-input"
+            value={day}
+            onChangeText={setDay}
+            placeholder="Monday"
+            placeholderTextColor={colors.textMuted}
+            style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+          />
+
+          <Text style={[styles.label, { color: colors.textMuted }]}>NOTES</Text>
+          <TextInput
+            testID="followup-notes-input"
+            value={notes}
+            onChangeText={setNotes}
+            placeholder="Customer asked to reconnect after the visit"
+            placeholderTextColor={colors.textMuted}
+            multiline
+            style={[styles.input, styles.notesInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+          />
+
+          {error ? (
+            <View style={{ marginTop: 10, padding: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.negative, backgroundColor: colors.negative + '14' }}>
+              <Text style={{ color: colors.negative, fontSize: 12 }}>{error}</Text>
+            </View>
+          ) : null}
+
+          <Pressable
+            testID="followup-submit"
+            onPress={submit}
+            disabled={submitting}
+            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}
+          >
+            {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Submit Follow Up</Text>}
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 const styles = StyleSheet.create({
   primary: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 36, borderRadius: 8 },
   primaryText: { color: '#fff', fontWeight: '600', fontSize: 12 },
@@ -286,6 +466,10 @@ const styles = StyleSheet.create({
   act: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, height: 30, borderRadius: 6, borderWidth: 1 },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
   modal: { width: '92%', maxWidth: 480, padding: 20, borderRadius: 12, borderWidth: 1 },
+  formRow: { flexDirection: 'row', gap: 10 },
+  formField: { flex: 1 },
+  input: { minHeight: 40, borderWidth: 1, borderRadius: 8, padding: 10, fontSize: 14 },
+  notesInput: { minHeight: 74, textAlignVertical: 'top' },
   label: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginTop: 14, marginBottom: 6 },
   leadOpt: { padding: 10, borderRadius: 8, borderWidth: 1 },
 });

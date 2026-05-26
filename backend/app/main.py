@@ -150,6 +150,9 @@ class SiteVisitUpdate(BaseModel):
     status: Optional[str]=None; feedback: Optional[str]=None; interested: Optional[bool]=None
     scheduled_at: Optional[datetime]=None; assigned_to: Optional[str]=None
     property_details: Optional[str]=None; interest_level: Optional[str]=None
+class SiteVisitFollowUpCreate(BaseModel):
+    visit_id: str; follow_up_date: str; follow_up_time: str; follow_up_day: str
+    notes: Optional[str]=None
 class BookingCreate(BaseModel):
     lead_id: str; property_name: str; booking_amount: float; token_received: float=0
     unit_number: Optional[str]=None; tower: Optional[str]=None
@@ -178,7 +181,7 @@ class CampaignCreate(BaseModel):
 
 # ---- Auth Helpers ----
 LOCAL_SESSIONS = {}
-SESSION_CACHE = {"leads": [], "bookings": [], "visits": [], "loans": [], "activities": [], "customers": [], "notifications": []}
+SESSION_CACHE = {"leads": [], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []}
 
 DEMO_LEADS = []
 DEMO_BOOKINGS = []
@@ -565,6 +568,26 @@ def first_related_record(table: str, cache_key: str, lead_id: str):
         return rows[0]
     cache_match = [r for r in SESSION_CACHE[cache_key] if r.get("lead_id") == lead_id]
     return cache_match[0] if cache_match else None
+
+def get_visit_record(visit_id: str):
+    rows = sb_select("visits", {"visit_id": f"eq.{visit_id}", "select": "*", "limit": "1"})
+    if rows:
+        return rows[0]
+    cache_match = [v for v in SESSION_CACHE["visits"] if v.get("visit_id") == visit_id]
+    return cache_match[0] if cache_match else None
+
+def parse_follow_up_at(follow_up_date: str, follow_up_time: str) -> datetime:
+    date_value = (follow_up_date or "").strip()
+    time_value = (follow_up_time or "").strip()
+    if not date_value or not time_value:
+        raise HTTPException(400, "Follow-up date and time are required")
+    try:
+        parsed = datetime.fromisoformat(f"{date_value}T{time_value}")
+    except ValueError:
+        raise HTTPException(400, "Follow-up date/time must be valid")
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
 
 def ensure_visit_record(lead_id: str, lead_name: Optional[str] = None, assigned_to: Optional[str] = None):
     existing = first_related_record("visits", "visits", lead_id)
@@ -954,8 +977,8 @@ async def clear_all_leads(cu: User = Depends(get_current_user)):
     if cu.role != "admin" and cu.email != "htshpatil13@gmail.com":
         raise HTTPException(status_code=403, detail="Only admins can delete all leads.")
         
-    tables_to_wipe = ["notifications", "customers", "lead_notes", "visits", "bookings", "loans", "activities", "leads"]
-    optional_tables = {"notifications", "customers", "lead_notes"}
+    tables_to_wipe = ["notifications", "customers", "lead_notes", "visit_followups", "visits", "bookings", "loans", "activities", "leads"]
+    optional_tables = {"notifications", "customers", "lead_notes", "visit_followups"}
     
     # We clear them from Supabase
     import httpx
@@ -977,6 +1000,7 @@ async def clear_all_leads(cu: User = Depends(get_current_user)):
     for table in tables_to_wipe:
         if table in SESSION_CACHE:
             SESSION_CACHE[table] = []
+    SESSION_CACHE["followups"] = []
     
     if errors:
         raise HTTPException(status_code=500, detail="; ".join(errors))
@@ -1053,6 +1077,7 @@ async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
         raise HTTPException(status_code=403, detail="Only admins can delete leads")
     
     # 1. Delete associated data first
+    sb_delete("visit_followups", "lead_id", lead_id)
     sb_delete("visits", "lead_id", lead_id)
     sb_delete("bookings", "lead_id", lead_id)
     sb_delete("loans", "lead_id", lead_id)
@@ -1070,6 +1095,8 @@ async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
         SESSION_CACHE["leads"] = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") != lead_id]
     if "visits" in SESSION_CACHE:
         SESSION_CACHE["visits"] = [v for v in SESSION_CACHE["visits"] if v.get("lead_id") != lead_id]
+    if "followups" in SESSION_CACHE:
+        SESSION_CACHE["followups"] = [f for f in SESSION_CACHE["followups"] if f.get("lead_id") != lead_id]
     if "bookings" in SESSION_CACHE:
         SESSION_CACHE["bookings"] = [b for b in SESSION_CACHE["bookings"] if b.get("lead_id") != lead_id]
     if "loans" in SESSION_CACHE:
@@ -1271,10 +1298,14 @@ async def create_visit(p: SiteVisitCreate, cu: User=Depends(get_current_user)):
 @api_router.get("/visits")
 async def list_visits(cu: User=Depends(get_current_user)):
     visits = sb_select("visits", {"select": "*", "order": "scheduled_at.desc"})
+    followups = sb_select("visit_followups", {"select": "*", "order": "follow_up_at.desc"})
     # Deduplicate visits (cache wins)
     cache_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
     db_only = [v for v in visits if v.get("visit_id") not in cache_ids]
     all_visits = SESSION_CACHE["visits"] + db_only
+
+    cache_followup_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
+    all_followups = SESSION_CACHE["followups"] + [f for f in followups if f.get("followup_id") not in cache_followup_ids]
 
     # Fetch all leads & employees to enrich dynamically
     leads = sb_select("leads", {"select": "lead_id,name"})
@@ -1292,6 +1323,12 @@ async def list_visits(cu: User=Depends(get_current_user)):
         v_copy["lead_name"] = lead_name_map.get(v.get("lead_id"), v.get("lead_name", "Lead"))
         if v.get("assigned_to"):
             v_copy["assigned_name"] = emp_map.get(v.get("assigned_to"))
+        visit_followups = [f for f in all_followups if f.get("visit_id") == v.get("visit_id")]
+        v_copy["followups_count"] = max(len(visit_followups), 1 if v.get("status") == "follow_up" else 0)
+        v_copy["next_follow_up_at"] = visit_followups[0].get("follow_up_at") if visit_followups else None
+        v_copy["next_follow_up_date"] = visit_followups[0].get("follow_up_date") if visit_followups else None
+        v_copy["next_follow_up_time"] = visit_followups[0].get("follow_up_time") if visit_followups else None
+        v_copy["next_follow_up_day"] = visit_followups[0].get("follow_up_day") if visit_followups else None
         enriched_visits.append(v_copy)
 
     return enriched_visits
@@ -1325,6 +1362,69 @@ async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_c
         else:
             sync_lead_stage(lead_id, "site_visit", force=True)
     return updated
+
+@api_router.post("/visit-followups")
+async def create_visit_followup(p: SiteVisitFollowUpCreate, cu: User=Depends(get_current_user)):
+    if not p.follow_up_day.strip():
+        raise HTTPException(400, "Follow-up day is required")
+
+    follow_up_at = parse_follow_up_at(p.follow_up_date, p.follow_up_time)
+    visit = get_visit_record(p.visit_id)
+    if not visit:
+        raise HTTPException(404, "Visit not found")
+
+    followup = {
+        "followup_id": gen_id("fup"),
+        "visit_id": p.visit_id,
+        "lead_id": visit.get("lead_id"),
+        "lead_name": visit.get("lead_name", "Lead"),
+        "follow_up_date": p.follow_up_date.strip(),
+        "follow_up_time": p.follow_up_time.strip(),
+        "follow_up_day": p.follow_up_day.strip(),
+        "follow_up_at": follow_up_at.isoformat(),
+        "status": "scheduled",
+        "notes": p.notes,
+        "created_by": cu.acting_as_employee_id or cu.user_id,
+        "created_at": now_utc().isoformat(),
+    }
+    result = sb_insert("visit_followups", followup)
+    followup_record = result or followup
+    SESSION_CACHE["followups"].insert(0, followup_record)
+
+    visit_update = {
+        "status": "follow_up",
+        "scheduled_at": follow_up_at.isoformat(),
+    }
+    sb_update("visits", "visit_id", p.visit_id, visit_update)
+    for i, cached_visit in enumerate(SESSION_CACHE["visits"]):
+        if cached_visit.get("visit_id") == p.visit_id:
+            SESSION_CACHE["visits"][i] = {**cached_visit, **visit_update}
+            break
+
+    if followup.get("lead_id"):
+        lead_update = {"follow_up_at": follow_up_at.isoformat(), "updated_at": now_utc().isoformat()}
+        sb_update("leads", "lead_id", followup["lead_id"], lead_update)
+        update_cached_lead(followup["lead_id"], lead_update)
+        activity = log_activity(
+            cu,
+            "site_visit_followup",
+            f"Follow-up scheduled for {p.follow_up_day.strip()} {p.follow_up_date.strip()} at {p.follow_up_time.strip()}.",
+            lead_id=followup["lead_id"],
+        )
+        SESSION_CACHE["activities"].insert(0, activity)
+
+    return followup_record
+
+@api_router.get("/visit-followups")
+async def list_visit_followups(visit_id: Optional[str]=None, lead_id: Optional[str]=None, cu: User=Depends(get_current_user)):
+    rows = sb_select("visit_followups", {"select": "*", "order": "follow_up_at.desc"})
+    cache_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
+    followups = SESSION_CACHE["followups"] + [f for f in rows if f.get("followup_id") not in cache_ids]
+    if visit_id:
+        followups = [f for f in followups if f.get("visit_id") == visit_id]
+    if lead_id:
+        followups = [f for f in followups if f.get("lead_id") == lead_id]
+    return followups
 
 # ---- Bookings ----
 @api_router.post("/bookings")
@@ -1652,8 +1752,10 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"select": "*"})
     bookings = sb_select("bookings", {"select": "booking_amount,status"})
     visits = sb_select("visits", {"select": "visit_id,status"})
+    followups = sb_select("visit_followups", {"select": "followup_id,status"})
     loans = sb_select("loans", {"select": "loan_id,application_status,amount,bank_stage"})
     customers = sb_select("customers", {"select": "customer_id,lead_id"})
+    activities = sb_select("activities", {"select": "activity_id,type"})
     
     # Deduplicate leads
     cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
@@ -1666,6 +1768,13 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     # Deduplicate visits
     cache_vis_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
     visits = SESSION_CACHE["visits"] + [v for v in visits if v.get("visit_id") not in cache_vis_ids]
+
+    # Deduplicate follow-ups
+    cache_followup_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
+    followups = SESSION_CACHE["followups"] + [f for f in followups if f.get("followup_id") not in cache_followup_ids]
+
+    cache_activity_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+    activities = SESSION_CACHE["activities"] + [a for a in activities if a.get("activity_id") not in cache_activity_ids]
     
     # Deduplicate loans
     cache_lon_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
@@ -1690,6 +1799,12 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     campaigns = sb_select("campaigns", {"select": "campaign_id"})
     rev = sum(float(b.get("booking_amount", 0) or 0) for b in bookings)
     rev += sum(float(l.get("amount", 0) or 0) for l in loans if l.get("application_status") == "disbursed" or l.get("bank_stage") == "disbursal")
+    activity_followups = sum(1 for a in activities if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
+    follow_up_total = max(len(followups), activity_followups)
+    pending_follow_up_total = (
+        sum(1 for f in followups if str(f.get("status", "scheduled")).lower() in ["scheduled", "pending", "open"])
+        if followups else activity_followups
+    )
     
     return {
         "total_leads": len(leads),
@@ -1700,6 +1815,8 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         "completed_visits": sum(1 for v in visits if v.get("status") == "completed"),
         "bookings": len(bookings),
         "confirmed_bookings": sum(1 for b in bookings if b.get("status") == "confirmed"),
+        "follow_ups": follow_up_total,
+        "pending_follow_ups": pending_follow_up_total,
         "loans": len(loans),
         "disbursed_loans": sum(1 for l in loans if l.get("application_status") == "disbursed"),
         "converted_customers": max(len(customers), sum(1 for l in leads if l.get("stage") == "closed")),
@@ -1808,12 +1925,13 @@ async def stats_me(cu: User=Depends(get_current_user)):
     
     positives = sum(1 for a in activities if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
     visits = sum(1 for a in activities if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
+    followups = sum(1 for a in activities if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
     bookings_done = sum(1 for a in activities if "booking" in str(a.get("type")))
     loans_done = sum(1 for a in activities if "loan" in str(a.get("type")))
     closed_deals = sum(1 for a in activities if "closed" in str(a.get("type")))
     
     # Calculate performance score (max 10)
-    score = min(10, positives * 1 + visits * 2 + bookings_done * 3 + loans_done * 2 + closed_deals * 4)
+    score = min(10, positives * 1 + followups * 0.5 + visits * 2 + bookings_done * 3 + loans_done * 2 + closed_deals * 4)
     if not activities:
         score = 0
     
@@ -1832,7 +1950,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     return {
         "employee": None, "role": cu.role,
         "personal": {
-            "actions_total": len(activities), "positives": positives, "negatives": 0, "followups": 0,
+            "actions_total": len(activities), "positives": positives, "negatives": 0, "followups": followups,
             "visits": visits, "bookings_done": bookings_done, "loans_done": loans_done, "closed_deals": closed_deals,
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
             "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
@@ -1858,13 +1976,14 @@ async def stats_employees(cu: User=Depends(get_current_user)):
         # Simple counts based on activity types
         positives = sum(1 for a in emp_acts if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
         visits = sum(1 for a in emp_acts if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
+        followups = sum(1 for a in emp_acts if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
         
         emp_stats.append({
             "employee_id": eid, "name": e["name"], "email": e["email"],
             "role": e["role"], "department": e.get("department", ""),
             "actions_total": actions_total, "last_activity": last_activity,
             "positives": positives, "negatives": 0,
-            "followups": 0, "visits": visits,
+            "followups": followups, "visits": visits,
             "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))), 
             "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
             "closed_deals": sum(1 for a in emp_acts if "closed" in str(a.get("type"))), 

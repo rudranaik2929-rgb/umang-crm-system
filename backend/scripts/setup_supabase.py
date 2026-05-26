@@ -92,6 +92,22 @@ SQLS = [
         interested BOOLEAN,
         created_at TIMESTAMPTZ DEFAULT now()
     );""",
+    # visit follow-ups
+    """CREATE TABLE IF NOT EXISTS visit_followups (
+        followup_id TEXT PRIMARY KEY,
+        visit_id TEXT NOT NULL,
+        lead_id TEXT,
+        lead_name TEXT,
+        follow_up_date DATE NOT NULL,
+        follow_up_time TIME NOT NULL,
+        follow_up_day TEXT NOT NULL,
+        follow_up_at TIMESTAMPTZ NOT NULL,
+        status TEXT DEFAULT 'scheduled',
+        notes TEXT,
+        created_by TEXT,
+        created_at TIMESTAMPTZ DEFAULT now(),
+        updated_at TIMESTAMPTZ DEFAULT now()
+    );""",
     # bookings
     """CREATE TABLE IF NOT EXISTS bookings (
         booking_id TEXT PRIMARY KEY,
@@ -153,7 +169,7 @@ SQLS = [
        ON CONFLICT (employee_id) DO NOTHING;""",
 ]
 
-TABLE_NAMES = ["users", "sessions", "employees", "leads", "activities", "visits", "bookings", "loans", "templates", "campaigns", "seed:users", "seed:employees"]
+TABLE_NAMES = ["users", "sessions", "employees", "leads", "activities", "visits", "visit_followups", "bookings", "loans", "templates", "campaigns", "seed:users", "seed:employees"]
 
 client = httpx.Client(timeout=30)
 
@@ -188,7 +204,7 @@ print("\nDone! Verifying tables...")
 verify_sql = "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' ORDER BY table_name;"
 try:
     # Try direct REST query
-    for table in ["users", "sessions", "employees", "leads", "activities", "visits", "bookings", "loans", "templates", "campaigns"]:
+    for table in ["users", "sessions", "employees", "leads", "activities", "visits", "visit_followups", "bookings", "loans", "templates", "campaigns"]:
         resp = client.get(
             f"{SUPABASE_URL}/rest/v1/{table}?select=count",
             headers={**HEADERS, "Prefer": "count=exact"},

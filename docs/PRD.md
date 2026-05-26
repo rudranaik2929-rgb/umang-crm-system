@@ -15,10 +15,10 @@ Side-channel: Negative Leads (for re-engagement campaigns)
 - Role can be switched anytime from top bar (demo-friendly)
 
 ## Modules
-1. **Admin Dashboard** – Stat cards (leads, positive/negative, visits, bookings, loans, employees, revenue), pipeline distribution chart, lead-health donut, live activity feed
+1. **Admin Dashboard** – Stat cards (leads, positive/negative, visits, bookings, follow-ups, loans, employees, revenue), pipeline distribution chart, lead-health donut, live activity feed
 2. **Lead Pipeline (Kanban)** – 8 columns (new → closed), tap card opens lead detail
 3. **Telecaller** – Filtered queues (queue/all/positive/negative) with action modal
-4. **Site Visits** – Schedule, complete, reschedule, mark interested/booking-ready
+4. **Site Visits** – Schedule, complete, create required date/time/day follow-ups, mark interested/booking-ready
 5. **Bookings** – Property+amount+token tracking with payment progress bar, agreement state
 6. **Loan Department** – Bank stage stepper (documentation → verification → sanction → disbursal), pending docs, EMI eligibility
 7. **WhatsApp Campaigns** (UI simulation) – Templates + audience-targeted campaigns; sending shows simulated delivery/read/reply analytics
