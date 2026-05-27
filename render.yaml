@@ -1,0 +1,28 @@
+services:
+  - type: web
+    name: umang-crm-backend
+    runtime: docker
+    rootDir: backend
+    plan: starter
+    healthCheckPath: /api/
+    envVars:
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: JWT_SECRET
+        generateValue: true
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: FACEBOOK_VERIFY_TOKEN
+        value: UMANGCRM123
+      - key: FACEBOOK_PAGE_ACCESS_TOKEN
+        sync: false
+      - key: HOUSING_PROFILE_ID
+        value: "2548773"
+      - key: HOUSING_ENCRYPTION_KEY
+        sync: false
+      - key: HOUSING_INTEGRATION_UUID
+        sync: false
+      - key: HOUSING_WEBHOOK_SECRET
+        sync: false

@@ -1,0 +1,27 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      - ./backend/.env
+    ports:
+      - "8001:8001"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/api/').read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  frontend:
+    image: node:20-alpine
+    working_dir: /app
+    volumes:
+      - ./frontend:/app
+    env_file:
+      - ./frontend/.env
+    command: sh -c "npm install && npm run web -- --port 8081"
+    ports:
+      - "8081:8081"
+    depends_on:
+      backend:
+        condition: service_healthy

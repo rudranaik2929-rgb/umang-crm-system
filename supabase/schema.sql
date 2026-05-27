@@ -80,6 +80,9 @@ create table if not exists leads (
   starred boolean not null default false,
   follow_up_at timestamptz,
   notes text,
+  external_lead_id text,
+  integration_uuid text,
+  raw_payload jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -223,6 +226,17 @@ create table if not exists campaigns (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists integration_events (
+  event_id text primary key,
+  source text not null,
+  external_id text,
+  status text not null,
+  lead_id text,
+  error text,
+  raw_payload jsonb,
+  created_at timestamptz not null default now()
+);
+
 -- Migration safety for older project databases.
 alter table users add column if not exists picture text;
 alter table users add column if not exists updated_at timestamptz not null default now();
@@ -245,6 +259,9 @@ alter table leads add column if not exists priority text;
 alter table leads add column if not exists starred boolean not null default false;
 alter table leads add column if not exists follow_up_at timestamptz;
 alter table leads add column if not exists notes text;
+alter table leads add column if not exists external_lead_id text;
+alter table leads add column if not exists integration_uuid text;
+alter table leads add column if not exists raw_payload jsonb;
 alter table leads add column if not exists updated_at timestamptz not null default now();
 
 alter table visits add column if not exists assigned_name text;
@@ -307,6 +324,8 @@ create index if not exists idx_employees_role_active on employees(role, active);
 create index if not exists idx_leads_stage_status on leads(stage, status);
 create index if not exists idx_leads_assigned_to on leads(assigned_to);
 create index if not exists idx_leads_source on leads(source);
+create index if not exists idx_leads_external_lead_id on leads(external_lead_id);
+create index if not exists idx_leads_phone_source on leads(phone, source);
 create index if not exists idx_leads_created_at on leads(created_at desc);
 create index if not exists idx_lead_notes_lead_id on lead_notes(lead_id);
 create index if not exists idx_activities_lead_id on activities(lead_id);
@@ -319,6 +338,8 @@ create index if not exists idx_bookings_lead_id on bookings(lead_id);
 create index if not exists idx_loans_lead_id on loans(lead_id);
 create index if not exists idx_customers_lead_id on customers(lead_id);
 create index if not exists idx_notifications_user_read on notifications(user_id, is_read);
+create index if not exists idx_integration_events_source_created on integration_events(source, created_at desc);
+create index if not exists idx_integration_events_external_id on integration_events(external_id);
 
 -- Compatibility views for the business workflow names.
 create or replace view site_visits as

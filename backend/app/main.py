@@ -1,11 +1,13 @@
 """Umang Hometech LLP – Real Estate CRM Backend (Supabase Production)"""
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
+from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.cors import CORSMiddleware
 import uuid, logging, random, os, httpx, csv, io, openpyxl
+import base64, hashlib, hmac, json, re, time
 from io import BytesIO
 from passlib.context import CryptContext
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Iterable, Tuple
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from dotenv import load_dotenv
@@ -28,6 +30,40 @@ def get_password_hash(password):
     return pwd_context.hash(password)
 
 app = FastAPI(title="Umang Hometech LLP CRM")
+
+RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
+RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("RATE_LIMIT_MAX_REQUESTS", "240"))
+WEBHOOK_RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("WEBHOOK_RATE_LIMIT_MAX_REQUESTS", "120"))
+RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() not in {"0", "false", "no"}
+_RATE_LIMIT_BUCKETS: Dict[str, List[float]] = {}
+
+@app.middleware("http")
+async def rate_limit_middleware(request: Request, call_next):
+    if not RATE_LIMIT_ENABLED:
+        return await call_next(request)
+
+    path = request.url.path
+    if path in {"/", "/debug-config"}:
+        return await call_next(request)
+
+    forwarded_for = request.headers.get("x-forwarded-for", "")
+    client_ip = forwarded_for.split(",")[0].strip() or (request.client.host if request.client else "unknown")
+    bucket_key = f"{client_ip}:{path}"
+    now_ts = time.time()
+    window_start = now_ts - RATE_LIMIT_WINDOW_SECONDS
+    bucket = [ts for ts in _RATE_LIMIT_BUCKETS.get(bucket_key, []) if ts >= window_start]
+    limit = WEBHOOK_RATE_LIMIT_MAX_REQUESTS if "webhook" in path else RATE_LIMIT_MAX_REQUESTS
+
+    if len(bucket) >= limit:
+        return JSONResponse(
+            status_code=429,
+            content={"detail": "Too many requests. Please retry shortly."},
+            headers={"Retry-After": str(RATE_LIMIT_WINDOW_SECONDS)},
+        )
+
+    bucket.append(now_ts)
+    _RATE_LIMIT_BUCKETS[bucket_key] = bucket
+    return await call_next(request)
 
 @app.get("/")
 async def root_health():
@@ -60,7 +96,17 @@ ROLES = ["admin","manager","telecaller","site_visit","booking","loan","marketing
 # ---- Integration Config (from .env) ----
 INTERAKT_API_KEY = os.environ.get("INTERAKT_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-FACEBOOK_VERIFY_TOKEN = os.environ.get("FACEBOOK_VERIFY_TOKEN", "")
+FACEBOOK_VERIFY_TOKEN = os.environ.get("FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")
+FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "")
+FACEBOOK_GRAPH_VERSION = os.environ.get("FACEBOOK_GRAPH_VERSION", "v20.0")
+HOUSING_PROFILE_ID = os.environ.get("HOUSING_PROFILE_ID", "")
+HOUSING_ENCRYPTION_KEY = os.environ.get("HOUSING_ENCRYPTION_KEY", "")
+HOUSING_INTEGRATION_UUID = os.environ.get("HOUSING_INTEGRATION_UUID", "")
+HOUSING_API_URL = os.environ.get("HOUSING_API_URL", "https://leads.housing.com/api/v0/get-builder-leads")
+HOUSING_WEBHOOK_SECRET = os.environ.get("HOUSING_WEBHOOK_SECRET", HOUSING_INTEGRATION_UUID)
+JWT_SECRET = os.environ.get("JWT_SECRET") or os.environ.get("SUPABASE_JWT_SECRET") or "change-me-in-production"
+SESSION_TTL_DAYS = int(os.environ.get("SESSION_TTL_DAYS", "7"))
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() not in {"0", "false", "no"}
 
 # ---- Supabase Config ----
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
@@ -82,6 +128,43 @@ def sb_url(table: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{table}"
 
 _http = httpx.Client(timeout=15)
+
+def _b64url_encode(raw: bytes) -> str:
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+def _b64url_decode(value: str) -> bytes:
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode((value + padding).encode("ascii"))
+
+def create_jwt(payload: Dict[str, Any], ttl_days: int = SESSION_TTL_DAYS) -> Tuple[str, str]:
+    issued_at = int(now_utc().timestamp())
+    expires_at = now_utc() + timedelta(days=ttl_days)
+    body = {
+        **payload,
+        "iat": issued_at,
+        "exp": int(expires_at.timestamp()),
+        "iss": "umang-crm",
+    }
+    header = {"alg": "HS256", "typ": "JWT"}
+    head = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    data = _b64url_encode(json.dumps(body, separators=(",", ":"), default=str).encode("utf-8"))
+    signing_input = f"{head}.{data}"
+    signature = hmac.new(JWT_SECRET.encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
+    return f"{signing_input}.{_b64url_encode(signature)}", expires_at.isoformat()
+
+def decode_jwt(token: str) -> Optional[Dict[str, Any]]:
+    try:
+        head, body, signature = token.split(".", 2)
+        signing_input = f"{head}.{body}"
+        expected = hmac.new(JWT_SECRET.encode("utf-8"), signing_input.encode("ascii"), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64url_decode(signature), expected):
+            return None
+        payload = json.loads(_b64url_decode(body).decode("utf-8"))
+        if int(payload.get("exp", 0)) <= int(now_utc().timestamp()):
+            return None
+        return payload
+    except Exception:
+        return None
 
 def sb_select(table, params=None):
     r = _http.get(sb_url(table), headers=sb_headers(), params=params or {})
@@ -126,6 +209,62 @@ def model_payload(model: BaseModel) -> dict:
             continue
         data[key] = value.isoformat() if isinstance(value, datetime) else value
     return data
+
+def clean_text(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+def normalize_phone(value: Any) -> str:
+    raw = clean_text(value) or ""
+    if not raw:
+        return ""
+    has_plus = raw.startswith("+")
+    digits = re.sub(r"\D", "", raw)
+    if not digits:
+        return ""
+    if has_plus:
+        return f"+{digits}"
+    if len(digits) == 10:
+        return f"+91{digits}"
+    if len(digits) == 12 and digits.startswith("91"):
+        return f"+{digits}"
+    return digits
+
+def pick_first(payload: Dict[str, Any], keys: Iterable[str]) -> Optional[Any]:
+    for key in keys:
+        if "." in key:
+            cur: Any = payload
+            for part in key.split("."):
+                if not isinstance(cur, dict):
+                    cur = None
+                    break
+                cur = cur.get(part)
+            if clean_text(cur):
+                return cur
+            continue
+        if clean_text(payload.get(key)):
+            return payload.get(key)
+    return None
+
+def as_list_payload(value: Any) -> List[Dict[str, Any]]:
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        for key in ("leads", "data", "items", "records"):
+            nested = value.get(key)
+            if isinstance(nested, list):
+                return [item for item in nested if isinstance(item, dict)]
+        return [value]
+    return []
+
+def safe_json(value: Any) -> Any:
+    try:
+        json.dumps(value, default=str)
+        return value
+    except Exception:
+        return {"raw": str(value)}
 
 # ---- Pydantic Models ----
 class User(BaseModel):
@@ -178,6 +317,9 @@ class EmployeeUpdate(BaseModel):
 class TemplateCreate(BaseModel): name: str; body: str
 class CampaignCreate(BaseModel):
     name: str; template_id: Optional[str]=None; audience: str="all"; scheduled_at: Optional[datetime]=None
+class HousingSyncRequest(BaseModel):
+    start_date: Optional[int]=None
+    end_date: Optional[int]=None
 
 # ---- Auth Helpers ----
 LOCAL_SESSIONS = {}
@@ -213,9 +355,49 @@ HARDCODED_USERS = {
     },
 }
 
+def public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
+    return User(**user).model_dump(mode="json")
+
+def issue_session(user: Dict[str, Any], response: Response):
+    token, expires = create_jwt({
+        "sub": user["user_id"],
+        "email": user.get("email"),
+        "role": user.get("role"),
+        "name": user.get("name"),
+    })
+    LOCAL_SESSIONS[token] = {"user": user, "expires_at": expires}
+    sb_insert("sessions", {
+        "session_token": token,
+        "user_id": user["user_id"],
+        "created_at": now_utc().isoformat(),
+        "expires_at": expires,
+    })
+    response.set_cookie(
+        key="session_token",
+        value=token,
+        max_age=SESSION_TTL_DAYS * 24 * 60 * 60,
+        httponly=True,
+        samesite="none",
+        path="/",
+        secure=COOKIE_SECURE,
+    )
+    return {
+        "user": public_user_payload(user),
+        "session_token": token,
+        "access_token": token,
+        "token_type": "bearer",
+        "expires_at": expires,
+    }
+
+def ensure_roles(cu: User, allowed: Iterable[str]):
+    if cu.role not in set(allowed) and cu.email != "htshpatil13@gmail.com":
+        raise HTTPException(status_code=403, detail="You do not have permission for this action.")
+
 async def get_current_user(request: Request) -> User:
     token = await get_session_token(request)
     if not token: raise HTTPException(401, "Not authenticated")
+    if token.count(".") == 2 and not decode_jwt(token):
+        raise HTTPException(401, "Invalid token")
     
     # 1. Check in-memory cache first (fastest)
     if token in LOCAL_SESSIONS:
@@ -276,25 +458,7 @@ async def auth_session(request: Request, response: Response):
             "role": "admin",
             "created_at": now_utc().isoformat(),
         }
-        token = gen_id("sess")
-        u["created_at"] = u["created_at"] # ensure serializable
-        expires = (now_utc() + timedelta(days=7)).isoformat()
-        
-        # Store locally for robustness
-        LOCAL_SESSIONS[token] = {"user": u, "expires_at": expires}
-        
-        sb_insert("sessions", {
-            "session_token": token,
-            "user_id": u["user_id"],
-            "created_at": now_utc().isoformat(),
-            "expires_at": expires,
-        })
-        response.set_cookie(
-            key="session_token", value=token, 
-            max_age=604800, httponly=True, 
-            samesite="none", path="/", secure=True
-        )
-        return {"user": u, "session_token": token}
+        return issue_session(u, response)
 
     # Hardcoded sample employee: Mukesh Sharma (telecaller)
     if email == "mukesh@umang.com" and password == "mukesh@123":
@@ -307,21 +471,7 @@ async def auth_session(request: Request, response: Response):
             "acting_as_employee_id": "emp_1b7760567ae6",
             "created_at": now_utc().isoformat(),
         }
-        token = gen_id("sess")
-        expires = (now_utc() + timedelta(days=7)).isoformat()
-        LOCAL_SESSIONS[token] = {"user": u, "expires_at": expires}
-        sb_insert("sessions", {
-            "session_token": token,
-            "user_id": u["user_id"],
-            "created_at": now_utc().isoformat(),
-            "expires_at": expires,
-        })
-        response.set_cookie(
-            key="session_token", value=token, 
-            max_age=604800, httponly=True, 
-            samesite="none", path="/", secure=True
-        )
-        return {"user": u, "session_token": token}
+        return issue_session(u, response)
 
     # Hardcoded manager: Rohit Singh
     if email == "rohitsingh241993@gmail.com" and password == "umang@manager":
@@ -332,21 +482,7 @@ async def auth_session(request: Request, response: Response):
             "role": "manager",
             "created_at": now_utc().isoformat(),
         }
-        token = gen_id("sess")
-        expires = (now_utc() + timedelta(days=7)).isoformat()
-        LOCAL_SESSIONS[token] = {"user": u, "expires_at": expires}
-        sb_insert("sessions", {
-            "session_token": token,
-            "user_id": u["user_id"],
-            "created_at": now_utc().isoformat(),
-            "expires_at": expires,
-        })
-        response.set_cookie(
-            key="session_token", value=token, 
-            max_age=604800, httponly=True, 
-            samesite="none", path="/", secure=True
-        )
-        return {"user": u, "session_token": token}
+        return issue_session(u, response)
 
     # Alias mapping: allow shorthand "umang@admin" to resolve to the real admin email
     EMAIL_ALIASES = {
@@ -366,23 +502,7 @@ async def auth_session(request: Request, response: Response):
     if not db_password or not verify_password(password, db_password): 
         raise HTTPException(401, "Invalid email or password")
     
-    uid = u["user_id"]
-    token = gen_id("sess")
-    sb_insert("sessions", {
-        "session_token": token,
-        "user_id": uid,
-        "created_at": now_utc().isoformat(),
-        "expires_at": (now_utc() + timedelta(days=7)).isoformat(),
-    })
-    
-    # Set secure cookie
-    response.set_cookie(
-        key="session_token", value=token, 
-        max_age=604800, httponly=True, 
-        samesite="none", path="/", secure=True
-    )
-    
-    return {"user": User(**u).model_dump(mode="json"), "session_token": token}
+    return issue_session(u, response)
 
 @api_router.get("/auth/me")
 async def auth_me(cu: User = Depends(get_current_user)):
@@ -737,14 +857,287 @@ def create_customer_from_lead(lead_id: str, actor=None):
         log_activity(actor, "converted_customer", "Lead converted into customer record.", lead_id=lead_id)
     return result or customer
 
+# ---- Integration Intake Helpers ----
+async def request_payload(request: Request) -> Any:
+    content_type = request.headers.get("content-type", "").lower()
+    if "application/json" in content_type:
+        try:
+            return await request.json()
+        except Exception:
+            return {}
+    if "form" in content_type:
+        form = await request.form()
+        return dict(form)
+    raw = await request.body()
+    if not raw:
+        return {}
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        return {"raw": raw.decode("utf-8", errors="ignore")}
+
+def record_integration_event(source: str, payload: Any, status: str, lead_id: Optional[str] = None,
+                             external_id: Optional[str] = None, error: Optional[str] = None):
+    event = {
+        "event_id": gen_id("evt"),
+        "source": source,
+        "external_id": external_id,
+        "status": status,
+        "lead_id": lead_id,
+        "error": error,
+        "raw_payload": safe_json(payload),
+        "created_at": now_utc().isoformat(),
+    }
+    result = sb_insert("integration_events", event)
+    return result or event
+
+def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
+    name = clean_text(pick_first(payload, [
+        "customer_name", "full_name", "name", "lead_name", "first_name", "contact.name",
+    ])) or "Valued Customer"
+    phone = normalize_phone(pick_first(payload, [
+        "phone_number", "phone", "mobile", "contact_number", "lead_phone", "contact.phone",
+    ]))
+    email = clean_text(pick_first(payload, [
+        "email", "lead_email", "email_address", "contact.email",
+    ]))
+    location = clean_text(pick_first(payload, [
+        "city", "location", "locality", "project_locality", "address", "contact.city",
+    ]))
+    budget = clean_text(pick_first(payload, [
+        "budget", "price", "budget_range", "max_budget", "requirement_budget",
+    ]))
+    property_type = clean_text(pick_first(payload, [
+        "property_type", "configuration", "config", "bhk", "requirement", "unit_type",
+    ]))
+    external_id = clean_text(pick_first(payload, [
+        "lead_id", "id", "uuid", "enquiry_id", "leadgen_id", "external_id",
+    ]))
+    project_name = clean_text(pick_first(payload, ["project_name", "project", "property_name"]))
+    notes = clean_text(pick_first(payload, ["notes", "comment", "message", "remarks", "query"]))
+    note_parts = []
+    if project_name:
+        note_parts.append(f"Project: {project_name}")
+    if clean_text(payload.get("project_id")):
+        note_parts.append(f"Project ID: {clean_text(payload.get('project_id'))}")
+    if notes:
+        note_parts.append(notes)
+
+    return {
+        "name": name,
+        "phone": phone,
+        "email": email,
+        "location": location,
+        "budget": budget,
+        "property_type": property_type,
+        "source": source,
+        "external_lead_id": external_id,
+        "notes": "\n".join(note_parts) if note_parts else None,
+    }
+
+def find_existing_integrated_lead(phone: str, email: Optional[str], source: str, external_id: Optional[str]):
+    if external_id:
+        rows = sb_select("leads", {
+            "external_lead_id": f"eq.{external_id}",
+            "select": "*",
+            "limit": "1",
+        })
+        if rows:
+            return rows[0]
+
+    if phone:
+        rows = sb_select("leads", {"phone": f"eq.{phone}", "select": "*", "limit": "1"})
+        if rows:
+            return rows[0]
+
+    if email:
+        rows = sb_select("leads", {"email": f"eq.{email}", "select": "*", "limit": "1"})
+        if rows:
+            return rows[0]
+
+    for lead in SESSION_CACHE["leads"]:
+        if external_id and lead.get("external_lead_id") == external_id:
+            return lead
+        if phone and lead.get("phone") == phone:
+            return lead
+        if email and lead.get("email") == email:
+            return lead
+    return None
+
+def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> Dict[str, Any]:
+    normalized = lead_from_payload(payload, source)
+    if not normalized["phone"] and not normalized.get("email"):
+        record_integration_event(source, payload, "ignored", external_id=normalized.get("external_lead_id"), error="Missing phone/email")
+        return {"status": "ignored", "reason": "missing_phone_or_email", "payload": normalized}
+
+    existing = find_existing_integrated_lead(
+        normalized["phone"],
+        normalized.get("email"),
+        source,
+        normalized.get("external_lead_id"),
+    )
+    if existing:
+        update_data = {"updated_at": now_utc().isoformat()}
+        for key in ("email", "budget", "location", "property_type", "notes"):
+            if normalized.get(key) and not existing.get(key):
+                update_data[key] = normalized[key]
+        updated = sb_update("leads", "lead_id", existing["lead_id"], update_data) if len(update_data) > 1 else existing
+        merged = {**existing, **update_data}
+        update_cached_lead(existing["lead_id"], update_data)
+        log_activity(actor, "integration_duplicate", f"Duplicate lead received from {source}; existing record refreshed.", lead_id=existing["lead_id"])
+        record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
+        return {"status": "duplicate", "lead": updated or merged, "lead_id": existing["lead_id"]}
+
+    assigned_to = assign_lead_round_robin()
+    initial_stage = "assigned" if assigned_to else "new"
+    now = now_utc().isoformat()
+    lead_id = gen_id("lead")
+    base_lead = {
+        "lead_id": lead_id,
+        "name": normalized["name"],
+        "phone": normalized["phone"] or normalized.get("email") or "",
+        "email": normalized.get("email"),
+        "budget": normalized.get("budget"),
+        "location": normalized.get("location"),
+        "property_type": normalized.get("property_type"),
+        "notes": normalized.get("notes"),
+        "source": source,
+        "stage": initial_stage,
+        "status": "active",
+        "assigned_to": assigned_to,
+        "created_at": now,
+        "updated_at": now,
+    }
+    optional_lead = {
+        **base_lead,
+        "external_lead_id": normalized.get("external_lead_id"),
+        "integration_uuid": clean_text(payload.get("integration_uuid")) or HOUSING_INTEGRATION_UUID if source == "Housing.com" else clean_text(payload.get("integration_uuid")),
+        "raw_payload": safe_json(payload),
+    }
+    result = sb_insert("leads", {k: v for k, v in optional_lead.items() if v is not None})
+    if not result:
+        result = sb_insert("leads", {k: v for k, v in base_lead.items() if v is not None})
+    lead_record = result or base_lead
+    SESSION_CACHE["leads"].insert(0, lead_record)
+    log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']}", lead_id=lead_id)
+    create_notification(assigned_to, "New lead assigned", f"{normalized['name']} came from {source}.", lead_id=lead_id)
+    record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
+    return {"status": "created", "lead": lead_record, "lead_id": lead_id}
+
+def extract_facebook_lead_ids(payload: Dict[str, Any]) -> List[str]:
+    lead_ids: List[str] = []
+    for entry in payload.get("entry", []) if isinstance(payload, dict) else []:
+        for change in entry.get("changes", []) if isinstance(entry, dict) else []:
+            value = change.get("value", {}) if isinstance(change, dict) else {}
+            lead_id = clean_text(value.get("leadgen_id") or value.get("lead_id"))
+            if lead_id:
+                lead_ids.append(lead_id)
+    direct_id = clean_text(payload.get("leadgen_id") or payload.get("lead_id")) if isinstance(payload, dict) else None
+    if direct_id:
+        lead_ids.append(direct_id)
+    return list(dict.fromkeys(lead_ids))
+
+def facebook_fields_to_payload(data: Dict[str, Any], leadgen_id: Optional[str] = None) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {"leadgen_id": leadgen_id or data.get("id")}
+    for item in data.get("field_data", []) if isinstance(data.get("field_data"), list) else []:
+        name = item.get("name")
+        values = item.get("values") or []
+        if name and values:
+            payload[name] = values[0]
+    payload.update({k: v for k, v in data.items() if k not in {"field_data"}})
+    return payload
+
+def fetch_facebook_lead(leadgen_id: str) -> Dict[str, Any]:
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        return {
+            "leadgen_id": leadgen_id,
+            "notes": "Facebook leadgen_id received. Configure FACEBOOK_PAGE_ACCESS_TOKEN to retrieve lead fields.",
+        }
+    url = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/{leadgen_id}"
+    r = _http.get(url, params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN})
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Meta lead retrieval failed: {r.text[:180]}")
+    return facebook_fields_to_payload(r.json(), leadgen_id)
+
+def housing_expected_hash(current_time: str) -> str:
+    return hmac.new(HOUSING_ENCRYPTION_KEY.encode("utf-8"), current_time.encode("utf-8"), hashlib.sha256).hexdigest()
+
+def verify_housing_request(request: Request, payload: Dict[str, Any]):
+    headers = request.headers
+    signature = clean_text(
+        headers.get("x-housing-signature")
+        or headers.get("x-signature")
+        or request.query_params.get("hash")
+        or payload.get("hash")
+    )
+    if not HOUSING_WEBHOOK_SECRET and not (HOUSING_ENCRYPTION_KEY and signature):
+        raise HTTPException(status_code=500, detail="Housing.com webhook secret is not configured")
+
+    provided_uuid = clean_text(
+        headers.get("x-housing-integration-uuid")
+        or headers.get("x-integration-uuid")
+        or request.query_params.get("integration_uuid")
+        or payload.get("integration_uuid")
+        or payload.get("uuid")
+    )
+    auth_header = headers.get("authorization", "")
+    bearer = auth_header[7:].strip() if auth_header.lower().startswith("bearer ") else None
+
+    if HOUSING_WEBHOOK_SECRET and provided_uuid != HOUSING_WEBHOOK_SECRET and bearer != HOUSING_WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Invalid Housing.com integration UUID")
+
+    provided_profile = clean_text(
+        headers.get("x-housing-profile-id")
+        or headers.get("x-profile-id")
+        or request.query_params.get("profile_id")
+        or payload.get("profile_id")
+        or payload.get("id")
+    )
+    if HOUSING_PROFILE_ID and provided_profile and provided_profile != HOUSING_PROFILE_ID:
+        raise HTTPException(status_code=401, detail="Invalid Housing.com profile id")
+
+    current_time = clean_text(
+        headers.get("x-housing-timestamp")
+        or headers.get("x-timestamp")
+        or request.query_params.get("current_time")
+        or payload.get("current_time")
+        or payload.get("timestamp")
+    )
+    if signature:
+        if not HOUSING_ENCRYPTION_KEY or not current_time:
+            raise HTTPException(status_code=401, detail="Housing.com signature cannot be verified")
+        try:
+            if abs(int(now_utc().timestamp()) - int(current_time)) > 15 * 60:
+                raise HTTPException(status_code=401, detail="Housing.com request timestamp expired")
+        except ValueError:
+            raise HTTPException(status_code=401, detail="Invalid Housing.com timestamp")
+        expected = housing_expected_hash(current_time)
+        if not hmac.compare_digest(signature.lower(), expected.lower()):
+            raise HTTPException(status_code=401, detail="Invalid Housing.com signature")
+
+def housing_sync_params(start_date: int, end_date: int) -> Dict[str, str]:
+    if not HOUSING_PROFILE_ID or not HOUSING_ENCRYPTION_KEY:
+        raise HTTPException(status_code=500, detail="Housing.com credentials are not configured")
+    current_time = str(int(now_utc().timestamp()))
+    return {
+        "start_date": str(start_date),
+        "end_date": str(end_date),
+        "current_time": current_time,
+        "hash": housing_expected_hash(current_time),
+        "id": HOUSING_PROFILE_ID,
+    }
+
 # ---- Leads ----
 @api_router.post("/leads/public")
 async def create_lead_public(p: LeadCreatePublic):
+    phone = normalize_phone(p.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="A valid phone number is required.")
     lid = gen_id("lead")
     assigned_to = assign_lead_round_robin()
     initial_stage = "assigned" if assigned_to else "new"
     lead = {
-        "lead_id": lid, "name": p.name, "phone": p.phone, "email": p.email,
+        "lead_id": lid, "name": p.name, "phone": phone, "email": p.email,
         "budget": p.budget, "location": p.location, "property_type": p.property_type,
         "notes": p.notes, "source": p.source or "website", "stage": initial_stage, "status": "active",
         "assigned_to": assigned_to, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
@@ -755,55 +1148,154 @@ async def create_lead_public(p: LeadCreatePublic):
     create_notification(assigned_to, "New lead assigned", f"{p.name} has been assigned to you.", lead_id=lid)
     
     # Auto-responder (Real Interakt API if key exists)
-    WhatsAppService.send_template(p.phone, "welcome_enquiry", [p.name])
+    WhatsAppService.send_template(phone, "welcome_enquiry", [p.name])
     
     return result or lead
 
-# ---- Webhooks (MagicBricks, 99acres, Facebook) ----
+# ---- Webhooks & Portal Integrations ----
+@api_router.get("/facebook/webhook")
 @api_router.get("/webhooks/facebook")
 async def verify_fb_webhook(request: Request):
-    # Meta requires this for initial verification
     params = request.query_params
     if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == FACEBOOK_VERIFY_TOKEN:
-        return int(params.get("hub.challenge"))
-    return "Invalid verify token"
+        return PlainTextResponse(params.get("hub.challenge", ""))
+    raise HTTPException(status_code=403, detail="Invalid Facebook verify token")
+
+@api_router.post("/facebook/webhook")
+async def facebook_webhook(request: Request):
+    body = await request_payload(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid Facebook webhook payload")
+
+    lead_ids = extract_facebook_lead_ids(body)
+    created, duplicates, ignored = [], [], []
+
+    if lead_ids:
+        for leadgen_id in lead_ids:
+            try:
+                if len(lead_ids) == 1 and any(body.get(k) for k in ["phone", "phone_number", "mobile", "email"]):
+                    lead_payload = body
+                else:
+                    lead_payload = fetch_facebook_lead(leadgen_id)
+                result = create_integrated_lead(lead_payload, "Facebook")
+                if result["status"] == "created":
+                    created.append(result["lead_id"])
+                elif result["status"] == "duplicate":
+                    duplicates.append(result["lead_id"])
+                else:
+                    ignored.append({"leadgen_id": leadgen_id, "reason": result.get("reason")})
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logging.exception("Facebook webhook failed")
+                record_integration_event("Facebook", {"leadgen_id": leadgen_id}, "error", external_id=leadgen_id, error=str(exc))
+                ignored.append({"leadgen_id": leadgen_id, "reason": str(exc)})
+    else:
+        result = create_integrated_lead(body, "Facebook")
+        if result["status"] == "created":
+            created.append(result["lead_id"])
+        elif result["status"] == "duplicate":
+            duplicates.append(result["lead_id"])
+        else:
+            ignored.append(result)
+
+    return {"status": "success", "created": created, "duplicates": duplicates, "ignored": ignored}
+
+@api_router.post("/housing/webhook")
+async def housing_webhook(request: Request):
+    body = await request_payload(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid Housing.com webhook payload")
+    verify_housing_request(request, body)
+
+    created, duplicates, ignored = [], [], []
+    for payload in as_list_payload(body):
+        merged_payload = {**payload}
+        if body.get("integration_uuid") and "integration_uuid" not in merged_payload:
+            merged_payload["integration_uuid"] = body.get("integration_uuid")
+        result = create_integrated_lead(merged_payload, "Housing.com")
+        if result["status"] == "created":
+            created.append(result["lead_id"])
+        elif result["status"] == "duplicate":
+            duplicates.append(result["lead_id"])
+        else:
+            ignored.append(result)
+    return {"status": "success", "source": "Housing.com", "created": created, "duplicates": duplicates, "ignored": ignored}
+
+@api_router.post("/housing/sync")
+async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    end_date = payload.end_date or int(now_utc().timestamp())
+    start_date = payload.start_date or int((now_utc() - timedelta(days=1)).timestamp())
+    params = housing_sync_params(start_date, end_date)
+    r = _http.get(HOUSING_API_URL, params=params)
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Housing.com sync failed: {r.text[:180]}")
+    try:
+        data = r.json()
+    except Exception:
+        raise HTTPException(status_code=502, detail="Housing.com returned a non-JSON response")
+
+    created, duplicates, ignored = [], [], []
+    for lead_payload in as_list_payload(data):
+        result = create_integrated_lead(lead_payload, "Housing.com", actor=cu)
+        if result["status"] == "created":
+            created.append(result["lead_id"])
+        elif result["status"] == "duplicate":
+            duplicates.append(result["lead_id"])
+        else:
+            ignored.append(result)
+    return {
+        "status": "success",
+        "source": "Housing.com",
+        "start_date": start_date,
+        "end_date": end_date,
+        "created": created,
+        "duplicates": duplicates,
+        "ignored": ignored,
+    }
+
+@api_router.get("/integrations/status")
+async def integrations_status(cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    return {
+        "facebook": {
+            "source": "Facebook",
+            "webhook_path": "/api/facebook/webhook",
+            "verify_token_configured": bool(FACEBOOK_VERIFY_TOKEN),
+            "lead_retrieval_configured": bool(FACEBOOK_PAGE_ACCESS_TOKEN),
+        },
+        "housing": {
+            "source": "Housing.com",
+            "webhook_path": "/api/housing/webhook",
+            "sync_path": "/api/housing/sync",
+            "profile_id_configured": bool(HOUSING_PROFILE_ID),
+            "encryption_key_configured": bool(HOUSING_ENCRYPTION_KEY),
+            "integration_uuid_configured": bool(HOUSING_INTEGRATION_UUID or HOUSING_WEBHOOK_SECRET),
+            "api_url": HOUSING_API_URL,
+        },
+    }
 
 @api_router.post("/webhooks/{source}")
 async def incoming_webhook(source: str, request: Request):
     """
-    Unified endpoint for MagicBricks, 99acres, and Facebook Lead Ads.
-    Usage: Set your portal's webhook URL to: https://your-backend.com/api/webhooks/[magicbricks|99acres|facebook]
+    Compatibility endpoint for portal webhooks.
+    Prefer /api/housing/webhook and /api/facebook/webhook for first-class integrations.
     """
-    try:
-        body = await request.json()
-    except:
-        body = await request.form()
-        body = dict(body)
-
-    logging.info(f"Incoming Lead from {source}: {body}")
-    
-    # Standardize data based on source (placeholders for portal mapping)
-    name = body.get("name") or body.get("customer_name") or body.get("full_name", "Valued Customer")
-    phone = body.get("phone") or body.get("mobile") or body.get("contact_number", "")
-    email = body.get("email") or ""
-    
-    if not phone:
-        return {"status": "ignored", "reason": "no phone number"}
-
-    lid = gen_id("lead")
-    assigned_to = assign_lead_round_robin()
-    initial_stage = "assigned" if assigned_to else "new"
-    
-    lead = {
-        "lead_id": lid, "name": name, "phone": phone, "email": email,
-        "source": source, "stage": initial_stage, "status": "active",
-        "assigned_to": assigned_to, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
-    }
-    sb_insert("leads", lead)
-    log_activity(None, "webhook_enquiry", f"New lead from {source}: {name}", lead_id=lid)
-    create_notification(assigned_to, "New lead assigned", f"{name} came from {source}.", lead_id=lid)
-    
-    return {"status": "success", "lead_id": lid}
+    body = await request_payload(request)
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+    normalized_source = {
+        "facebook": "Facebook",
+        "housing": "Housing.com",
+        "housing.com": "Housing.com",
+        "99acres": "99acres",
+        "magicbricks": "MagicBricks",
+        "website": "Website",
+        "whatsapp": "WhatsApp",
+    }.get(source.lower(), source)
+    result = create_integrated_lead(body, normalized_source)
+    return {"status": "success", "source": normalized_source, **result}
 
 @api_router.post("/webhooks/whatsapp/reply")
 async def inbound_whatsapp_reply(request: Request):
@@ -1021,9 +1513,12 @@ async def clear_all_leads(cu: User = Depends(get_current_user)):
 
 @api_router.post("/leads")
 async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
+    phone = normalize_phone(p.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="A valid phone number is required.")
     lid = gen_id("lead")
     lead = {
-        "lead_id": lid, "name": p.name, "phone": p.phone, "email": p.email,
+        "lead_id": lid, "name": p.name, "phone": phone, "email": p.email,
         "budget": p.budget, "location": p.location, "property_type": p.property_type,
         "notes": p.notes, "source": p.source or "manual_entry", "stage": "new", "status": "active",
         "assigned_to": None, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
@@ -1036,11 +1531,23 @@ async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
     return result or lead
 
 @api_router.get("/leads")
-async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, assigned_to: Optional[str]=None, cu: User=Depends(get_current_user)):
+async def list_leads(
+    stage: Optional[str]=None,
+    status_: Optional[str]=None,
+    assigned_to: Optional[str]=None,
+    source: Optional[str]=None,
+    q: Optional[str]=None,
+    limit: int=200,
+    offset: int=0,
+    cu: User=Depends(get_current_user),
+):
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
     params = {"select": "*", "order": "created_at.desc"}
     if stage: params["stage"] = f"eq.{stage}"
     if status_: params["status"] = f"eq.{status_}"
     if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
+    if source: params["source"] = f"ilike.*{source}*"
     
     leads = sb_select("leads", params)
     
@@ -1051,6 +1558,7 @@ async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, ass
         if stage and l.get("stage") != stage: match = False
         if status_ and l.get("status") != status_: match = False
         if assigned_to and l.get("assigned_to") != assigned_to: match = False
+        if source and source.lower() not in str(l.get("source", "")).lower(): match = False
         if match:
             filtered_cache.append(l)
 
@@ -1059,9 +1567,16 @@ async def list_leads(stage: Optional[str]=None, status_: Optional[str]=None, ass
     db_only = [l for l in leads if l.get("lead_id") not in cache_ids]
     all_leads = filtered_cache + db_only
 
+    if q:
+        needle = q.lower().strip()
+        all_leads = [
+            l for l in all_leads
+            if any(needle in str(l.get(k, "")).lower() for k in ["name", "phone", "email", "location", "source", "property_type"])
+        ]
+
     if not all_leads and not stage and not status_ and not assigned_to:
         return []
-    return all_leads
+    return all_leads[offset:offset + limit]
 
 @api_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
@@ -1153,6 +1668,8 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             old_lead = cache_match[0]
             
     if not old_lead: raise HTTPException(404, "Lead not found")
+    if p.assigned_to is not None:
+        ensure_roles(cu, ["admin", "manager"])
     
     data = model_payload(p)
     data["updated_at"] = now_utc().isoformat()
@@ -1708,6 +2225,9 @@ async def mark_notification_read(notification_id: str, cu: User=Depends(get_curr
 # ---- Employees ----
 @api_router.post("/employees")
 async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager"])
+    if p.role not in ROLES:
+        raise HTTPException(status_code=400, detail="Invalid employee role")
     eid = gen_id("emp")
     e = {
         "employee_id": eid, "name": p.name, "email": p.email, "phone": p.phone,
@@ -1724,19 +2244,24 @@ async def list_employees(cu: User=Depends(get_current_user)):
 
 @api_router.patch("/employees/{eid}")
 async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager"])
     data = {k: v for k, v in p.model_dump().items() if v is not None}
+    if data.get("role") and data["role"] not in ROLES:
+        raise HTTPException(status_code=400, detail="Invalid employee role")
     updated = sb_update("employees", "employee_id", eid, data)
     if not updated: raise HTTPException(404, "Employee not found")
     return updated
 
 @api_router.delete("/employees/{eid}")
 async def delete_employee(eid: str, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager"])
     sb_delete("employees", "employee_id", eid)
     return {"ok": True}
 
 # ---- Templates & Campaigns ----
 @api_router.post("/templates")
 async def create_template(p: TemplateCreate, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
     tid = gen_id("tpl")
     t = {"template_id": tid, "name": p.name, "body": p.body, "created_at": now_utc().isoformat()}
     result = sb_insert("templates", t)
@@ -1748,11 +2273,13 @@ async def list_templates(cu: User=Depends(get_current_user)):
 
 @api_router.delete("/templates/{tid}")
 async def delete_template(tid: str, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
     sb_delete("templates", "template_id", tid)
     return {"ok": True}
 
 @api_router.post("/campaigns")
 async def create_campaign(p: CampaignCreate, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
     cid = gen_id("cmp")
     c = {
         "campaign_id": cid, "name": p.name, "template_id": p.template_id,
@@ -1770,6 +2297,7 @@ async def list_campaigns(cu: User=Depends(get_current_user)):
 
 @api_router.post("/campaigns/{cid}/send")
 async def send_campaign(cid: str, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
     camps = sb_select("campaigns", {"campaign_id": f"eq.{cid}", "select": "*"})
     if not camps: raise HTTPException(404, "Campaign not found")
     leads = sb_select("leads", {"select": "lead_id"})
@@ -1781,6 +2309,7 @@ async def send_campaign(cid: str, cu: User=Depends(get_current_user)):
 
 @api_router.delete("/campaigns/{cid}")
 async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
     sb_delete("campaigns", "campaign_id", cid)
     return {"ok": True}
 
@@ -1867,7 +2396,9 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
 
 @api_router.get("/stats/leads-by-source")
 async def stats_leads_by_source(cu: User=Depends(get_current_user)):
-    leads = sb_select("leads", {"select": "source,stage,status,created_at"})
+    leads = sb_select("leads", {"select": "lead_id,source,stage,status,created_at"})
+    cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
+    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_ids]
     source_map: dict = {}
     for l in leads:
         src = (l.get("source") or "direct").strip().lower()
