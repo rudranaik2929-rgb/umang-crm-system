@@ -104,6 +104,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(60)).current;
   const scaleAnim = useRef(new Animated.Value(0.92)).current;
+  const selectedPlatformRef = useRef<PlatformRow | null>(null);
+  const viewRef = useRef<'platforms' | 'leads'>('platforms');
 
   const resetDrillDown = useCallback(() => {
     setView('platforms');
@@ -127,8 +129,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     }
   }, []);
 
-  const loadPlatformLeads = useCallback(async (platform: PlatformRow, force = false) => {
-    if (!force && platform.count <= 0) return;
+  const loadPlatformLeads = useCallback(async (platform: PlatformRow) => {
     setLeadsLoading(true);
     setLeadsError(null);
     setSelectedPlatform(platform);
@@ -144,18 +145,54 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     }
   }, []);
 
+  const canSyncIntegrations = ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
+
+  const handlePlatformPress = useCallback(async (platform: PlatformRow) => {
+    if (canSyncIntegrations) {
+      try {
+        if (platform.platform === 'housing') {
+          await api.post('/integrations/housing/poll', {});
+        } else if (platform.platform === 'meta') {
+          await api.post('/integrations/facebook/resync', {});
+        }
+      } catch {
+        // Still open drill-down even if sync/resync fails
+      }
+    }
+    try {
+      const res = await api.get('/stats/leads-by-platform');
+      const normalized = normalizePlatformData(res.data);
+      setData(normalized);
+      const refreshed = normalized.platforms.find((p) => p.platform === platform.platform) || platform;
+      await loadPlatformLeads(refreshed);
+    } catch {
+      await loadPlatformLeads(platform);
+    }
+  }, [canSyncIntegrations, loadPlatformLeads]);
+
+  useEffect(() => {
+    selectedPlatformRef.current = selectedPlatform;
+    viewRef.current = view;
+  }, [selectedPlatform, view]);
+
   useEffect(() => {
     if (!visible) return undefined;
     resetDrillDown();
     loadData();
+    return undefined;
+  }, [visible, loadData, resetDrillDown]);
+
+  useEffect(() => {
+    if (!visible) return undefined;
     const refresh = setInterval(() => {
       loadData();
-      if (selectedPlatform && view === 'leads') {
-        loadPlatformLeads(selectedPlatform, true);
+      const platform = selectedPlatformRef.current;
+      if (platform && viewRef.current === 'leads') {
+        loadPlatformLeads(platform);
       }
     }, 5 * 60 * 1000);
     return () => clearInterval(refresh);
-  }, [loadData, loadPlatformLeads, resetDrillDown, selectedPlatform, view, visible]);
+  }, [visible, loadData, loadPlatformLeads]);
 
   useEffect(() => {
     if (visible) {
@@ -261,19 +298,17 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
               {ordered.map((platform) => {
                 const meta = PLATFORM_UI[platform.platform] || PLATFORM_UI.other;
                 const pct = data && data.total > 0 ? Math.round((platform.count / data.total) * 100) : 0;
-                const tappable = platform.count > 0;
 
                 return (
                   <Pressable
                     key={platform.platform}
-                    disabled={!tappable}
-                    onPress={() => loadPlatformLeads(platform)}
+                    onPress={() => handlePlatformPress(platform)}
                     style={({ pressed }: any) => [
                       st.platformCard,
                       {
                         backgroundColor: colors.surfaceAlt,
-                        borderColor: tappable ? meta.color + '55' : colors.border,
-                        opacity: tappable && pressed ? 0.92 : 1,
+                        borderColor: meta.color + '55',
+                        opacity: pressed ? 0.92 : 1,
                       },
                     ]}
                   >
@@ -294,13 +329,14 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                         Original from Housing.com API
                       </Text>
                     ) : null}
-                    {tappable ? (
-                      <Text style={[st.tapHint, { color: meta.color }]}>Tap to view leads →</Text>
-                    ) : platform.platform === 'housing' ? (
-                      <Text style={[st.hint, { color: colors.warning }]}>Sync on Integrations page</Text>
-                    ) : (
-                      <Text style={[st.hint, { color: colors.textMuted }]}>No leads yet</Text>
-                    )}
+                    <Text style={[st.tapHint, { color: meta.color }]}>
+                      {platform.count > 0 ? 'Tap to view leads →' : 'Tap to sync & view leads →'}
+                    </Text>
+                    {platform.count === 0 && platform.platform === 'housing' ? (
+                      <Text style={[st.hint, { color: colors.warning }]}>Pulls latest from Housing.com</Text>
+                    ) : platform.count === 0 && platform.platform === 'meta' ? (
+                      <Text style={[st.hint, { color: colors.textMuted }]}>Re-imports from Meta webhook events</Text>
+                    ) : null}
                   </Pressable>
                 );
               })}

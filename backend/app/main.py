@@ -283,16 +283,23 @@ def classify_lead_platform(source: Optional[str]) -> str:
     normalized = re.sub(r"[\s_.-]+", "", (source or "").strip().lower())
     if "housing" in normalized:
         return "housing"
-    if normalized in {"facebook", "instagram", "meta"} or "facebook" in normalized or normalized.startswith("meta"):
+    if (
+        normalized in {"facebook", "instagram", "meta", "fb"}
+        or "facebook" in normalized
+        or "instagram" in normalized
+        or normalized.startswith("meta")
+        or "metalead" in normalized
+    ):
         return "meta"
     if normalized in {"manual", "manualentry", "walkin", "referral", "direct", "call"} or normalized.startswith("manual"):
         return "manual"
     return "other"
 
 def lead_matches_platform(lead: Dict[str, Any], platform_key: str) -> bool:
-    if is_broker_pool_lead(lead):
+    platform = classify_lead_platform(lead.get("source"))
+    if platform == "brokerage":
         return platform_key == "brokerage"
-    return classify_lead_platform(lead.get("source")) == platform_key
+    return platform == platform_key
 
 def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
@@ -1428,6 +1435,68 @@ async def facebook_integration_events(
         "limit": str(limit),
     })
     return {"events": rows, "count": len(rows)}
+
+@api_router.post("/integrations/facebook/resync")
+async def facebook_resync(cu: User = Depends(get_current_user)):
+    """Re-fetch Meta leadgen IDs from integration_events and import missing CRM leads."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        raise HTTPException(
+            status_code=400,
+            detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured on the server",
+        )
+
+    rows = sb_select("integration_events", {
+        "source": "eq.Facebook",
+        "select": "external_id,status,lead_id,created_at",
+        "order": "created_at.desc",
+        "limit": "500",
+    })
+    seen: set[str] = set()
+    retried = created = duplicates = ignored = failed = 0
+    results: List[Dict[str, Any]] = []
+
+    for evt in rows:
+        leadgen_id = clean_text(evt.get("external_id"))
+        if not leadgen_id or leadgen_id in seen:
+            continue
+        seen.add(leadgen_id)
+
+        if evt.get("status") in ("created", "duplicate") and evt.get("lead_id"):
+            existing = sb_select("leads", {"external_lead_id": f"eq.{leadgen_id}", "select": "lead_id", "limit": "1"})
+            if existing:
+                continue
+
+        if evt.get("status") not in ("leadgen_received", "graph_error", "ignored", "error", "webhook_received"):
+            continue
+
+        retried += 1
+        try:
+            payload = fetch_facebook_lead(leadgen_id)
+            result = create_integrated_lead(payload, "Facebook")
+            status = result.get("status")
+            if status == "created":
+                created += 1
+            elif status == "duplicate":
+                duplicates += 1
+            else:
+                ignored += 1
+            results.append({"leadgen_id": leadgen_id, "status": status, "lead_id": result.get("lead_id")})
+        except HTTPException as exc:
+            failed += 1
+            results.append({"leadgen_id": leadgen_id, "status": "failed", "error": exc.detail})
+        except Exception as exc:
+            failed += 1
+            results.append({"leadgen_id": leadgen_id, "status": "failed", "error": str(exc)[:180]})
+
+    return {
+        "retried": retried,
+        "created": created,
+        "duplicates": duplicates,
+        "ignored": ignored,
+        "failed": failed,
+        "results": results[:50],
+    }
 
 @api_router.post("/housing/webhook")
 async def housing_webhook(request: Request):
@@ -2735,7 +2804,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
     broker_pool = [l for l in leads if is_broker_pool_lead(l)]
     housing_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "housing")
-    meta_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "meta" and is_pipeline_lead(l))
+    meta_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "meta")
 
     stage_dist = {s: 0 for s in STAGES}
     for l in pipeline_leads:
@@ -2814,14 +2883,15 @@ async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
 
     broker_pool_count = 0
     for lead in leads:
-        if is_broker_pool_lead(lead):
-            broker_pool_count += 1
-            continue
         raw_source = (lead.get("source") or "direct").strip()
         source_key = raw_source.lower()
         source_counts[source_key] = source_counts.get(source_key, 0) + 1
         platform = classify_lead_platform(raw_source)
         if platform == "brokerage":
+            broker_pool_count += 1
+            continue
+        if is_broker_pool_lead(lead) and platform not in {"manual", "housing", "meta"}:
+            broker_pool_count += 1
             continue
         bucket = buckets.get(platform) or buckets["other"]
         bucket["count"] += 1
