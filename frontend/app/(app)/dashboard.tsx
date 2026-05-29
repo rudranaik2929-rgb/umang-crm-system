@@ -85,8 +85,10 @@ export default function Dashboard() {
   const [followUps, setFollowUps] = useState<any[]>([]);
   const [followUpsLoading, setFollowUpsLoading] = useState(false);
   const [openLead, setOpenLead] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    setLoadError(null);
     try {
       const [s, g, l, e] = await Promise.all([
         api.get('/stats/dashboard'),
@@ -98,6 +100,21 @@ export default function Dashboard() {
       setGraphData(g.data || {});
       setLeads(Array.isArray(l.data) ? l.data : []);
       setEmployees(Array.isArray(e.data) ? e.data : []);
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail;
+      const msg =
+        status === 401
+          ? 'Session expired. Please log in again.'
+          : status === 500
+            ? 'Dashboard API error on server. Wait for backend redeploy, then tap Retry.'
+          : typeof detail === 'string'
+            ? detail
+            : err?.message === 'Network Error'
+              ? 'Could not reach dashboard API (server error or still deploying). Tap Retry in a minute.'
+              : err?.message || 'Could not load dashboard. Check your connection and try again.';
+      setLoadError(msg);
+      console.warn('Dashboard load failed', err?.response?.status, err?.message);
     } finally {
       setLoading(false);
     }
@@ -170,6 +187,21 @@ export default function Dashboard() {
         <TopBar title="Dashboard" />
         <View style={[styles.loadingWrap, { backgroundColor: colors.background }]}>
           <ActivityIndicator color={colors.primary} size="large" />
+        </View>
+      </View>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <View style={{ flex: 1 }}>
+        <TopBar title="Dashboard" />
+        <View style={[styles.loadingWrap, { backgroundColor: colors.background }]}>
+          <Ionicons name="cloud-offline-outline" size={48} color={colors.muted} />
+          <Text style={[styles.errorText, { color: colors.text }]}>{loadError}</Text>
+          <Pressable onPress={() => { setLoading(true); load(); }} style={[styles.retryBtn, { backgroundColor: colors.primary }]}>
+            <Text style={styles.retryBtnText}>Retry</Text>
+          </Pressable>
         </View>
       </View>
     );
@@ -616,4 +648,7 @@ const styles = StyleSheet.create({
   followLead: { fontSize: 13, fontWeight: '700' },
   followMeta: { fontSize: 12, marginTop: 3, fontWeight: '600' },
   followNotes: { fontSize: 11, marginTop: 5 },
+  errorText: { fontSize: 14, textAlign: 'center', marginTop: 16, marginBottom: 20, maxWidth: 320 },
+  retryBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
+  retryBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });

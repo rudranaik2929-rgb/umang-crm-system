@@ -2732,6 +2732,11 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     # if not visits: visits = DEMO_VISITS
     # if not loans: loans = DEMO_LOANS
 
+    pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
+    broker_pool = [l for l in leads if is_broker_pool_lead(l)]
+    housing_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "housing")
+    meta_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "meta" and is_pipeline_lead(l))
+
     stage_dist = {s: 0 for s in STAGES}
     for l in pipeline_leads:
         if l.get("status") != "negative":
@@ -2749,11 +2754,6 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         sum(1 for f in followups if str(f.get("status", "scheduled")).lower() in ["scheduled", "pending", "open"])
         if followups else max(activity_followups, follow_up_visits)
     )
-    
-    pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
-    broker_pool = [l for l in leads if is_broker_pool_lead(l)]
-    housing_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "housing")
-    meta_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "meta" and is_pipeline_lead(l))
 
     return {
         "total_leads": len(pipeline_leads),
