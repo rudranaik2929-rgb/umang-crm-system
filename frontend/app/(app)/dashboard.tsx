@@ -147,7 +147,7 @@ export default function Dashboard() {
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
     const activeLeads = leads.filter((l) => l.status !== 'negative');
-    const totalLeads = Number(stats?.total_leads || activeLeads.length || 0);
+    const totalLeads = Number(stats?.total_leads ?? 0);
     const todayStr = new Date().toISOString().slice(0, 10);
 
     const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
@@ -246,7 +246,18 @@ export default function Dashboard() {
         </View>
 
         <View style={styles.metricGrid}>
-          <MetricCard icon="people-outline" label="Total Leads" value={model.totalLeads} accent={colors.info} onPress={() => setSourceModalVisible(true)} helper="Tap for sources" />
+          <MetricCard
+            icon="people-outline"
+            label="Total Leads"
+            value={model.totalLeads}
+            accent={colors.info}
+            onPress={() => setSourceModalVisible(true)}
+            helper={
+              stats?.housing_leads
+                ? `${stats.housing_leads} Housing · tap for breakdown`
+                : 'Tap for platform breakdown'
+            }
+          />
           <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Fresh enquiries" />
           <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Moved forward" />
           <MetricCard icon="remove-circle-outline" label="Negative Leads" value={model.negativeLeads} accent={colors.negative} helper="Remarketing pool" />

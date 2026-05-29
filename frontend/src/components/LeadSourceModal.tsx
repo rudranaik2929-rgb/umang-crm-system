@@ -219,12 +219,16 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
   if (!visible) return null;
 
   const isWeb = Platform.OS === 'web';
-  const mainPlatforms = (data?.platforms || []).filter((p) => ['manual', 'housing', 'meta'].includes(p.platform));
-  const ordered = ['manual', 'housing', 'meta'].map((key) => {
+  const mainPlatforms = (data?.platforms || []).filter((p) => ['manual', 'housing', 'meta', 'other'].includes(p.platform));
+  const orderedKeys = ['manual', 'housing', 'meta'];
+  if (mainPlatforms.some((p) => p.platform === 'other' && p.count > 0)) {
+    orderedKeys.push('other');
+  }
+  const ordered = orderedKeys.map((key) => {
     const found = mainPlatforms.find((p) => p.platform === key);
     return found || {
       platform: key,
-      label: key === 'manual' ? 'Manual Entry' : key === 'housing' ? 'Housing.com' : 'Meta (Facebook)',
+      label: key === 'manual' ? 'Manual Entry' : key === 'housing' ? 'Housing.com' : key === 'meta' ? 'Meta (Facebook)' : 'Other Sources',
       count: 0, active: 0, negative: 0, sources: [],
     };
   });
@@ -266,7 +270,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                   {view === 'leads' && selectedPlatform
                     ? `${platformLeads.length} real leads · tap to open details`
                     : data
-                      ? `${data.total} total leads · tap a platform`
+                      ? `${data.total} classified leads · tap a platform`
                       : loading
                         ? 'Loading…'
                         : 'Manual · Housing · Meta'}
@@ -435,6 +439,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
           loadData();
         }}
         userRole={userRole}
+        overlayZIndex={10050}
       />
     </View>
   );

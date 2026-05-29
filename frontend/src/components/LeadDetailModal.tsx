@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
@@ -12,9 +12,10 @@ interface Props {
   onClose: () => void;
   onChanged?: () => void;
   userRole?: string | null;
+  overlayZIndex?: number;
 }
 
-export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole }: Props) {
+export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000 }: Props) {
   const { colors } = useTheme();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -233,15 +234,18 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
     }
   }
 
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          {loading || !lead ? (
-            <View style={styles.center}>
-              <ActivityIndicator color={colors.primary} />
-            </View>
-          ) : (
+  if (!visible) return null;
+
+  function renderBody() {
+    if (loading || !lead) {
+      return (
+        <View style={styles.center}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+      );
+    }
+
+    return (
             <>
               {/* Header */}
               <View style={[styles.header, { borderBottomColor: colors.border }]}>
@@ -716,9 +720,31 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                 </View>
               )}
             </>
-          )}
-        </Pressable>
+    );
+  }
+
+  const sheet = (
+    <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable
+        style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        onPress={(e: any) => e?.stopPropagation?.()}
+      >
+        {renderBody()}
       </Pressable>
+    </Pressable>
+  );
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>
+        {sheet}
+      </View>
+    );
+  }
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      {sheet}
     </Modal>
   );
 }
@@ -785,9 +811,20 @@ function ActionBtn({ label, icon, color, onPress, busy, testID }: any) {
 }
 
 const styles = StyleSheet.create({
+  webOverlay: {
+    position: 'fixed' as any,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
   backdrop: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
     alignItems: 'center', justifyContent: 'center',
+    ...Platform.select({
+      web: { minHeight: '100vh' as any },
+      default: {},
+    }),
   },
   sheet: {
     width: '92%', maxWidth: 760, maxHeight: '92%', height: '90%',

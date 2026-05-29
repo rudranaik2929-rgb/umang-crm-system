@@ -305,6 +305,59 @@ def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any
     cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
     return SESSION_CACHE["leads"] + [l for l in db_leads if l.get("lead_id") not in cache_ids]
 
+def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Shared manual / housing / meta / other / broker counts for dashboard + modal."""
+    platform_defs = [
+        ("manual", "Manual Entry"),
+        ("housing", "Housing.com"),
+        ("meta", "Meta (Facebook)"),
+    ]
+    buckets = {
+        key: {"platform": key, "label": label, "count": 0, "active": 0, "negative": 0, "sources": []}
+        for key, label in platform_defs
+    }
+    buckets["other"] = {"platform": "other", "label": "Other Sources", "count": 0, "active": 0, "negative": 0, "sources": []}
+    source_counts: Dict[str, int] = {}
+    broker_pool_count = 0
+
+    for lead in leads:
+        raw_source = (lead.get("source") or "direct").strip()
+        source_key = raw_source.lower()
+        source_counts[source_key] = source_counts.get(source_key, 0) + 1
+        platform = classify_lead_platform(raw_source)
+        if platform == "brokerage":
+            broker_pool_count += 1
+            continue
+        if is_broker_pool_lead(lead) and platform not in {"manual", "housing", "meta"}:
+            broker_pool_count += 1
+            continue
+        bucket = buckets.get(platform) or buckets["other"]
+        bucket["count"] += 1
+        if lead.get("status") == "negative":
+            bucket["negative"] += 1
+        else:
+            bucket["active"] += 1
+
+    for source_key, count in sorted(source_counts.items(), key=lambda item: item[1], reverse=True):
+        platform = classify_lead_platform(source_key)
+        if platform in buckets and platform != "brokerage":
+            buckets[platform]["sources"].append({"source": source_key, "count": count})
+
+    platforms = [buckets["manual"], buckets["housing"], buckets["meta"]]
+    if buckets["other"]["count"]:
+        platforms.append(buckets["other"])
+
+    pipeline_total = sum(p["count"] for p in platforms)
+    return {
+        "total": pipeline_total,
+        "broker_pool": broker_pool_count,
+        "platforms": platforms,
+        "housing": buckets["housing"]["count"],
+        "meta": buckets["meta"]["count"],
+        "manual": buckets["manual"]["count"],
+        "other": buckets["other"]["count"],
+    }
+
 def safe_json(value: Any) -> Any:
     try:
         json.dumps(value, default=str)
@@ -2006,8 +2059,8 @@ async def list_leads_by_platform(
 ):
     """List real CRM leads for a platform bucket: manual, housing, or meta."""
     platform_key = platform.strip().lower()
-    if platform_key not in {"manual", "housing", "meta"}:
-        raise HTTPException(status_code=400, detail="Platform must be manual, housing, or meta")
+    if platform_key not in {"manual", "housing", "meta", "other"}:
+        raise HTTPException(status_code=400, detail="Platform must be manual, housing, meta, or other")
 
     limit = min(max(limit, 1), 500)
     offset = max(offset, 0)
@@ -2018,7 +2071,7 @@ async def list_leads_by_platform(
     page = filtered[offset:offset + limit]
     return {
         "platform": platform_key,
-        "label": {"manual": "Manual Entry", "housing": "Housing.com", "meta": "Meta (Facebook)"}[platform_key],
+        "label": {"manual": "Manual Entry", "housing": "Housing.com", "meta": "Meta (Facebook)", "other": "Other Sources"}[platform_key],
         "total": len(filtered),
         "leads": page,
     }
@@ -2803,8 +2856,9 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
 
     pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
     broker_pool = [l for l in leads if is_broker_pool_lead(l)]
-    housing_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "housing")
-    meta_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "meta")
+    platform_stats = compute_platform_breakdown(leads)
+    housing_count = platform_stats["housing"]
+    meta_count = platform_stats["meta"]
 
     stage_dist = {s: 0 for s in STAGES}
     for l in pipeline_leads:
@@ -2825,7 +2879,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     )
 
     return {
-        "total_leads": len(pipeline_leads),
+        "total_leads": platform_stats["total"],
         "broker_pool_leads": len(broker_pool),
         "housing_leads": housing_count,
         "meta_leads": meta_count,
@@ -2869,56 +2923,11 @@ async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
     """Dashboard breakdown: manual, housing (Housing.com), meta (Facebook/Instagram)."""
     leads = sb_select("leads", {"select": "lead_id,source,stage,status,created_at"})
     leads = merge_leads_with_cache(leads)
-    platform_defs = [
-        ("manual", "Manual Entry", ["manual_entry", "manual", "walk-in", "walkin", "referral", "direct"]),
-        ("housing", "Housing.com", ["housing.com", "housing"]),
-        ("meta", "Meta (Facebook)", ["facebook", "instagram", "meta"]),
-    ]
-    buckets = {
-        key: {"platform": key, "label": label, "count": 0, "active": 0, "negative": 0, "sources": []}
-        for key, label, _ in platform_defs
-    }
-    buckets["other"] = {"platform": "other", "label": "Other", "count": 0, "active": 0, "negative": 0, "sources": []}
-    source_counts: Dict[str, int] = {}
-
-    broker_pool_count = 0
-    for lead in leads:
-        raw_source = (lead.get("source") or "direct").strip()
-        source_key = raw_source.lower()
-        source_counts[source_key] = source_counts.get(source_key, 0) + 1
-        platform = classify_lead_platform(raw_source)
-        if platform == "brokerage":
-            broker_pool_count += 1
-            continue
-        if is_broker_pool_lead(lead) and platform not in {"manual", "housing", "meta"}:
-            broker_pool_count += 1
-            continue
-        bucket = buckets.get(platform) or buckets["other"]
-        bucket["count"] += 1
-        if lead.get("status") == "negative":
-            bucket["negative"] += 1
-        else:
-            bucket["active"] += 1
-
-    for source_key, count in sorted(source_counts.items(), key=lambda item: item[1], reverse=True):
-        platform = classify_lead_platform(source_key)
-        if platform in buckets and platform != "brokerage":
-            buckets[platform]["sources"].append({"source": source_key, "count": count})
-
-    platforms = [
-        buckets["manual"],
-        buckets["housing"],
-        buckets["meta"],
-    ]
-    if buckets["other"]["count"]:
-        platforms.append(buckets["other"])
-
-    pipeline_total = sum(p["count"] for p in platforms)
-
+    breakdown = compute_platform_breakdown(leads)
     return {
-        "total": pipeline_total,
-        "broker_pool": broker_pool_count,
-        "platforms": platforms,
+        "total": breakdown["total"],
+        "broker_pool": breakdown["broker_pool"],
+        "platforms": breakdown["platforms"],
     }
 
 @api_router.get("/stats/dashboard/graph")
