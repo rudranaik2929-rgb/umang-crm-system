@@ -185,12 +185,19 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
   // Extract preferred property if prepended in notes
   let preferredProperty = '';
   let cleanNotes = '';
+  const housingRaw = lead && String(lead.source || '').toLowerCase().includes('housing') && lead.raw_payload
+    ? (lead.raw_payload as Record<string, unknown>)
+    : null;
+
   if (lead) {
     cleanNotes = lead.notes || '';
     if (cleanNotes.startsWith('Preferred Property:')) {
       const lines = cleanNotes.split('\n');
       preferredProperty = lines[0].replace('Preferred Property:', '').trim();
       cleanNotes = lines.slice(1).join('\n').trim();
+    }
+    if (!preferredProperty && housingRaw) {
+      preferredProperty = String(housingRaw.project_name || housingRaw.project || '').trim();
     }
   }
 
@@ -362,6 +369,33 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                     )}
                   </View>
                 )}
+
+                {housingRaw ? (
+                  <View style={[styles.block, { borderColor: '#00BFA5' + '50', backgroundColor: '#00BFA5' + '08' }]}>
+                    <Text style={[styles.blockTitle, { color: '#00BFA5' }]}>HOUSING.COM — ORIGINAL ENQUIRY</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8 }}>
+                      Real lead data imported from Housing.com API (not demo).
+                    </Text>
+                    <DetailRow label="Lead date" value={housingRaw.lead_date ? String(housingRaw.lead_date) : null} colors={colors} />
+                    <DetailRow label="Project" value={preferredProperty || null} colors={colors} />
+                    <DetailRow label="Locality" value={housingRaw.locality_name ? String(housingRaw.locality_name) : null} colors={colors} />
+                    <DetailRow label="City" value={housingRaw.city_name ? String(housingRaw.city_name) : null} colors={colors} />
+                    <DetailRow
+                      label="Budget range"
+                      value={
+                        housingRaw.min_price || housingRaw.max_price
+                          ? [housingRaw.min_price, housingRaw.max_price].filter(Boolean).join(' – ')
+                          : null
+                      }
+                      colors={colors}
+                    />
+                    <DetailRow label="Configuration" value={housingRaw.property_field ? String(housingRaw.property_field) : null} colors={colors} />
+                    <DetailRow label="Service" value={housingRaw.service_type ? String(housingRaw.service_type) : null} colors={colors} />
+                    {lead.external_lead_id ? (
+                      <DetailRow label="External ID" value={lead.external_lead_id} colors={colors} />
+                    ) : null}
+                  </View>
+                ) : null}
 
                 {/* Details */}
                 <View style={[styles.block, { borderColor: colors.border }]}>

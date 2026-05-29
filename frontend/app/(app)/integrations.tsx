@@ -23,17 +23,27 @@ type IntegrationStatus = {
   };
 };
 
-type SourceBreakdown = {
-  source: string;
+type PlatformBreakdown = {
+  platform: string;
+  label: string;
   count: number;
   active: number;
   negative: number;
 };
 
+type HousingVerify = {
+  credentials_ok: boolean;
+  api_reachable: boolean;
+  leads_available: number;
+  db_housing_leads: number;
+  message?: string;
+};
+
 export default function Integrations() {
   const { colors } = useTheme();
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
-  const [sources, setSources] = useState<SourceBreakdown[]>([]);
+  const [platforms, setPlatforms] = useState<PlatformBreakdown[]>([]);
+  const [housingVerify, setHousingVerify] = useState<HousingVerify | null>(null);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -41,12 +51,14 @@ export default function Integrations() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, src] = await Promise.all([
+      const [s, plat, verify] = await Promise.all([
         api.get('/integrations/status'),
-        api.get('/stats/leads-by-source'),
+        api.get('/stats/leads-by-platform'),
+        api.get('/integrations/housing/verify'),
       ]);
       setStatus(s.data || {});
-      setSources(Array.isArray(src.data?.sources) ? src.data.sources : []);
+      setPlatforms(Array.isArray(plat.data?.platforms) ? plat.data.platforms : []);
+      setHousingVerify(verify.data || null);
     } finally {
       setLoading(false);
     }
@@ -54,13 +66,17 @@ export default function Integrations() {
 
   useEffect(() => { load(); }, [load]);
 
-  const housingSource = useMemo(
-    () => sources.find((s) => s.source.toLowerCase().includes('housing')),
-    [sources]
+  const housingPlatform = useMemo(
+    () => platforms.find((p) => p.platform === 'housing'),
+    [platforms]
   );
-  const facebookSource = useMemo(
-    () => sources.find((s) => s.source.toLowerCase().includes('facebook')),
-    [sources]
+  const metaPlatform = useMemo(
+    () => platforms.find((p) => p.platform === 'meta'),
+    [platforms]
+  );
+  const manualPlatform = useMemo(
+    () => platforms.find((p) => p.platform === 'manual'),
+    [platforms]
   );
 
   const runHousingSync = async () => {
@@ -70,7 +86,8 @@ export default function Integrations() {
       const r = await api.post('/housing/sync', {});
       const created = Array.isArray(r.data?.created) ? r.data.created.length : 0;
       const duplicates = Array.isArray(r.data?.duplicates) ? r.data.duplicates.length : 0;
-      setMessage(`Housing sync complete: ${created} new, ${duplicates} matched.`);
+      const fetched = Number(r.data?.fetched || 0);
+      setMessage(`Housing sync: ${fetched} fetched from API, ${created} new, ${duplicates} already in CRM.`);
       await load();
     } catch (e: any) {
       setMessage(e?.response?.data?.detail || 'Housing sync failed.');
@@ -92,13 +109,20 @@ export default function Integrations() {
               icon="map-outline"
               title="Housing.com"
               endpoint={`${BACKEND}${status?.housing?.webhook_path || '/api/housing/webhook'}`}
-              source={housingSource}
+              source={housingPlatform}
               checks={[
                 ['Profile ID', !!status?.housing?.profile_id_configured],
                 ['Encryption key', !!status?.housing?.encryption_key_configured],
                 ['Integration UUID', !!status?.housing?.integration_uuid_configured],
+                ['API reachable', !!housingVerify?.api_reachable],
+                ['Leads in API (24h)', (housingVerify?.leads_available || 0) > 0],
               ]}
-              actionLabel={syncing ? 'Syncing' : 'Sync Leads'}
+              extraNote={
+                housingVerify
+                  ? `API: ${housingVerify.leads_available} available · CRM: ${housingVerify.db_housing_leads} stored`
+                  : undefined
+              }
+              actionLabel={syncing ? 'Syncing' : 'Sync Leads (last 24h)'}
               actionIcon="sync-outline"
               onAction={runHousingSync}
               actionDisabled={syncing}
@@ -107,9 +131,9 @@ export default function Integrations() {
             <IntegrationPanel
               colors={colors}
               icon="logo-facebook"
-              title="Facebook Lead Ads"
+              title="Meta (Facebook Lead Ads)"
               endpoint={`${BACKEND}${status?.facebook?.webhook_path || '/api/facebook/webhook'}`}
-              source={facebookSource}
+              source={metaPlatform}
               checks={[
                 ['Verify token', !!status?.facebook?.verify_token_configured],
                 ['Lead retrieval', !!status?.facebook?.lead_retrieval_configured],
@@ -126,19 +150,21 @@ export default function Integrations() {
 
           <View style={[styles.tablePanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <View style={styles.tableHead}>
-              <Text style={[styles.panelTitle, { color: colors.text }]}>Lead Sources</Text>
-              <Text style={[styles.panelSub, { color: colors.textMuted }]}>{sources.length} connected sources</Text>
+              <Text style={[styles.panelTitle, { color: colors.text }]}>Leads by Platform</Text>
+              <Text style={[styles.panelSub, { color: colors.textMuted }]}>Manual · Housing · Meta</Text>
             </View>
-            {sources.length ? sources.map((source) => (
-              <View key={source.source} style={[styles.sourceRow, { borderTopColor: colors.border }]}>
-                <Text style={[styles.sourceName, { color: colors.text }]} numberOfLines={1}>{source.source}</Text>
-                <Text style={[styles.sourceMetric, { color: colors.textSecondary }]}>{source.active} active</Text>
-                <Text style={[styles.sourceMetric, { color: colors.textSecondary }]}>{source.negative} negative</Text>
-                <Text style={[styles.sourceCount, { color: colors.text }]}>{source.count}</Text>
-              </View>
-            )) : (
+            {[manualPlatform, housingPlatform, metaPlatform].filter(Boolean).length ? (
+              [manualPlatform, housingPlatform, metaPlatform].map((platform) => platform ? (
+                <View key={platform.platform} style={[styles.sourceRow, { borderTopColor: colors.border }]}>
+                  <Text style={[styles.sourceName, { color: colors.text }]} numberOfLines={1}>{platform.label}</Text>
+                  <Text style={[styles.sourceMetric, { color: colors.textSecondary }]}>{platform.active} active</Text>
+                  <Text style={[styles.sourceMetric, { color: colors.textSecondary }]}>{platform.negative} negative</Text>
+                  <Text style={[styles.sourceCount, { color: colors.text }]}>{platform.count}</Text>
+                </View>
+              ) : null)
+            ) : (
               <View style={styles.empty}>
-                <Text style={{ color: colors.textMuted }}>No integration leads received yet.</Text>
+                <Text style={{ color: colors.textMuted }}>No leads yet. Sync Housing or add manual leads.</Text>
               </View>
             )}
           </View>
@@ -148,7 +174,7 @@ export default function Integrations() {
   );
 }
 
-function IntegrationPanel({ colors, icon, title, endpoint, source, checks, actionLabel, actionIcon, onAction, actionDisabled }: any) {
+function IntegrationPanel({ colors, icon, title, endpoint, source, checks, extraNote, actionLabel, actionIcon, onAction, actionDisabled }: any) {
   const configured = checks.every((check: any[]) => check[1]);
   return (
     <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -178,10 +204,14 @@ function IntegrationPanel({ colors, icon, title, endpoint, source, checks, actio
         ))}
       </View>
 
+      {extraNote ? (
+        <Text style={[styles.extraNote, { color: colors.textSecondary }]}>{extraNote}</Text>
+      ) : null}
+
       <View style={[styles.metricStrip, { borderTopColor: colors.border }]}>
         <View>
           <Text style={[styles.metricValue, { color: colors.text }]}>{source?.count || 0}</Text>
-          <Text style={[styles.metricLabel, { color: colors.textMuted }]}>Total leads</Text>
+          <Text style={[styles.metricLabel, { color: colors.textMuted }]}>CRM leads</Text>
         </View>
         <View>
           <Text style={[styles.metricValue, { color: colors.positive }]}>{source?.active || 0}</Text>
@@ -222,6 +252,7 @@ const styles = StyleSheet.create({
   checks: { gap: 8 },
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   checkText: { fontSize: 13 },
+  extraNote: { fontSize: 12, fontWeight: '600' },
   metricStrip: { borderTopWidth: 1, paddingTop: 12, flexDirection: 'row', justifyContent: 'space-between', gap: 12 },
   metricValue: { fontSize: 22, fontWeight: '800' },
   metricLabel: { fontSize: 11, marginTop: 2 },

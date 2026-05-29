@@ -127,6 +127,65 @@ def test_housing_webhook_accepts_valid_hmac(monkeypatch):
     assert inserted["leads"][0]["source"] == "Housing.com"
 
 
+def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
+    monkeypatch.setattr(main, "SESSION_CACHE", {"leads": [
+        {"lead_id": "l1", "source": "manual_entry", "status": "active"},
+        {"lead_id": "l2", "source": "Housing.com", "status": "active"},
+        {"lead_id": "l3", "source": "Facebook", "status": "negative"},
+        {"lead_id": "l4", "source": "website", "status": "active"},
+    ], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []})
+    monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
+
+    client = TestClient(main.app)
+    # Endpoint requires auth - patch get_current_user
+    class FakeUser:
+        user_id = "u1"
+        email = "admin@test.com"
+        role = "admin"
+        name = "Admin"
+        acting_as_employee_id = None
+
+    main.app.dependency_overrides[main.get_current_user] = lambda: FakeUser()
+    try:
+        response = client.get("/api/stats/leads-by-platform")
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["total"] == 4
+    by_key = {p["platform"]: p for p in data["platforms"]}
+    assert by_key["manual"]["count"] == 1
+    assert by_key["housing"]["count"] == 1
+    assert by_key["meta"]["count"] == 1
+
+
+def test_list_leads_by_platform_housing(monkeypatch):
+    monkeypatch.setattr(main, "SESSION_CACHE", {"leads": [
+        {"lead_id": "h1", "source": "Housing.com", "name": "Buyer One", "phone": "+911", "status": "active", "stage": "new"},
+        {"lead_id": "m1", "source": "manual_entry", "name": "Manual", "phone": "+912", "status": "active", "stage": "new"},
+    ], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []})
+    monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
+
+    class FakeUser:
+        user_id = "u1"
+        email = "admin@test.com"
+        role = "admin"
+        name = "Admin"
+        acting_as_employee_id = None
+
+    main.app.dependency_overrides[main.get_current_user] = lambda: FakeUser()
+    try:
+        response = TestClient(main.app).get("/api/leads/by-platform/housing")
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["leads"][0]["source"] == "Housing.com"
+
+
 def test_facebook_verify_and_direct_payload(monkeypatch):
     inserted = _install_fake_supabase(monkeypatch)
     monkeypatch.setattr(main, "FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")

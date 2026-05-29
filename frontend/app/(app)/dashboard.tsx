@@ -295,7 +295,12 @@ export default function Dashboard() {
         </View>
       </ScrollView>
 
-      <LeadSourceModal visible={sourceModalVisible} onClose={() => setSourceModalVisible(false)} />
+      <LeadSourceModal
+        visible={sourceModalVisible}
+        onClose={() => setSourceModalVisible(false)}
+        userRole={user?.role}
+        onChanged={load}
+      />
       <FollowUpsModal
         visible={followUpModalVisible}
         onClose={() => setFollowUpModalVisible(false)}

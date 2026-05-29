@@ -58,6 +58,15 @@ POST /api/housing/sync
 
 That route signs requests with HMAC-SHA256 over `current_time` using `HOUSING_ENCRYPTION_KEY`, then imports returned leads as source `Housing.com`.
 
+Housing leads are **real enquiries** from the Housing.com API (name, phone, project, locality). Each row stores `source = Housing.com` and the original payload in `raw_payload` — the CRM does not seed dummy Housing leads.
+
+**Supabase SQL** (run in SQL Editor if you set up manually):
+
+1. `supabase/schema.sql` — full schema
+2. `supabase/migrations/20260529_housing_integration_rls.sql` — RLS policies for `leads` and `integration_events`
+
+Set `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env` for production webhook/sync writes.
+
 ### Facebook Lead Ads
 
 Configure Meta Webhooks with:
@@ -79,3 +88,9 @@ Set `FACEBOOK_PAGE_ACCESS_TOKEN` so the backend can retrieve full lead fields fr
 See [`UNDERSTAND.md`](./UNDERSTAND.md) for the current folder structure and code ownership guide.
 
 <!-- Rebuild trigger: 2026-05-14T22:35:00Z -->
+<!-- current client's project of crm system
+
+umang-home-tech.vercel.app 
+
+Credentials: htshpatil13@gmail.com 
+Umang@admin -->

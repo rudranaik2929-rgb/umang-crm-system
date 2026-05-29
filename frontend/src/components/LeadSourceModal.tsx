@@ -1,134 +1,165 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, Animated, Dimensions, Platform, Modal,
+  View, Text, StyleSheet, Pressable, Animated, Dimensions, Platform, Modal, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
+import { LeadDetailModal } from './LeadDetailModal';
+import { StageBadge } from './Badge';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
-const SOURCE_META: Record<string, { icon: any; color: string; label: string }> = {
-  website:     { icon: 'globe-outline',         color: '#E88B35', label: 'Website' },
-  facebook:    { icon: 'logo-facebook',         color: '#1877F2', label: 'Facebook Ads' },
-  instagram:   { icon: 'logo-instagram',        color: '#E4405F', label: 'Instagram' },
-  magicbricks: { icon: 'business-outline',      color: '#E53935', label: 'MagicBricks' },
-  '99acres':   { icon: 'home-outline',          color: '#1B5E20', label: '99 Acres' },
-  housing:     { icon: 'map-outline',           color: '#00BFA5', label: 'Housing.com' },
-  referral:    { icon: 'people-outline',        color: '#7C3AED', label: 'Referral' },
-  walkin:      { icon: 'walk-outline',          color: '#0EA5E9', label: 'Walk-in' },
-  direct:      { icon: 'call-outline',          color: '#64748B', label: 'Direct / Other' },
-  google:      { icon: 'logo-google',           color: '#4285F4', label: 'Google Ads' },
+type PlatformRow = {
+  platform: string;
+  label: string;
+  count: number;
+  active: number;
+  negative: number;
+  sources?: { source: string; count: number }[];
 };
 
-function getMeta(src: string) {
-  const key = src.toLowerCase().replace(/[\s_-]+/g, '');
-  for (const [k, v] of Object.entries(SOURCE_META)) {
-    if (key.includes(k) || k.includes(key)) return v;
+type PlatformData = {
+  total: number;
+  platforms: PlatformRow[];
+};
+
+type LeadRow = {
+  lead_id: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  location?: string;
+  budget?: string;
+  property_type?: string;
+  source?: string;
+  stage?: string;
+  status?: string;
+  notes?: string;
+  external_lead_id?: string;
+  raw_payload?: Record<string, unknown>;
+  created_at?: string;
+};
+
+const PLATFORM_UI: Record<string, { icon: keyof typeof Ionicons.glyphMap; color: string }> = {
+  manual: { icon: 'create-outline', color: '#6366F1' },
+  housing: { icon: 'map-outline', color: '#00BFA5' },
+  meta: { icon: 'logo-facebook', color: '#1877F2' },
+  other: { icon: 'ellipsis-horizontal-outline', color: '#64748B' },
+};
+
+function normalizePlatformData(payload: any): PlatformData {
+  const platforms = Array.isArray(payload?.platforms) ? payload.platforms : [];
+  return {
+    total: Number(payload?.total ?? platforms.reduce((sum: number, p: any) => sum + Number(p?.count || 0), 0)),
+    platforms: platforms.map((p: any) => ({
+      platform: String(p?.platform || 'other'),
+      label: String(p?.label || p?.platform || 'Other'),
+      count: Number(p?.count || 0),
+      active: Number(p?.active || 0),
+      negative: Number(p?.negative || 0),
+      sources: Array.isArray(p?.sources) ? p.sources : [],
+    })),
+  };
+}
+
+function housingProjectLabel(lead: LeadRow): string | null {
+  const notes = lead.notes || '';
+  const match = notes.match(/Project:\s*(.+)/i);
+  if (match) return match[1].trim();
+  const raw = lead.raw_payload;
+  if (raw && typeof raw === 'object') {
+    const name = raw.project_name || raw.project;
+    if (name) return String(name);
   }
-  return SOURCE_META.direct;
+  return null;
+}
+
+function formatDate(value?: string) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return value.slice(0, 10);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 interface Props {
   visible: boolean;
   onClose: () => void;
+  userRole?: string | null;
+  onChanged?: () => void;
 }
 
-type LeadSourceData = {
-  total: number;
-  sources: { source: string; count: number; active: number; negative: number }[];
-};
-
-const DEMO_SOURCE_DATA: LeadSourceData = {
-  total: 47,
-  sources: [
-    { source: 'website', count: 14, active: 12, negative: 2 },
-    { source: 'facebook', count: 10, active: 8, negative: 2 },
-    { source: 'magicbricks', count: 8, active: 7, negative: 1 },
-    { source: '99acres', count: 6, active: 5, negative: 1 },
-    { source: 'referral', count: 5, active: 5, negative: 0 },
-    { source: 'direct', count: 4, active: 3, negative: 1 },
-  ],
-};
-
-function normalizeSourceData(payload: any): LeadSourceData {
-  const sources = Array.isArray(payload?.sources) ? payload.sources : [];
-  const normalizedSources: LeadSourceData['sources'] = sources.map((source: any) => ({
-    source: String(source?.source || 'direct'),
-    count: Number(source?.count || 0),
-    active: Number(source?.active || 0),
-    negative: Number(source?.negative || 0),
-  }));
-
-  return {
-    total: Number(
-      payload?.total ?? normalizedSources.reduce((sum, source) => sum + source.count, 0)
-    ),
-    sources: normalizedSources,
-  };
-}
-
-export function LeadSourceModal({ visible, onClose }: Props) {
+export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props) {
   const { colors } = useTheme();
-  const [data, setData] = useState<LeadSourceData | null>(null);
+  const [data, setData] = useState<PlatformData | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [view, setView] = useState<'platforms' | 'leads'>('platforms');
+  const [selectedPlatform, setSelectedPlatform] = useState<PlatformRow | null>(null);
+  const [platformLeads, setPlatformLeads] = useState<LeadRow[]>([]);
+  const [leadsLoading, setLeadsLoading] = useState(false);
+  const [leadsError, setLeadsError] = useState<string | null>(null);
+  const [openLeadId, setOpenLeadId] = useState<string | null>(null);
 
-  // Animations
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(60)).current;
   const scaleAnim = useRef(new Animated.Value(0.92)).current;
-  const barAnims = useRef<Animated.Value[]>([]).current;
 
-  const setSourceData = useCallback((nextData: LeadSourceData) => {
-    barAnims.length = 0;
-    nextData.sources.forEach(() => barAnims.push(new Animated.Value(0)));
-    setData(nextData);
-  }, [barAnims]);
+  const resetDrillDown = useCallback(() => {
+    setView('platforms');
+    setSelectedPlatform(null);
+    setPlatformLeads([]);
+    setLeadsError(null);
+    setOpenLeadId(null);
+  }, []);
 
   const loadData = useCallback(async () => {
     setLoading(true);
+    setError(null);
     setData(null);
     try {
-      const res = await api.get('/stats/leads-by-source');
-      setSourceData(normalizeSourceData(res.data));
-    } catch {
-      setSourceData(DEMO_SOURCE_DATA);
+      const res = await api.get('/stats/leads-by-platform');
+      setData(normalizePlatformData(res.data));
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Could not load lead sources.');
     } finally {
       setLoading(false);
     }
-  }, [setSourceData]);
+  }, []);
+
+  const loadPlatformLeads = useCallback(async (platform: PlatformRow) => {
+    if (platform.count <= 0) return;
+    setLeadsLoading(true);
+    setLeadsError(null);
+    setSelectedPlatform(platform);
+    setView('leads');
+    try {
+      const res = await api.get(`/leads/by-platform/${platform.platform}`, { params: { limit: 200 } });
+      setPlatformLeads(Array.isArray(res.data?.leads) ? res.data.leads : []);
+    } catch (e: any) {
+      setLeadsError(e?.response?.data?.detail || 'Could not load leads.');
+      setPlatformLeads([]);
+    } finally {
+      setLeadsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
     if (visible) {
+      resetDrillDown();
       loadData();
-      // Animate in
       Animated.parallel([
         Animated.timing(backdropAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
         Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 12, useNativeDriver: true }),
         Animated.spring(scaleAnim, { toValue: 1, tension: 60, friction: 12, useNativeDriver: true }),
       ]).start();
     } else {
-      // Reset
       backdropAnim.setValue(0);
       slideAnim.setValue(60);
       scaleAnim.setValue(0.92);
+      resetDrillDown();
     }
-  }, [backdropAnim, loadData, scaleAnim, slideAnim, visible]);
-
-  useEffect(() => {
-    if (!data?.sources.length) return;
-
-    // Stagger bar animations after the rows have rendered with live Animated.Value refs.
-    const anims = barAnims.map((anim, i) =>
-      Animated.timing(anim, {
-        toValue: 1,
-        duration: 500,
-        delay: i * 80,
-        useNativeDriver: false, // width animation can't use native driver
-      })
-    );
-    Animated.stagger(80, anims).start();
-  }, [barAnims, data]);
+  }, [backdropAnim, loadData, resetDrillDown, scaleAnim, slideAnim, visible]);
 
   const handleClose = () => {
     Animated.parallel([
@@ -140,42 +171,58 @@ export function LeadSourceModal({ visible, onClose }: Props) {
 
   if (!visible) return null;
 
-  const maxCount = data ? Math.max(1, ...data.sources.map(s => s.count)) : 1;
-
   const isWeb = Platform.OS === 'web';
+  const mainPlatforms = (data?.platforms || []).filter((p) => ['manual', 'housing', 'meta'].includes(p.platform));
+  const ordered = ['manual', 'housing', 'meta'].map((key) => {
+    const found = mainPlatforms.find((p) => p.platform === key);
+    return found || {
+      platform: key,
+      label: key === 'manual' ? 'Manual Entry' : key === 'housing' ? 'Housing.com' : 'Meta (Facebook)',
+      count: 0, active: 0, negative: 0, sources: [],
+    };
+  });
 
   const content = (
     <View style={st.fullOverlay}>
-      {/* Backdrop */}
       <Animated.View style={[st.backdrop, { opacity: backdropAnim }]}>
         <Pressable style={{ flex: 1 }} onPress={handleClose} />
       </Animated.View>
 
-      {/* Modal Card */}
       <Animated.View
         style={[
           st.card,
+          view === 'leads' && st.cardWide,
           {
             backgroundColor: colors.surface,
             borderColor: colors.border,
-            transform: [
-              { translateY: slideAnim },
-              { scale: scaleAnim },
-            ],
+            transform: [{ translateY: slideAnim }, { scale: scaleAnim }],
           },
         ]}
       >
-        {/* Header */}
         <View style={st.header}>
           <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+            {view === 'leads' && selectedPlatform ? (
+              <Pressable onPress={resetDrillDown} style={st.backRow}>
+                <Ionicons name="chevron-back" size={18} color={colors.primary} />
+                <Text style={[st.backText, { color: colors.primary }]}>All platforms</Text>
+              </Pressable>
+            ) : null}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: view === 'leads' ? 6 : 0 }}>
               <View style={[st.headerIcon, { backgroundColor: colors.primary + '20' }]}>
-                <Ionicons name="pie-chart" size={20} color={colors.primary} />
+                <Ionicons name={view === 'leads' ? 'list-outline' : 'pie-chart'} size={20} color={colors.primary} />
               </View>
-              <View>
-                <Text style={[st.headerTitle, { color: colors.text }]}>Lead Source Breakdown</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[st.headerTitle, { color: colors.text }]}>
+                  {view === 'leads' && selectedPlatform ? selectedPlatform.label : 'Leads by Platform'}
+                </Text>
                 <Text style={[st.headerSub, { color: colors.textMuted }]}>
-                  {data ? `${data.total} total leads from ${data.sources.length} sources` : 'Loading...'}
+                  {view === 'leads' && selectedPlatform
+                    ? `${platformLeads.length} real leads · tap to open details`
+                    : data
+                      ? `${data.total} total leads · tap a platform`
+                      : loading
+                        ? 'Loading…'
+                        : 'Manual · Housing · Meta'}
                 </Text>
               </View>
             </View>
@@ -185,97 +232,165 @@ export function LeadSourceModal({ visible, onClose }: Props) {
           </Pressable>
         </View>
 
-        {/* Divider */}
         <View style={[st.divider, { backgroundColor: colors.border }]} />
 
-        {/* Source Bars */}
-        {loading ? (
-          <View style={{ padding: 40, alignItems: 'center' }}>
-            <Text style={{ color: colors.textMuted }}>Loading sources…</Text>
-          </View>
-        ) : data?.sources.length ? data.sources.map((src, i) => {
-          const meta = getMeta(src.source);
-          const pct = data.total > 0 ? Math.round((src.count / data.total) * 100) : 0;
-          const barWidth = barAnims[i] ? barAnims[i].interpolate({
-            inputRange: [0, 1],
-            outputRange: ['0%', `${(src.count / maxCount) * 100}%`],
-          }) : '0%';
+        {view === 'platforms' ? (
+          loading ? (
+            <View style={st.centerBox}>
+              <Text style={{ color: colors.textMuted }}>Loading platforms…</Text>
+            </View>
+          ) : error ? (
+            <View style={st.centerBox}>
+              <Text style={{ color: colors.negative, textAlign: 'center', marginBottom: 12 }}>{error}</Text>
+              <Pressable onPress={loadData} style={[st.retryBtn, { backgroundColor: colors.primary }]}>
+                <Text style={st.retryText}>Retry</Text>
+              </Pressable>
+            </View>
+          ) : (
+            <View style={st.platformGrid}>
+              {ordered.map((platform) => {
+                const meta = PLATFORM_UI[platform.platform] || PLATFORM_UI.other;
+                const pct = data && data.total > 0 ? Math.round((platform.count / data.total) * 100) : 0;
+                const tappable = platform.count > 0;
 
-          return (
-            <Animated.View
-              key={src.source}
-              style={[
-                st.sourceRow,
-                {
-                  opacity: barAnims[i] || 1,
-                },
-              ]}
-            >
-              {/* Icon + Label */}
-              <View style={st.sourceLeft}>
-                <View style={[st.sourceIcon, { backgroundColor: meta.color + '18' }]}>
-                  <Ionicons name={meta.icon} size={16} color={meta.color} />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[st.sourceName, { color: colors.text }]}>{meta.label}</Text>
-                  <Text style={[st.sourceDetail, { color: colors.textMuted }]}>
-                    {src.active} active · {src.negative} negative
-                  </Text>
-                </View>
-              </View>
-
-              {/* Bar + Count */}
-              <View style={st.sourceRight}>
-                <View style={[st.barTrack, { backgroundColor: colors.surfaceAlt }]}>
-                  <Animated.View
-                    style={[
-                      st.barFill,
+                return (
+                  <Pressable
+                    key={platform.platform}
+                    disabled={!tappable}
+                    onPress={() => loadPlatformLeads(platform)}
+                    style={({ pressed }: any) => [
+                      st.platformCard,
                       {
-                        backgroundColor: meta.color,
-                        width: barWidth,
+                        backgroundColor: colors.surfaceAlt,
+                        borderColor: tappable ? meta.color + '55' : colors.border,
+                        opacity: tappable && pressed ? 0.92 : 1,
                       },
                     ]}
-                  />
-                </View>
-                <View style={st.countWrap}>
-                  <Text style={[st.countText, { color: colors.text }]}>{src.count}</Text>
-                  <Text style={[st.pctText, { color: meta.color }]}>{pct}%</Text>
-                </View>
-              </View>
-            </Animated.View>
-          );
-        }) : (
-          <View style={{ padding: 40, alignItems: 'center' }}>
-            <Text style={{ color: colors.textMuted }}>No lead sources yet.</Text>
+                  >
+                    <View style={[st.platformIcon, { backgroundColor: meta.color + '18' }]}>
+                      <Ionicons name={meta.icon} size={22} color={meta.color} />
+                    </View>
+                    <Text style={[st.platformLabel, { color: colors.textMuted }]}>{platform.label}</Text>
+                    <Text style={[st.platformCount, { color: colors.text }]}>{platform.count}</Text>
+                    <Text style={[st.platformPct, { color: meta.color }]}>{pct}% of total</Text>
+                    <View style={[st.miniBar, { backgroundColor: colors.border }]}>
+                      <View style={[st.miniBarFill, { backgroundColor: meta.color, width: `${pct}%` }]} />
+                    </View>
+                    <Text style={[st.platformDetail, { color: colors.textMuted }]}>
+                      {platform.active} active · {platform.negative} negative
+                    </Text>
+                    {platform.platform === 'housing' && platform.count > 0 ? (
+                      <Text style={[st.realBadge, { color: meta.color, borderColor: meta.color + '44', backgroundColor: meta.color + '12' }]}>
+                        Original from Housing.com API
+                      </Text>
+                    ) : null}
+                    {tappable ? (
+                      <Text style={[st.tapHint, { color: meta.color }]}>Tap to view leads →</Text>
+                    ) : platform.platform === 'housing' ? (
+                      <Text style={[st.hint, { color: colors.warning }]}>Sync on Integrations page</Text>
+                    ) : (
+                      <Text style={[st.hint, { color: colors.textMuted }]}>No leads yet</Text>
+                    )}
+                  </Pressable>
+                );
+              })}
+            </View>
+          )
+        ) : leadsLoading ? (
+          <View style={st.centerBox}>
+            <ActivityIndicator color={colors.primary} />
+            <Text style={{ color: colors.textMuted, marginTop: 12 }}>Loading {selectedPlatform?.label} leads…</Text>
           </View>
+        ) : leadsError ? (
+          <View style={st.centerBox}>
+            <Text style={{ color: colors.negative, textAlign: 'center' }}>{leadsError}</Text>
+          </View>
+        ) : platformLeads.length === 0 ? (
+          <View style={st.centerBox}>
+            <Text style={{ color: colors.textMuted }}>No leads in this platform yet.</Text>
+          </View>
+        ) : (
+          <ScrollView style={st.leadList} showsVerticalScrollIndicator={false}>
+            {platformLeads.map((lead) => {
+              const project = housingProjectLabel(lead);
+              const isHousing = selectedPlatform?.platform === 'housing';
+              return (
+                <Pressable
+                  key={lead.lead_id}
+                  onPress={() => setOpenLeadId(lead.lead_id)}
+                  style={({ pressed }: any) => [
+                    st.leadRow,
+                    {
+                      backgroundColor: pressed ? colors.primary + '08' : colors.surfaceAlt,
+                      borderColor: colors.border,
+                    },
+                  ]}
+                >
+                  <View style={st.leadRowTop}>
+                    <Text style={[st.leadName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
+                    {lead.stage ? <StageBadge stage={lead.stage} /> : null}
+                  </View>
+                  <Text style={[st.leadSub, { color: colors.textSecondary }]}>
+                    {lead.phone}{lead.email ? ` · ${lead.email}` : ''}
+                  </Text>
+                  {project || lead.location ? (
+                    <Text style={[st.leadMeta, { color: colors.textMuted }]} numberOfLines={2}>
+                      {[project, lead.location].filter(Boolean).join(' · ')}
+                    </Text>
+                  ) : null}
+                  {lead.budget ? (
+                    <Text style={[st.leadMeta, { color: colors.textMuted }]}>Budget: {lead.budget}</Text>
+                  ) : null}
+                  <View style={st.leadFoot}>
+                    <Text style={[st.leadDate, { color: colors.textMuted }]}>{formatDate(lead.created_at)}</Text>
+                    {isHousing ? (
+                      <Text style={[st.realBadgeSmall, { color: '#00BFA5' }]}>Housing.com · Original</Text>
+                    ) : (
+                      <Text style={[st.leadDate, { color: colors.textMuted }]}>{lead.source}</Text>
+                    )}
+                  </View>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
         )}
 
-        {/* Footer */}
-        <View style={[st.footer, { borderTopColor: colors.border }]}>
-          <View style={st.footerItem}>
-            <View style={[st.footerDot, { backgroundColor: colors.positive }]} />
-            <Text style={[st.footerText, { color: colors.textSecondary }]}>
-              Active: {data ? data.sources.reduce((a, s) => a + s.active, 0) : 0}
-            </Text>
+        {view === 'platforms' ? (
+          <View style={[st.footer, { borderTopColor: colors.border }]}>
+            <View style={st.footerItem}>
+              <View style={[st.footerDot, { backgroundColor: colors.positive }]} />
+              <Text style={[st.footerText, { color: colors.textSecondary }]}>
+                Active: {data ? data.platforms.reduce((a, p) => a + p.active, 0) : 0}
+              </Text>
+            </View>
+            <View style={st.footerItem}>
+              <View style={[st.footerDot, { backgroundColor: colors.negative }]} />
+              <Text style={[st.footerText, { color: colors.textSecondary }]}>
+                Negative: {data ? data.platforms.reduce((a, p) => a + p.negative, 0) : 0}
+              </Text>
+            </View>
+            <View style={st.footerItem}>
+              <View style={[st.footerDot, { backgroundColor: colors.primary }]} />
+              <Text style={[st.footerText, { color: colors.textSecondary }]}>Total: {data?.total || 0}</Text>
+            </View>
           </View>
-          <View style={st.footerItem}>
-            <View style={[st.footerDot, { backgroundColor: colors.negative }]} />
-            <Text style={[st.footerText, { color: colors.textSecondary }]}>
-              Negative: {data ? data.sources.reduce((a, s) => a + s.negative, 0) : 0}
-            </Text>
-          </View>
-          <View style={st.footerItem}>
-            <View style={[st.footerDot, { backgroundColor: colors.primary }]} />
-            <Text style={[st.footerText, { color: colors.textSecondary }]}>
-              Total: {data?.total || 0}
-            </Text>
-          </View>
-        </View>
+        ) : null}
       </Animated.View>
+
+      <LeadDetailModal
+        leadId={openLeadId}
+        visible={openLeadId !== null}
+        onClose={() => setOpenLeadId(null)}
+        onChanged={() => {
+          onChanged?.();
+          if (selectedPlatform) loadPlatformLeads(selectedPlatform);
+          loadData();
+        }}
+        userRole={userRole}
+      />
     </View>
   );
 
-  // On web, render as a fixed overlay; on native, use Modal
   if (isWeb) return content;
 
   return (
@@ -288,14 +403,8 @@ export function LeadSourceModal({ visible, onClose }: Props) {
 const st = StyleSheet.create({
   fullOverlay: {
     ...Platform.select({
-      web: {
-        position: 'fixed' as any,
-        top: 0, left: 0, right: 0, bottom: 0,
-        zIndex: 9999,
-      },
-      default: {
-        flex: 1,
-      },
+      web: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 },
+      default: { flex: 1 },
     }),
     alignItems: 'center',
     justifyContent: 'center',
@@ -308,117 +417,59 @@ const st = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
   card: {
-    width: '92%',
-    maxWidth: 540,
-    maxHeight: SCREEN_H * 0.85,
+    width: '94%',
+    maxWidth: 720,
+    maxHeight: SCREEN_H * 0.88,
     borderRadius: 20,
     borderWidth: 1,
     padding: 24,
     ...Platform.select({
-      web: {
-        boxShadow: '0 25px 80px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.05)',
-      },
-      default: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 25 },
-        shadowOpacity: 0.4,
-        shadowRadius: 40,
-        elevation: 30,
-      },
+      web: { boxShadow: '0 25px 80px rgba(0,0,0,0.4)' },
+      default: { elevation: 30 },
     }),
   },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    justifyContent: 'space-between',
-    gap: 12,
-  },
-  headerIcon: {
-    width: 42,
-    height: 42,
-    borderRadius: 12,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  headerSub: {
-    fontSize: 12,
-    marginTop: 2,
-  },
-  closeBtn: {
-    width: 34,
-    height: 34,
-    borderRadius: 10,
+  cardWide: { maxWidth: 560 },
+  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
+  backText: { fontSize: 13, fontWeight: '600' },
+  headerIcon: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  headerTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3 },
+  headerSub: { fontSize: 12, marginTop: 2 },
+  closeBtn: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  divider: { height: 1, marginVertical: 18 },
+  centerBox: { padding: 40, alignItems: 'center' },
+  retryBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
+  retryText: { color: '#fff', fontWeight: '700', fontSize: 13 },
+  platformGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between' },
+  platformCard: {
+    flexGrow: 1,
+    flexBasis: 200,
+    minWidth: 180,
     borderWidth: 1,
+    borderRadius: 14,
+    padding: 16,
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
   },
-  divider: {
-    height: 1,
-    marginVertical: 18,
-  },
-  sourceRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 10,
-    gap: 12,
-  },
-  sourceLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    flex: 1,
-    minWidth: 140,
-  },
-  sourceIcon: {
-    width: 34,
-    height: 34,
-    borderRadius: 9,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  sourceName: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  sourceDetail: {
-    fontSize: 10,
-    marginTop: 1,
-  },
-  sourceRight: {
-    flex: 1.5,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  barTrack: {
-    flex: 1,
-    height: 8,
-    borderRadius: 4,
-    overflow: 'hidden',
-  },
-  barFill: {
-    height: '100%',
-    borderRadius: 4,
-  },
-  countWrap: {
-    alignItems: 'flex-end',
-    minWidth: 44,
-  },
-  countText: {
-    fontSize: 16,
-    fontWeight: '700',
-    letterSpacing: -0.3,
-  },
-  pctText: {
-    fontSize: 10,
-    fontWeight: '700',
-  },
+  platformIcon: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  platformLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
+  platformCount: { fontSize: 32, fontWeight: '800', letterSpacing: -1, marginTop: 2 },
+  platformPct: { fontSize: 12, fontWeight: '700' },
+  miniBar: { width: '100%', height: 6, borderRadius: 3, overflow: 'hidden', marginVertical: 6 },
+  miniBarFill: { height: '100%', borderRadius: 3 },
+  platformDetail: { fontSize: 11 },
+  realBadge: { fontSize: 9, fontWeight: '700', marginTop: 6, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, textAlign: 'center' },
+  tapHint: { fontSize: 11, fontWeight: '700', marginTop: 8 },
+  hint: { fontSize: 10, textAlign: 'center', marginTop: 6 },
+  leadList: { maxHeight: SCREEN_H * 0.5 },
+  leadRow: { borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10, gap: 4 },
+  leadRowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  leadName: { fontSize: 15, fontWeight: '700', flex: 1 },
+  leadSub: { fontSize: 12 },
+  leadMeta: { fontSize: 11, lineHeight: 16 },
+  leadFoot: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 4 },
+  leadDate: { fontSize: 10 },
+  realBadgeSmall: { fontSize: 10, fontWeight: '700' },
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -427,18 +478,7 @@ const st = StyleSheet.create({
     marginTop: 14,
     borderTopWidth: 1,
   },
-  footerItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  footerDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-  },
-  footerText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
+  footerItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  footerDot: { width: 8, height: 8, borderRadius: 4 },
+  footerText: { fontSize: 12, fontWeight: '600' },
 });

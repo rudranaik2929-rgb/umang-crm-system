@@ -341,6 +341,18 @@ create index if not exists idx_notifications_user_read on notifications(user_id,
 create index if not exists idx_integration_events_source_created on integration_events(source, created_at desc);
 create index if not exists idx_integration_events_external_id on integration_events(external_id);
 
+-- Housing / portal integration: backend must use SUPABASE_SERVICE_ROLE_KEY in .env.
+-- If you only have the anon key, run the policies below so webhooks can log events and insert leads.
+
+alter table leads enable row level security;
+alter table integration_events enable row level security;
+
+drop policy if exists leads_backend_all on leads;
+create policy leads_backend_all on leads for all using (true) with check (true);
+
+drop policy if exists integration_events_backend_all on integration_events;
+create policy integration_events_backend_all on integration_events for all using (true) with check (true);
+
 -- Compatibility views for the business workflow names.
 create or replace view site_visits as
 select * from visits;

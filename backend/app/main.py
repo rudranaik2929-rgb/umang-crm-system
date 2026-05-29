@@ -259,6 +259,21 @@ def as_list_payload(value: Any) -> List[Dict[str, Any]]:
         return [value]
     return []
 
+def classify_lead_platform(source: Optional[str]) -> str:
+    """Group lead sources into manual | housing | meta | other for dashboard breakdown."""
+    normalized = re.sub(r"[\s_.-]+", "", (source or "").strip().lower())
+    if "housing" in normalized:
+        return "housing"
+    if normalized in {"facebook", "instagram", "meta"} or "facebook" in normalized or normalized.startswith("meta"):
+        return "meta"
+    if normalized in {"manual", "manualentry", "walkin", "referral", "direct", "call"} or normalized.startswith("manual"):
+        return "manual"
+    return "other"
+
+def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
+    return SESSION_CACHE["leads"] + [l for l in db_leads if l.get("lead_id") not in cache_ids]
+
 def safe_json(value: Any) -> Any:
     try:
         json.dumps(value, default=str)
@@ -901,18 +916,34 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
     email = clean_text(pick_first(payload, [
         "email", "lead_email", "email_address", "contact.email",
     ]))
+    locality = clean_text(pick_first(payload, ["locality_name", "locality", "project_locality"]))
+    city = clean_text(pick_first(payload, ["city_name", "city", "contact.city"]))
     location = clean_text(pick_first(payload, [
         "city", "location", "locality", "project_locality", "address", "contact.city",
-    ]))
+    ])) or ", ".join(part for part in [locality, city] if part)
+    min_price = pick_first(payload, ["min_price", "min_budget"])
+    max_price = pick_first(payload, ["max_price", "max_budget"])
     budget = clean_text(pick_first(payload, [
         "budget", "price", "budget_range", "max_budget", "requirement_budget",
     ]))
+    if not budget and (min_price or max_price):
+        if min_price and max_price:
+            budget = f"{min_price} - {max_price}"
+        else:
+            budget = clean_text(min_price or max_price)
     property_type = clean_text(pick_first(payload, [
         "property_type", "configuration", "config", "bhk", "requirement", "unit_type",
     ]))
     external_id = clean_text(pick_first(payload, [
         "lead_id", "id", "uuid", "enquiry_id", "leadgen_id", "external_id",
     ]))
+    if not external_id and source == "Housing.com":
+        project_id = clean_text(payload.get("project_id"))
+        lead_date = clean_text(payload.get("lead_date"))
+        phone_key = normalize_phone(pick_first(payload, ["lead_phone", "phone", "mobile"]))
+        parts = [p for p in [project_id, phone_key, lead_date] if p]
+        if len(parts) >= 2:
+            external_id = ":".join(parts)
     project_name = clean_text(pick_first(payload, ["project_name", "project", "property_name"]))
     notes = clean_text(pick_first(payload, ["notes", "comment", "message", "remarks", "query"]))
     note_parts = []
@@ -1227,6 +1258,9 @@ async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current
     ensure_roles(cu, ["admin", "manager", "marketing"])
     end_date = payload.end_date or int(now_utc().timestamp())
     start_date = payload.start_date or int((now_utc() - timedelta(days=1)).timestamp())
+    # Housing.com API rejects ranges wider than 2 days.
+    if end_date - start_date > 2 * 86400:
+        start_date = end_date - 2 * 86400
     params = housing_sync_params(start_date, end_date)
     r = _http.get(HOUSING_API_URL, params=params)
     if r.status_code >= 400:
@@ -1236,8 +1270,14 @@ async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current
     except Exception:
         raise HTTPException(status_code=502, detail="Housing.com returned a non-JSON response")
 
+    lead_payloads = as_list_payload(data)
+    if isinstance(data, dict) and not lead_payloads:
+        message = clean_text(data.get("message") or data.get("error") or data.get("detail"))
+        if message:
+            raise HTTPException(status_code=502, detail=f"Housing.com sync failed: {message}")
+
     created, duplicates, ignored = [], [], []
-    for lead_payload in as_list_payload(data):
+    for lead_payload in lead_payloads:
         result = create_integrated_lead(lead_payload, "Housing.com", actor=cu)
         if result["status"] == "created":
             created.append(result["lead_id"])
@@ -1250,9 +1290,55 @@ async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current
         "source": "Housing.com",
         "start_date": start_date,
         "end_date": end_date,
+        "fetched": len(lead_payloads),
         "created": created,
         "duplicates": duplicates,
         "ignored": ignored,
+    }
+
+@api_router.get("/integrations/housing/verify")
+async def housing_verify(cu: User=Depends(get_current_user)):
+    """Confirm Housing.com credentials and whether the pull API returns leads."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    credentials_ok = bool(HOUSING_PROFILE_ID and HOUSING_ENCRYPTION_KEY)
+    if not credentials_ok:
+        return {
+            "credentials_ok": False,
+            "api_reachable": False,
+            "leads_available": 0,
+            "message": "Set HOUSING_PROFILE_ID and HOUSING_ENCRYPTION_KEY in backend .env",
+            "db_housing_leads": 0,
+        }
+
+    end_date = int(now_utc().timestamp())
+    start_date = end_date - 86400
+    params = housing_sync_params(start_date, end_date)
+    try:
+        r = _http.get(HOUSING_API_URL, params=params, timeout=30)
+        api_reachable = r.status_code < 500
+        data = r.json() if api_reachable else {}
+        lead_payloads = as_list_payload(data) if api_reachable else []
+        message = None
+        if isinstance(data, dict) and not lead_payloads:
+            message = clean_text(data.get("message") or data.get("error"))
+    except Exception as exc:
+        return {
+            "credentials_ok": True,
+            "api_reachable": False,
+            "leads_available": 0,
+            "message": str(exc),
+            "db_housing_leads": len(sb_select("leads", {"source": "eq.Housing.com", "select": "lead_id"})),
+        }
+
+    db_housing = sb_select("leads", {"source": "eq.Housing.com", "select": "lead_id"})
+    return {
+        "credentials_ok": True,
+        "api_reachable": api_reachable and r.status_code < 400,
+        "api_status": r.status_code,
+        "leads_available": len(lead_payloads),
+        "message": message,
+        "sample_lead": lead_payloads[0] if lead_payloads else None,
+        "db_housing_leads": len(db_housing),
     }
 
 @api_router.get("/integrations/status")
@@ -1577,6 +1663,31 @@ async def list_leads(
     if not all_leads and not stage and not status_ and not assigned_to:
         return []
     return all_leads[offset:offset + limit]
+
+@api_router.get("/leads/by-platform/{platform}")
+async def list_leads_by_platform(
+    platform: str,
+    limit: int = 200,
+    offset: int = 0,
+    cu: User = Depends(get_current_user),
+):
+    """List real CRM leads for a platform bucket: manual, housing, or meta."""
+    platform_key = platform.strip().lower()
+    if platform_key not in {"manual", "housing", "meta"}:
+        raise HTTPException(status_code=400, detail="Platform must be manual, housing, or meta")
+
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
+    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
+    all_leads = merge_leads_with_cache(db_leads)
+    filtered = [l for l in all_leads if classify_lead_platform(l.get("source")) == platform_key]
+    page = filtered[offset:offset + limit]
+    return {
+        "platform": platform_key,
+        "label": {"manual": "Manual Entry", "housing": "Housing.com", "meta": "Meta (Facebook)"}[platform_key],
+        "total": len(filtered),
+        "leads": page,
+    }
 
 @api_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
@@ -2397,8 +2508,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
 @api_router.get("/stats/leads-by-source")
 async def stats_leads_by_source(cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"select": "lead_id,source,stage,status,created_at"})
-    cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
-    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_ids]
+    leads = merge_leads_with_cache(leads)
     source_map: dict = {}
     for l in leads:
         src = (l.get("source") or "direct").strip().lower()
@@ -2411,6 +2521,52 @@ async def stats_leads_by_source(cu: User=Depends(get_current_user)):
             source_map[src]["active"] += 1
     result = sorted(source_map.values(), key=lambda x: x["count"], reverse=True)
     return {"total": len(leads), "sources": result}
+
+@api_router.get("/stats/leads-by-platform")
+async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
+    """Dashboard breakdown: manual, housing (Housing.com), meta (Facebook/Instagram)."""
+    leads = sb_select("leads", {"select": "lead_id,source,stage,status,created_at"})
+    leads = merge_leads_with_cache(leads)
+    platform_defs = [
+        ("manual", "Manual Entry", ["manual_entry", "manual", "walk-in", "walkin", "referral", "direct"]),
+        ("housing", "Housing.com", ["housing.com", "housing"]),
+        ("meta", "Meta (Facebook)", ["facebook", "instagram", "meta"]),
+    ]
+    buckets = {
+        key: {"platform": key, "label": label, "count": 0, "active": 0, "negative": 0, "sources": []}
+        for key, label, _ in platform_defs
+    }
+    buckets["other"] = {"platform": "other", "label": "Other", "count": 0, "active": 0, "negative": 0, "sources": []}
+    source_counts: Dict[str, int] = {}
+
+    for lead in leads:
+        raw_source = (lead.get("source") or "direct").strip()
+        source_key = raw_source.lower()
+        source_counts[source_key] = source_counts.get(source_key, 0) + 1
+        platform = classify_lead_platform(raw_source)
+        bucket = buckets[platform]
+        bucket["count"] += 1
+        if lead.get("status") == "negative":
+            bucket["negative"] += 1
+        else:
+            bucket["active"] += 1
+
+    for source_key, count in sorted(source_counts.items(), key=lambda item: item[1], reverse=True):
+        platform = classify_lead_platform(source_key)
+        buckets[platform]["sources"].append({"source": source_key, "count": count})
+
+    platforms = [
+        buckets["manual"],
+        buckets["housing"],
+        buckets["meta"],
+    ]
+    if buckets["other"]["count"]:
+        platforms.append(buckets["other"])
+
+    return {
+        "total": len(leads),
+        "platforms": platforms,
+    }
 
 @api_router.get("/stats/dashboard/graph")
 async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
