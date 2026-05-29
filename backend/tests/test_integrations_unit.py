@@ -129,10 +129,13 @@ def test_housing_webhook_accepts_valid_hmac(monkeypatch):
 
 def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
     monkeypatch.setattr(main, "SESSION_CACHE", {"leads": [
-        {"lead_id": "l1", "source": "manual_entry", "status": "active"},
-        {"lead_id": "l2", "source": "Housing.com", "status": "active"},
-        {"lead_id": "l3", "source": "Facebook", "status": "negative"},
-        {"lead_id": "l4", "source": "website", "status": "active"},
+        {"lead_id": "l1", "source": "manual_entry", "status": "active", "phone": "+919000000001"},
+        {"lead_id": "l2", "source": "Housing.com", "status": "active", "phone": "+919000000002"},
+        # Real Meta lead: has contact details + a genuine leadgen id.
+        {"lead_id": "l3", "source": "Facebook", "status": "negative", "phone": "+919000000003", "external_lead_id": "778899"},
+        {"lead_id": "l4", "source": "website", "status": "active", "phone": "+919000000004"},
+        # Meta test/sample submission (444444444444) — must be excluded.
+        {"lead_id": "l5", "source": "Facebook", "status": "active", "external_lead_id": "444444444444"},
     ], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []})
     monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
 
@@ -153,6 +156,7 @@ def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
 
     assert response.status_code == 200, response.text
     data = response.json()
+    # l5 (Meta test id 444444444444) is filtered out, leaving 4 real leads.
     assert data["total"] == 4
     by_key = {p["platform"]: p for p in data["platforms"]}
     assert by_key["manual"]["count"] == 1

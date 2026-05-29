@@ -2,6 +2,8 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.cors import CORSMiddleware
+from starlette.middleware.gzip import GZipMiddleware
+from concurrent.futures import ThreadPoolExecutor
 import uuid, logging, random, os, httpx, csv, io, openpyxl
 import base64, hashlib, hmac, json, re, time
 from io import BytesIO
@@ -30,6 +32,9 @@ def get_password_hash(password):
     return pwd_context.hash(password)
 
 app = FastAPI(title="Umang Hometech LLP CRM")
+
+# Compress large JSON responses (e.g. full lead lists) to cut transfer time.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 RATE_LIMIT_WINDOW_SECONDS = int(os.environ.get("RATE_LIMIT_WINDOW_SECONDS", "60"))
 RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("RATE_LIMIT_MAX_REQUESTS", "240"))
@@ -176,6 +181,28 @@ def sb_select(table, params=None):
     return r.json() if r.status_code < 400 else []
 
 
+# Shared thread pool to run independent Supabase reads concurrently. httpx.Client
+# is thread-safe for issuing requests, so endpoints that need several unrelated
+# tables (e.g. the dashboard) can fetch them in parallel instead of serially.
+_read_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sb-read")
+
+
+def sb_select_parallel(specs: Dict[str, Tuple[str, Optional[dict]]]) -> Dict[str, list]:
+    """Run multiple sb_select calls concurrently. specs: key -> (table, params)."""
+    futures = {
+        key: _read_pool.submit(sb_select, table, params)
+        for key, (table, params) in specs.items()
+    }
+    out: Dict[str, list] = {}
+    for key, fut in futures.items():
+        try:
+            out[key] = fut.result()
+        except Exception as exc:  # pragma: no cover - defensive
+            logging.error(f"Supabase parallel SELECT {key}: {exc}")
+            out[key] = []
+    return out
+
+
 def sb_insert(table, data):
     h = {**sb_headers(), "Prefer": "return=representation"}
     r = _http.post(sb_url(table), headers=h, json=data)
@@ -304,6 +331,50 @@ def lead_matches_platform(lead: Dict[str, Any], platform_key: str) -> bool:
         return platform_key == "brokerage"
     return platform == platform_key
 
+
+def is_real_meta_lead(lead: Dict[str, Any]) -> bool:
+    """A genuine Meta lead must come from a real leadgen id (not a Meta test id)
+    and carry real contact details. Filters out the '444444444444' sample
+    submissions Meta sends from the webhook test button."""
+    external = str(lead.get("external_lead_id") or "").strip().lower()
+    if external in {x.lower() for x in META_FAKE_LEADGEN_IDS}:
+        return False
+    phone = normalize_phone(lead.get("phone"))
+    email = clean_text(lead.get("email"))
+    if not phone and not email:
+        return False
+    # Reject obvious placeholder phone numbers (all same digit / too short).
+    if phone and (len(set(phone)) <= 1 or len(phone) < 6):
+        return bool(email)
+    return True
+
+
+def dedupe_leads(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse duplicate leads that share an external id, phone or email.
+    Keeps the first (most recent, since callers pre-sort desc) occurrence."""
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for lead in leads:
+        keys = []
+        ext = str(lead.get("external_lead_id") or "").strip().lower()
+        if ext:
+            keys.append(f"ext:{ext}")
+        phone = normalize_phone(lead.get("phone"))
+        if phone:
+            keys.append(f"phone:{phone}")
+        email = str(clean_text(lead.get("email")) or "").lower()
+        if email:
+            keys.append(f"email:{email}")
+        if not keys:
+            out.append(lead)
+            continue
+        if any(k in seen for k in keys):
+            continue
+        for k in keys:
+            seen.add(k)
+        out.append(lead)
+    return out
+
 def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
     return SESSION_CACHE["leads"] + [l for l in db_leads if l.get("lead_id") not in cache_ids]
@@ -322,6 +393,15 @@ def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
     buckets["other"] = {"platform": "other", "label": "Other Sources", "count": 0, "active": 0, "negative": 0, "sources": []}
     source_counts: Dict[str, int] = {}
     broker_pool_count = 0
+
+    # Drop Meta test/placeholder submissions and collapse duplicates so the
+    # headline counts match the per-platform lead lists shown in the UI.
+    cleaned: List[Dict[str, Any]] = []
+    for lead in leads:
+        if classify_lead_platform(lead.get("source")) == "meta" and not is_real_meta_lead(lead):
+            continue
+        cleaned.append(lead)
+    leads = dedupe_leads(cleaned)
 
     for lead in leads:
         raw_source = (lead.get("source") or "direct").strip()
@@ -2337,6 +2417,11 @@ async def list_leads_by_platform(
     all_leads = merge_leads_with_cache(db_leads)
     filtered = [l for l in all_leads if lead_matches_platform(l, platform_key)]
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    # Meta leads are webhook-driven and can contain Meta's own test submissions
+    # plus duplicates from re-delivered events — show only real, unique leads.
+    if platform_key == "meta":
+        filtered = [l for l in filtered if is_real_meta_lead(l)]
+    filtered = dedupe_leads(filtered)
     page = filtered[offset:offset + limit]
     return {
         "platform": platform_key,
@@ -3083,13 +3168,27 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
 # ---- Stats / Dashboard ----
 @api_router.get("/stats/dashboard")
 async def stats_dashboard(cu: User=Depends(get_current_user)):
-    leads = sb_select("leads", {"select": "*"})
-    bookings = sb_select("bookings", {"select": "booking_amount,status"})
-    visits = sb_select("visits", {"select": "visit_id,status"})
-    followups = sb_select("visit_followups", {"select": "followup_id,status"})
-    loans = sb_select("loans", {"select": "loan_id,application_status,amount,bank_stage"})
-    customers = sb_select("customers", {"select": "customer_id,lead_id"})
-    activities = sb_select("activities", {"select": "activity_id,type"})
+    # Fetch all independent tables concurrently to cut dashboard latency.
+    # Leads only needs classification/count columns here — skip the heavy
+    # raw_payload JSON to keep the response small and fast.
+    fetched = sb_select_parallel({
+        "leads": ("leads", {"select": "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,created_at"}),
+        "bookings": ("bookings", {"select": "booking_amount,status"}),
+        "visits": ("visits", {"select": "visit_id,status"}),
+        "followups": ("visit_followups", {"select": "followup_id,status"}),
+        "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage"}),
+        "customers": ("customers", {"select": "customer_id,lead_id"}),
+        "activities": ("activities", {"select": "activity_id,type"}),
+        "employees": ("employees", {"select": "employee_id"}),
+        "campaigns": ("campaigns", {"select": "campaign_id"}),
+    })
+    leads = fetched["leads"]
+    bookings = fetched["bookings"]
+    visits = fetched["visits"]
+    followups = fetched["followups"]
+    loans = fetched["loans"]
+    customers = fetched["customers"]
+    activities = fetched["activities"]
     
     # Deduplicate leads
     cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
@@ -3135,8 +3234,8 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
             st = l.get("stage", "new")
             stage_dist[st] = stage_dist.get(st, 0) + 1
             
-    employees = sb_select("employees", {"select": "employee_id"})
-    campaigns = sb_select("campaigns", {"select": "campaign_id"})
+    employees = fetched["employees"]
+    campaigns = fetched["campaigns"]
     rev = sum(float(b.get("booking_amount", 0) or 0) for b in bookings)
     rev += sum(float(l.get("amount", 0) or 0) for l in loans if l.get("application_status") == "disbursed" or l.get("bank_stage") == "disbursal")
     activity_followups = sum(1 for a in activities if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
@@ -3190,7 +3289,7 @@ async def stats_leads_by_source(cu: User=Depends(get_current_user)):
 @api_router.get("/stats/leads-by-platform")
 async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
     """Dashboard breakdown: manual, housing (Housing.com), meta (Facebook/Instagram)."""
-    leads = sb_select("leads", {"select": "lead_id,source,stage,status,created_at"})
+    leads = sb_select("leads", {"select": "lead_id,phone,email,external_lead_id,source,stage,status,created_at"})
     leads = merge_leads_with_cache(leads)
     breakdown = compute_platform_breakdown(leads)
     return {
@@ -3204,7 +3303,12 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     # 1. Real leads per day (last 30 days)
     now = now_utc()
     start_date = (now - timedelta(days=30)).isoformat()
-    leads = sb_select("leads", {"select": "created_at", "created_at": f"gte.{start_date}"})
+    graph_data = sb_select_parallel({
+        "leads": ("leads", {"select": "lead_id,created_at", "created_at": f"gte.{start_date}"}),
+        "bookings": ("bookings", {"select": "booking_id,booking_amount,created_at", "status": "eq.confirmed"}),
+        "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
+    })
+    leads = graph_data["leads"]
     # Deduplicate
     cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
     leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
@@ -3225,13 +3329,13 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
         leads_by_day.append({"date": d, "count": cnt})
 
     # 2. Real revenue by month (last 12 months)
-    bookings = sb_select("bookings", {"select": "booking_amount,created_at", "status": "eq.confirmed"})
+    bookings = graph_data["bookings"]
     # Deduplicate
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
     bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
     # if not bookings: bookings = DEMO_BOOKINGS
 
-    loans = sb_select("loans", {"select": "amount,created_at,application_status,bank_stage"})
+    loans = graph_data["loans"]
     cache_lon_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
     loans = SESSION_CACHE["loans"] + [ln for ln in loans if ln.get("loan_id") not in cache_lon_ids]
     

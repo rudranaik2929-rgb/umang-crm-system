@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { api, setToken, setActAsId } from '../lib/api';
+import { api, setToken, setActAsId, warmUpBackend } from '../lib/api';
 
 export interface User {
   user_id: string;
@@ -49,6 +49,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
+    // Wake a sleeping (cold) backend immediately so the first auth/dashboard
+    // request doesn't pay the full cold-start penalty.
+    warmUpBackend();
     // One-time cleanup: remove old localStorage tokens that cause cross-tab bleeding
     try {
       if (typeof window !== 'undefined') {
