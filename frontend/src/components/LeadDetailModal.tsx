@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform } from 'react-native';
+import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
@@ -734,11 +735,10 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     </Pressable>
   );
 
-  if (Platform.OS === 'web') {
-    return (
-      <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>
-        {sheet}
-      </View>
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    return createPortal(
+      <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>,
+      document.body,
     );
   }
 

@@ -148,25 +148,24 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
   const canSyncIntegrations = ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
 
   const handlePlatformPress = useCallback(async (platform: PlatformRow) => {
-    if (canSyncIntegrations) {
-      try {
-        if (platform.platform === 'housing') {
-          await api.post('/integrations/housing/poll', {});
-        } else if (platform.platform === 'meta') {
-          await api.post('/integrations/facebook/resync', {});
-        }
-      } catch {
-        // Still open drill-down even if sync/resync fails
-      }
-    }
+    // Open list immediately — do not wait for Housing/Meta sync (can take 30s+).
+    await loadPlatformLeads(platform);
+
+    if (!canSyncIntegrations) return;
+
     try {
+      if (platform.platform === 'housing') {
+        await api.post('/integrations/housing/poll', {});
+      } else if (platform.platform === 'meta') {
+        await api.post('/integrations/facebook/resync', {});
+      }
       const res = await api.get('/stats/leads-by-platform');
       const normalized = normalizePlatformData(res.data);
       setData(normalized);
       const refreshed = normalized.platforms.find((p) => p.platform === platform.platform) || platform;
       await loadPlatformLeads(refreshed);
     } catch {
-      await loadPlatformLeads(platform);
+      // List already visible from first loadPlatformLeads call
     }
   }, [canSyncIntegrations, loadPlatformLeads]);
 
@@ -249,6 +248,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
             transform: [{ translateY: slideAnim }, { scale: scaleAnim }],
           },
         ]}
+        {...(isWeb ? { onStartShouldSetResponder: () => true } : {})}
       >
         <View style={st.header}>
           <View style={{ flex: 1 }}>
@@ -456,7 +456,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
 const st = StyleSheet.create({
   fullOverlay: {
     ...Platform.select({
-      web: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999 },
+      web: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, pointerEvents: 'box-none' as any },
       default: { flex: 1 },
     }),
     alignItems: 'center',
@@ -464,7 +464,7 @@ const st = StyleSheet.create({
   },
   backdrop: {
     ...Platform.select({
-      web: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0 },
+      web: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 9998 },
       default: { ...StyleSheet.absoluteFillObject },
     }),
     backgroundColor: 'rgba(0,0,0,0.55)',
@@ -477,7 +477,13 @@ const st = StyleSheet.create({
     borderWidth: 1,
     padding: 24,
     ...Platform.select({
-      web: { boxShadow: '0 25px 80px rgba(0,0,0,0.4)' },
+      web: {
+        position: 'relative' as any,
+        zIndex: 10001,
+        pointerEvents: 'auto' as any,
+        cursor: 'default' as any,
+        boxShadow: '0 25px 80px rgba(0,0,0,0.4)',
+      },
       default: { elevation: 30 },
     }),
   },
@@ -503,6 +509,10 @@ const st = StyleSheet.create({
     padding: 16,
     alignItems: 'center',
     gap: 4,
+    ...Platform.select({
+      web: { cursor: 'pointer' as any },
+      default: {},
+    }),
   },
   platformIcon: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   platformLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
@@ -515,7 +525,17 @@ const st = StyleSheet.create({
   tapHint: { fontSize: 11, fontWeight: '700', marginTop: 8 },
   hint: { fontSize: 10, textAlign: 'center', marginTop: 6 },
   leadList: { maxHeight: SCREEN_H * 0.5 },
-  leadRow: { borderWidth: 1, borderRadius: 12, padding: 14, marginBottom: 10, gap: 4 },
+  leadRow: {
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 10,
+    gap: 4,
+    ...Platform.select({
+      web: { cursor: 'pointer' as any },
+      default: {},
+    }),
+  },
   leadRowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
   leadName: { fontSize: 15, fontWeight: '700', flex: 1 },
   leadSub: { fontSize: 12 },
