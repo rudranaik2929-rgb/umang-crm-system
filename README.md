@@ -78,6 +78,10 @@ Verify token: UMANGCRM123
 
 Set `FACEBOOK_PAGE_ACCESS_TOKEN` so the backend can retrieve full lead fields from each `leadgen_id`.
 
+**Import past leads:** `POST /api/integrations/facebook/import` pulls previously submitted Lead Ad form submissions from Meta (last 90 days), similar to Housing sync. Use **Integrations → Import Past Meta Leads** or Dashboard → Total Leads → Meta.
+
+Optional env: `FACEBOOK_PAGE_ID`, `FACEBOOK_FORM_ID` if auto-detect fails.
+
 Every POST to `/api/facebook/webhook` is:
 
 1. Logged to server stdout (`Facebook webhook POST received…`)

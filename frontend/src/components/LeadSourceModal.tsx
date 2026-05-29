@@ -173,9 +173,9 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     try {
       if (platform.platform === 'housing') {
         await api.post('/integrations/housing/poll', {});
-      } else if (platform.platform === 'meta') {
-        await api.post('/integrations/facebook/resync', {});
-      }
+        } else if (platform.platform === 'meta') {
+          await api.post('/integrations/facebook/import', { days: 90, limit: 500 });
+        }
       const res = await api.get('/stats/leads-by-platform');
       const normalized = normalizePlatformData(res.data);
       setData(normalized);

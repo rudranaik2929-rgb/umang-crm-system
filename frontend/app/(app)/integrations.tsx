@@ -135,19 +135,33 @@ export default function Integrations() {
       if (created > 0) {
         setMessage(`Meta resync: ${created} new lead(s) imported from ${retried} webhook event(s).`);
       } else if (failed > 0 && retried > 0) {
-        const err = r.data?.results?.[0]?.error || '';
-        const isTestId = String(r.data?.results?.[0]?.leadgen_id || '') === '444444444444';
-        setMessage(
-          isTestId
-            ? 'Meta token is OK. Only Meta test webhooks (ID 444444444444) received so far — submit a real Lead Ad form to import leads.'
-            : `Meta resync: ${failed} failed. ${err.slice(0, 120)}`,
-        );
+        setMessage('Meta resync: only test webhook IDs found. Use Import Past Meta Leads for real submissions.');
       } else {
-        setMessage('Meta resync: no pending webhook leads to import. Submit a real Lead Ad form on Facebook.');
+        setMessage('Meta resync: no pending webhook leads. Use Import Past Meta Leads to pull from Facebook forms.');
       }
       await load();
     } catch (e: any) {
       setMessage(e?.response?.data?.detail || 'Meta resync failed.');
+    } finally {
+      setMetaSyncing(false);
+    }
+  };
+
+  const runMetaImport = async () => {
+    setMetaSyncing(true);
+    setMessage(null);
+    try {
+      const r = await api.post('/integrations/facebook/import', { days: 90, limit: 500 });
+      const created = Number(r.data?.created || 0);
+      const fetched = Number(r.data?.fetched || 0);
+      const duplicates = Number(r.data?.duplicates || 0);
+      const forms = Array.isArray(r.data?.forms) ? r.data.forms.length : 0;
+      setMessage(
+        `Meta import: ${fetched} fetched from ${forms} form(s), ${created} new, ${duplicates} already in CRM (last 90 days).`,
+      );
+      await load();
+    } catch (e: any) {
+      setMessage(e?.response?.data?.detail || 'Meta import failed.');
     } finally {
       setMetaSyncing(false);
     }
@@ -158,7 +172,7 @@ export default function Integrations() {
       return `${metaLeads.length} lead(s) in CRM · token ${fbVerify?.token_valid ? 'valid' : 'check Render env'}`;
     }
     if (fbVerify?.token_valid) {
-      return 'Token valid on server. Waiting for real Lead Ad submissions (not Meta webhook test ID 444444444444).';
+      return 'Token valid. Click Import Past Meta Leads to pull previously submitted Facebook form leads.';
     }
     if (fbVerify?.token_error) {
       return fbVerify.token_error;
@@ -214,10 +228,12 @@ export default function Integrations() {
                 ['Recent webhooks', fbEvents.length > 0],
               ]}
               extraNote={metaExtraNote}
-              actionLabel={metaSyncing ? 'Resyncing…' : 'Resync Meta Leads'}
-              actionIcon="sync-outline"
-              onAction={runMetaResync}
+              actionLabel={metaSyncing ? 'Importing…' : 'Import Past Meta Leads (90 days)'}
+              actionIcon="cloud-download-outline"
+              onAction={runMetaImport}
               actionDisabled={metaSyncing || !fbVerify?.token_valid}
+              secondaryActionLabel={metaSyncing ? undefined : 'Resync Webhooks'}
+              onSecondaryAction={metaSyncing ? undefined : runMetaResync}
             />
           </View>
 
@@ -267,7 +283,7 @@ export default function Integrations() {
             <View style={[styles.notice, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
               <Ionicons name="information-circle-outline" size={18} color={colors.info} />
               <Text style={[styles.noticeText, { color: colors.textSecondary }]}>
-                Meta shows 0 leads because no real Facebook Lead Ad has been submitted yet. Localhost uses the same Render backend — submit a test lead from your live Lead Ad form (not Meta sample webhook test ID 444444444444).
+                Meta shows 0 leads until you import. Click Import Past Meta Leads on the Facebook panel above — this pulls previously submitted Lead Ad forms from Meta (last 90 days).
               </Text>
             </View>
           )}
@@ -277,7 +293,7 @@ export default function Integrations() {
   );
 }
 
-function IntegrationPanel({ colors, icon, title, endpoint, source, checks, extraNote, actionLabel, actionIcon, onAction, actionDisabled }: any) {
+function IntegrationPanel({ colors, icon, title, endpoint, source, checks, extraNote, actionLabel, actionIcon, onAction, actionDisabled, secondaryActionLabel, onSecondaryAction }: any) {
   const configured = checks.every((check: any[]) => check[1]);
   return (
     <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -334,6 +350,17 @@ function IntegrationPanel({ colors, icon, title, endpoint, source, checks, extra
         >
           <Ionicons name={actionIcon || 'play-outline'} size={16} color="#fff" />
           <Text style={styles.actionText}>{actionLabel}</Text>
+        </Pressable>
+      ) : null}
+
+      {onSecondaryAction ? (
+        <Pressable
+          onPress={onSecondaryAction}
+          disabled={actionDisabled}
+          style={[styles.actionBtn, { backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border, opacity: actionDisabled ? 0.65 : 1 }]}
+        >
+          <Ionicons name="sync-outline" size={16} color={colors.primary} />
+          <Text style={[styles.actionText, { color: colors.primary }]}>{secondaryActionLabel}</Text>
         </Pressable>
       ) : null}
     </View>

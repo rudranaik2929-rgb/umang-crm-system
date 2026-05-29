@@ -99,6 +99,9 @@ OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 FACEBOOK_VERIFY_TOKEN = os.environ.get("FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")
 FACEBOOK_PAGE_ACCESS_TOKEN = os.environ.get("FACEBOOK_PAGE_ACCESS_TOKEN", "")
 FACEBOOK_GRAPH_VERSION = os.environ.get("FACEBOOK_GRAPH_VERSION", "v20.0")
+FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID", "")
+FACEBOOK_FORM_ID = os.environ.get("FACEBOOK_FORM_ID", "")
+META_FAKE_LEADGEN_IDS = {"444444444444", "0", "test"}
 HOUSING_PROFILE_ID = os.environ.get("HOUSING_PROFILE_ID", "")
 HOUSING_ENCRYPTION_KEY = os.environ.get("HOUSING_ENCRYPTION_KEY", "")
 HOUSING_INTEGRATION_UUID = os.environ.get("HOUSING_INTEGRATION_UUID", "")
@@ -421,6 +424,12 @@ class CampaignCreate(BaseModel):
 class HousingSyncRequest(BaseModel):
     start_date: Optional[int]=None
     end_date: Optional[int]=None
+
+class FacebookImportRequest(BaseModel):
+    page_id: Optional[str] = None
+    form_id: Optional[str] = None
+    days: int = 90
+    limit: int = 500
 
 # ---- Auth Helpers ----
 LOCAL_SESSIONS = {}
@@ -1205,7 +1214,101 @@ def facebook_fields_to_payload(data: Dict[str, Any], leadgen_id: Optional[str] =
         if name and values:
             payload[name] = values[0]
     payload.update({k: v for k, v in data.items() if k not in {"field_data"}})
-    return payload
+    return normalize_meta_field_payload(payload)
+
+def normalize_meta_field_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Map Meta custom form fields (question1, etc.) to name/phone/email."""
+    out = dict(payload)
+    for key, val in list(out.items()):
+        if val is None:
+            continue
+        text = clean_text(str(val))
+        if not text:
+            continue
+        k = key.lower()
+        if any(t in k for t in ("email", "mail")) and not out.get("email"):
+            out["email"] = text
+        elif any(t in k for t in ("phone", "mobile", "contact", "whatsapp", "number")) and not out.get("phone"):
+            out["phone"] = text
+        elif any(t in k for t in ("name", "full_name", "customer", "first_name")) and not out.get("full_name"):
+            out["full_name"] = text
+    for val in out.values():
+        if not isinstance(val, str):
+            continue
+        s = val.strip()
+        if not s:
+            continue
+        if not out.get("email") and "@" in s and "." in s.split("@", 1)[-1]:
+            out["email"] = s
+        if not out.get("phone"):
+            digits = re.sub(r"\D", "", s)
+            if len(digits) >= 10:
+                out["phone"] = s
+    return out
+
+def facebook_graph_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        raise HTTPException(status_code=400, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured")
+    url = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/{path.lstrip('/')}"
+    query = {"access_token": FACEBOOK_PAGE_ACCESS_TOKEN, **(params or {})}
+    r = _http.get(url, params=query, timeout=60)
+    if r.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Meta Graph API error: {r.text[:220]}")
+    return r.json()
+
+def facebook_graph_paginate(path: str, params: Optional[Dict[str, Any]] = None, max_items: int = 500) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    after: Optional[str] = None
+    base_params = dict(params or {})
+    while len(items) < max_items:
+        query = dict(base_params)
+        if after:
+            query["after"] = after
+        data = facebook_graph_get(path, query)
+        batch = data.get("data") if isinstance(data.get("data"), list) else []
+        if not batch:
+            break
+        items.extend(batch)
+        cursors = (data.get("paging") or {}).get("cursors") or {}
+        after = cursors.get("after")
+        if not after:
+            break
+    return items[:max_items]
+
+def resolve_facebook_page_id(page_id: Optional[str] = None) -> str:
+    resolved = clean_text(page_id or FACEBOOK_PAGE_ID)
+    if resolved:
+        return resolved
+    profile = facebook_graph_get("me", {"fields": "id,name"})
+    resolved = clean_text(profile.get("id"))
+    if not resolved:
+        raise HTTPException(status_code=400, detail="Could not resolve Facebook Page ID. Set FACEBOOK_PAGE_ID in Render env.")
+    return resolved
+
+def list_facebook_leadgen_forms(page_id: str) -> List[Dict[str, Any]]:
+    return facebook_graph_paginate(
+        f"{page_id}/leadgen_forms",
+        {"fields": "id,name,status,created_time", "limit": "100"},
+        max_items=100,
+    )
+
+def list_facebook_form_leads(form_id: str, limit: int = 500, since_ts: Optional[int] = None) -> List[Dict[str, Any]]:
+    params: Dict[str, Any] = {
+        "fields": "created_time,id,ad_id,form_id,field_data",
+        "limit": "100",
+    }
+    if since_ts:
+        params["filtering"] = json.dumps([{"field": "time_created", "operator": "GREATER_THAN", "value": since_ts}])
+    return facebook_graph_paginate(f"{form_id}/leads", params, max_items=limit)
+
+def import_facebook_graph_lead(graph_lead: Dict[str, Any]) -> Dict[str, Any]:
+    leadgen_id = clean_text(graph_lead.get("id"))
+    if not leadgen_id or leadgen_id in META_FAKE_LEADGEN_IDS:
+        return {"status": "ignored", "reason": "fake_or_missing_id", "leadgen_id": leadgen_id}
+    payload = normalize_meta_field_payload(facebook_fields_to_payload(graph_lead, leadgen_id))
+    result = create_integrated_lead(payload, "Facebook")
+    result["leadgen_id"] = leadgen_id
+    return result
 
 def merge_facebook_meta_fields(lead_payload: Dict[str, Any], event: Dict[str, Any]) -> Dict[str, Any]:
     merged = {**lead_payload}
@@ -1515,6 +1618,8 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
         "pending_webhook_events": sum(1 for e in recent if e.get("status") in ("graph_error", "leadgen_received", "ignored")),
         "last_error": last_graph_error.get("error") if last_graph_error else None,
         "recent_events": recent,
+        "page_id": FACEBOOK_PAGE_ID or None,
+        "form_id": FACEBOOK_FORM_ID or None,
         "fix_steps": [
             "Meta Business Suite → your Page → Page access token (long-lived)",
             "Render → Environment → FACEBOOK_PAGE_ACCESS_TOKEN → paste new token → redeploy",
@@ -1560,7 +1665,7 @@ async def facebook_resync(cu: User = Depends(get_current_user)):
 
     for evt in rows:
         leadgen_id = clean_text(evt.get("external_id"))
-        if not leadgen_id or leadgen_id in seen:
+        if not leadgen_id or leadgen_id in seen or leadgen_id in META_FAKE_LEADGEN_IDS:
             continue
         seen.add(leadgen_id)
 
@@ -1598,6 +1703,79 @@ async def facebook_resync(cu: User = Depends(get_current_user)):
         "ignored": ignored,
         "failed": failed,
         "results": results[:50],
+    }
+
+@api_router.post("/integrations/facebook/import")
+async def facebook_import(payload: FacebookImportRequest, cu: User = Depends(get_current_user)):
+    """Pull previously submitted Meta Lead Ad forms via Graph API and import into CRM."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        raise HTTPException(status_code=400, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured on the server")
+
+    page_id = resolve_facebook_page_id(payload.page_id)
+    days = min(max(payload.days, 1), 365)
+    limit = min(max(payload.limit, 1), 1000)
+    since_ts = int((now_utc() - timedelta(days=days)).timestamp())
+
+    form_ids: List[str] = []
+    forms_meta: List[Dict[str, Any]] = []
+    if payload.form_id or FACEBOOK_FORM_ID:
+        fid = clean_text(payload.form_id or FACEBOOK_FORM_ID)
+        if fid:
+            form_ids = [fid]
+            forms_meta = [{"id": fid, "name": "Configured form"}]
+    else:
+        forms = list_facebook_leadgen_forms(page_id)
+        forms_meta = [{"id": f.get("id"), "name": f.get("name"), "status": f.get("status")} for f in forms]
+        form_ids = [clean_text(f.get("id")) for f in forms if clean_text(f.get("id"))]
+
+    if not form_ids:
+        raise HTTPException(status_code=404, detail="No Lead Ad forms found for this Facebook Page. Set FACEBOOK_FORM_ID if needed.")
+
+    fetched = created = duplicates = ignored = failed = 0
+    results: List[Dict[str, Any]] = []
+
+    for form_id in form_ids:
+        try:
+            graph_leads = list_facebook_form_leads(form_id, limit=limit, since_ts=since_ts)
+        except HTTPException as exc:
+            failed += 1
+            results.append({"form_id": form_id, "status": "failed", "error": exc.detail})
+            continue
+        fetched += len(graph_leads)
+        for graph_lead in graph_leads:
+            try:
+                result = import_facebook_graph_lead(graph_lead)
+                status = result.get("status")
+                if status == "created":
+                    created += 1
+                elif status == "duplicate":
+                    duplicates += 1
+                else:
+                    ignored += 1
+                if len(results) < 50:
+                    results.append({
+                        "form_id": form_id,
+                        "leadgen_id": result.get("leadgen_id"),
+                        "status": status,
+                        "lead_id": result.get("lead_id"),
+                        "reason": result.get("reason"),
+                    })
+            except Exception as exc:
+                failed += 1
+                if len(results) < 50:
+                    results.append({"form_id": form_id, "leadgen_id": graph_lead.get("id"), "status": "failed", "error": str(exc)[:180]})
+
+    return {
+        "page_id": page_id,
+        "forms": forms_meta,
+        "days": days,
+        "fetched": fetched,
+        "created": created,
+        "duplicates": duplicates,
+        "ignored": ignored,
+        "failed": failed,
+        "results": results,
     }
 
 @api_router.post("/housing/webhook")
