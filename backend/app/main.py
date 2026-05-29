@@ -1473,6 +1473,55 @@ async def facebook_webhook(request: Request):
     logging.info("Facebook webhook POST complete: %s", json.dumps(response, default=str))
     return response
 
+@api_router.get("/integrations/facebook/verify")
+async def facebook_verify(cu: User = Depends(get_current_user)):
+    """Check Meta webhook config, Page token validity, and CRM Meta lead count."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    db_meta = sb_select("leads", {"source": "eq.Facebook", "select": "lead_id"})
+    recent = sb_select("integration_events", {
+        "source": "eq.Facebook",
+        "select": "status,error,external_id,created_at",
+        "order": "created_at.desc",
+        "limit": "5",
+    })
+    token_configured = bool(FACEBOOK_PAGE_ACCESS_TOKEN)
+    token_valid = False
+    token_error: Optional[str] = None
+    if not token_configured:
+        token_error = "FACEBOOK_PAGE_ACCESS_TOKEN is not set on Render/backend .env"
+    else:
+        try:
+            r = _http.get(
+                f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/me",
+                params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                token_valid = True
+            else:
+                body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+                token_error = (body.get("error") or {}).get("message") or r.text[:220]
+        except Exception as exc:
+            token_error = str(exc)[:220]
+
+    last_graph_error = next((e for e in recent if e.get("status") == "graph_error"), None)
+    return {
+        "webhook_url": "/api/facebook/webhook",
+        "verify_token": FACEBOOK_VERIFY_TOKEN,
+        "token_configured": token_configured,
+        "token_valid": token_valid,
+        "token_error": token_error,
+        "db_meta_leads": len(db_meta),
+        "pending_webhook_events": sum(1 for e in recent if e.get("status") in ("graph_error", "leadgen_received", "ignored")),
+        "last_error": last_graph_error.get("error") if last_graph_error else None,
+        "recent_events": recent,
+        "fix_steps": [
+            "Meta Business Suite → your Page → Page access token (long-lived)",
+            "Render → Environment → FACEBOOK_PAGE_ACCESS_TOKEN → paste new token → redeploy",
+            "CRM → Total Leads → Meta → tap to resync past webhook leads",
+        ],
+    }
+
 @api_router.get("/integrations/facebook/events")
 async def facebook_integration_events(
     limit: int = 20,

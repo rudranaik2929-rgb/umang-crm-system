@@ -100,6 +100,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
   const [leadsLoading, setLeadsLoading] = useState(false);
   const [leadsError, setLeadsError] = useState<string | null>(null);
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
+  const [metaStatus, setMetaStatus] = useState<string | null>(null);
 
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(60)).current;
@@ -115,19 +116,37 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     setOpenLeadId(null);
   }, []);
 
+  const canSyncIntegrations = ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
+
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     setData(null);
     try {
       const res = await api.get('/stats/leads-by-platform');
-      setData(normalizePlatformData(res.data));
+      const normalized = normalizePlatformData(res.data);
+      setData(normalized);
+      const metaCount = normalized.platforms.find((p) => p.platform === 'meta')?.count || 0;
+      if (metaCount === 0 && canSyncIntegrations) {
+        try {
+          const v = await api.get('/integrations/facebook/verify');
+          if (!v.data?.token_valid) {
+            setMetaStatus(v.data?.token_error || 'Meta Page token missing or expired on server.');
+          } else {
+            setMetaStatus(null);
+          }
+        } catch {
+          setMetaStatus(null);
+        }
+      } else {
+        setMetaStatus(null);
+      }
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Could not load lead sources.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [canSyncIntegrations]);
 
   const loadPlatformLeads = useCallback(async (platform: PlatformRow) => {
     setLeadsLoading(true);
@@ -144,8 +163,6 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
       setLeadsLoading(false);
     }
   }, []);
-
-  const canSyncIntegrations = ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
 
   const handlePlatformPress = useCallback(async (platform: PlatformRow) => {
     // Open list immediately — do not wait for Housing/Meta sync (can take 30s+).
@@ -339,7 +356,9 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                     {platform.count === 0 && platform.platform === 'housing' ? (
                       <Text style={[st.hint, { color: colors.warning }]}>Pulls latest from Housing.com</Text>
                     ) : platform.count === 0 && platform.platform === 'meta' ? (
-                      <Text style={[st.hint, { color: colors.textMuted }]}>Re-imports from Meta webhook events</Text>
+                      <Text style={[st.hint, { color: colors.negative, textAlign: 'center' }]}>
+                        {metaStatus || 'Re-imports from Meta webhook events'}
+                      </Text>
                     ) : null}
                   </Pressable>
                 );
