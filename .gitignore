@@ -5,5 +5,7 @@ web-build/
 dist/
 *.log
 .env
+backend/.env
+frontend/.env
 __pycache__/
 *.pyc

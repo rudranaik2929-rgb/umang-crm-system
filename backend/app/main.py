@@ -259,8 +259,27 @@ def as_list_payload(value: Any) -> List[Dict[str, Any]]:
         return [value]
     return []
 
+def is_brokerage_lead(source: Optional[str], payload: Optional[Dict[str, Any]] = None) -> bool:
+    normalized = re.sub(r"[\s_.-]+", "", (source or "").strip().lower())
+    if "broker" in normalized:
+        return True
+    payload = payload or {}
+    if str(clean_text(payload.get("lead_type")) or "").lower() == "brokerage":
+        return True
+    if str(clean_text(payload.get("intake_type")) or "").lower() == "brokerage":
+        return True
+    return False
+
+def is_broker_pool_lead(lead: Dict[str, Any]) -> bool:
+    return lead.get("stage") == "broker" or str(lead.get("lead_type") or "").lower() == "brokerage"
+
+def is_pipeline_lead(lead: Dict[str, Any]) -> bool:
+    return not is_broker_pool_lead(lead)
+
 def classify_lead_platform(source: Optional[str]) -> str:
     """Group lead sources into manual | housing | meta | other for dashboard breakdown."""
+    if is_brokerage_lead(source):
+        return "brokerage"
     normalized = re.sub(r"[\s_.-]+", "", (source or "").strip().lower())
     if "housing" in normalized:
         return "housing"
@@ -269,6 +288,11 @@ def classify_lead_platform(source: Optional[str]) -> str:
     if normalized in {"manual", "manualentry", "walkin", "referral", "direct", "call"} or normalized.startswith("manual"):
         return "manual"
     return "other"
+
+def lead_matches_platform(lead: Dict[str, Any], platform_key: str) -> bool:
+    if is_broker_pool_lead(lead):
+        return platform_key == "brokerage"
+    return classify_lead_platform(lead.get("source")) == platform_key
 
 def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
@@ -298,6 +322,8 @@ class LeadUpdate(BaseModel):
     location: Optional[str]=None; property_type: Optional[str]=None; notes: Optional[str]=None
     source: Optional[str]=None; follow_up_at: Optional[datetime]=None; priority: Optional[str]=None
     starred: Optional[bool]=None
+    lead_type: Optional[str]=None
+    brokerage_amount: Optional[float]=None
 class NoteCreate(BaseModel): text: str; type: str="call_note"
 class SiteVisitCreate(BaseModel): lead_id: str; scheduled_at: datetime; assigned_to: Optional[str]=None
 class SiteVisitUpdate(BaseModel):
@@ -1026,8 +1052,10 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
         return {"status": "duplicate", "lead": updated or merged, "lead_id": existing["lead_id"]}
 
-    assigned_to = assign_lead_round_robin()
-    initial_stage = "assigned" if assigned_to else "new"
+    brokerage = is_brokerage_lead(source, payload)
+    assigned_to = None if brokerage else assign_lead_round_robin()
+    initial_stage = "broker" if brokerage else ("assigned" if assigned_to else "new")
+    lead_type = "brokerage" if brokerage else "standard"
     now = now_utc().isoformat()
     lead_id = gen_id("lead")
     base_lead = {
@@ -1043,6 +1071,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         "stage": initial_stage,
         "status": "active",
         "assigned_to": assigned_to,
+        "lead_type": lead_type,
         "created_at": now,
         "updated_at": now,
     }
@@ -1057,8 +1086,11 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         result = sb_insert("leads", {k: v for k, v in base_lead.items() if v is not None})
     lead_record = result or base_lead
     SESSION_CACHE["leads"].insert(0, lead_record)
-    log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']}", lead_id=lead_id)
-    create_notification(assigned_to, "New lead assigned", f"{normalized['name']} came from {source}.", lead_id=lead_id)
+    if brokerage:
+        log_activity(actor, "broker_lead_received", f"Brokerage lead stored for future: {normalized['name']} ({source})", lead_id=lead_id)
+    else:
+        log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']}", lead_id=lead_id)
+        create_notification(assigned_to, "New lead assigned", f"{normalized['name']} came from {source}.", lead_id=lead_id)
     record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
     return {"status": "created", "lead": lead_record, "lead_id": lead_id}
 
@@ -1461,6 +1493,13 @@ async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current
         "ignored": ignored,
     }
 
+@api_router.post("/integrations/housing/poll")
+async def housing_poll(cu: User=Depends(get_current_user)):
+    """Lightweight Housing pull for dashboard auto-refresh (max 2-day window)."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    logging.info("Housing poll: auto-sync triggered by %s", cu.email)
+    return await housing_sync(HousingSyncRequest(), cu)
+
 @api_router.get("/integrations/housing/verify")
 async def housing_verify(cu: User=Depends(get_current_user)):
     """Confirm Housing.com credentials and whether the pull API returns leads."""
@@ -1788,6 +1827,8 @@ async def list_leads(
     assigned_to: Optional[str]=None,
     source: Optional[str]=None,
     q: Optional[str]=None,
+    exclude_broker: bool = True,
+    broker_only: bool = False,
     limit: int=200,
     offset: int=0,
     cu: User=Depends(get_current_user),
@@ -1825,9 +1866,67 @@ async def list_leads(
             if any(needle in str(l.get(k, "")).lower() for k in ["name", "phone", "email", "location", "source", "property_type"])
         ]
 
+    if broker_only:
+        all_leads = [l for l in all_leads if is_broker_pool_lead(l)]
+    elif exclude_broker:
+        all_leads = [l for l in all_leads if is_pipeline_lead(l)]
+
     if not all_leads and not stage and not status_ and not assigned_to:
         return []
     return all_leads[offset:offset + limit]
+
+@api_router.get("/broker-leads")
+async def list_broker_leads(cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
+    all_leads = merge_leads_with_cache(db_leads)
+    broker_leads = [l for l in all_leads if is_broker_pool_lead(l)]
+    return {"total": len(broker_leads), "leads": broker_leads}
+
+class BrokerActivateRequest(BaseModel):
+    assigned_to: Optional[str] = None
+    brokerage_amount: Optional[float] = None
+
+@api_router.post("/leads/{lead_id}/to-broker")
+async def move_lead_to_broker(lead_id: str, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager"])
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
+    lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    data = {
+        "stage": "broker",
+        "lead_type": "brokerage",
+        "assigned_to": None,
+        "updated_at": now_utc().isoformat(),
+    }
+    updated = sb_update("leads", "lead_id", lead_id, data) or {**lead, **data}
+    update_cached_lead(lead_id, data)
+    log_activity(cu, "broker_pool", f"Lead moved to broker pool: {lead.get('name')}", lead_id=lead_id)
+    return updated
+
+@api_router.post("/leads/{lead_id}/from-broker")
+async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, cu: User=Depends(get_current_user)):
+    ensure_roles(cu, ["admin", "manager"])
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
+    lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    assigned_to = body.assigned_to or assign_lead_round_robin()
+    data = {
+        "stage": "assigned" if assigned_to else "new",
+        "lead_type": "standard",
+        "assigned_to": assigned_to,
+        "updated_at": now_utc().isoformat(),
+    }
+    if body.brokerage_amount is not None:
+        data["brokerage_amount"] = body.brokerage_amount
+    updated = sb_update("leads", "lead_id", lead_id, data) or {**lead, **data}
+    update_cached_lead(lead_id, data)
+    log_activity(cu, "broker_activated", f"Broker lead activated and assigned", lead_id=lead_id)
+    if assigned_to:
+        create_notification(assigned_to, "Broker lead assigned", f"{lead.get('name')} is ready to work.", lead_id=lead_id)
+    return updated
 
 @api_router.get("/leads/by-platform/{platform}")
 async def list_leads_by_platform(
@@ -1845,7 +1944,8 @@ async def list_leads_by_platform(
     offset = max(offset, 0)
     db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
     all_leads = merge_leads_with_cache(db_leads)
-    filtered = [l for l in all_leads if classify_lead_platform(l.get("source")) == platform_key]
+    filtered = [l for l in all_leads if lead_matches_platform(l, platform_key)]
+    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     page = filtered[offset:offset + limit]
     return {
         "platform": platform_key,
@@ -2633,7 +2733,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     # if not loans: loans = DEMO_LOANS
 
     stage_dist = {s: 0 for s in STAGES}
-    for l in leads:
+    for l in pipeline_leads:
         if l.get("status") != "negative":
             st = l.get("stage", "new")
             stage_dist[st] = stage_dist.get(st, 0) + 1
@@ -2650,11 +2750,19 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         if followups else max(activity_followups, follow_up_visits)
     )
     
+    pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
+    broker_pool = [l for l in leads if is_broker_pool_lead(l)]
+    housing_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "housing")
+    meta_count = sum(1 for l in leads if classify_lead_platform(l.get("source")) == "meta" and is_pipeline_lead(l))
+
     return {
-        "total_leads": len(leads),
-        "positive_leads": sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration","closed"]),
-        "negative_leads": sum(1 for l in leads if l.get("status") == "negative"),
-        "new_leads": sum(1 for l in leads if l.get("stage") == "new"),
+        "total_leads": len(pipeline_leads),
+        "broker_pool_leads": len(broker_pool),
+        "housing_leads": housing_count,
+        "meta_leads": meta_count,
+        "positive_leads": sum(1 for l in pipeline_leads if l.get("stage") in ["positive","site_visit","booking","loan","registration","closed"]),
+        "negative_leads": sum(1 for l in pipeline_leads if l.get("status") == "negative"),
+        "new_leads": sum(1 for l in pipeline_leads if l.get("stage") == "new"),
         "site_visits": len(visits),
         "completed_visits": sum(1 for v in visits if v.get("status") == "completed"),
         "bookings": len(bookings),
@@ -2704,12 +2812,18 @@ async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
     buckets["other"] = {"platform": "other", "label": "Other", "count": 0, "active": 0, "negative": 0, "sources": []}
     source_counts: Dict[str, int] = {}
 
+    broker_pool_count = 0
     for lead in leads:
+        if is_broker_pool_lead(lead):
+            broker_pool_count += 1
+            continue
         raw_source = (lead.get("source") or "direct").strip()
         source_key = raw_source.lower()
         source_counts[source_key] = source_counts.get(source_key, 0) + 1
         platform = classify_lead_platform(raw_source)
-        bucket = buckets[platform]
+        if platform == "brokerage":
+            continue
+        bucket = buckets.get(platform) or buckets["other"]
         bucket["count"] += 1
         if lead.get("status") == "negative":
             bucket["negative"] += 1
@@ -2718,7 +2832,8 @@ async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
 
     for source_key, count in sorted(source_counts.items(), key=lambda item: item[1], reverse=True):
         platform = classify_lead_platform(source_key)
-        buckets[platform]["sources"].append({"source": source_key, "count": count})
+        if platform in buckets and platform != "brokerage":
+            buckets[platform]["sources"].append({"source": source_key, "count": count})
 
     platforms = [
         buckets["manual"],
@@ -2728,8 +2843,11 @@ async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
     if buckets["other"]["count"]:
         platforms.append(buckets["other"])
 
+    pipeline_total = sum(p["count"] for p in platforms)
+
     return {
-        "total": len(leads),
+        "total": pipeline_total,
+        "broker_pool": broker_pool_count,
         "platforms": platforms,
     }
 

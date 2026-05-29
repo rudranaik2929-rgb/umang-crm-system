@@ -20,7 +20,7 @@ export default function Pipeline() {
   const load = useCallback(async () => {
     try {
       const r = await api.get('/leads');
-      setLeads(r.data.filter((l: any) => l.status !== 'negative'));
+      setLeads(r.data.filter((l: any) => l.status !== 'negative' && l.stage !== 'broker' && l.lead_type !== 'brokerage'));
     } finally {
       setLoading(false);
     }

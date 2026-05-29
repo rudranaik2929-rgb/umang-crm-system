@@ -103,7 +103,18 @@ export default function Dashboard() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const pollMs = 5 * 60 * 1000;
+    const interval = setInterval(async () => {
+      try {
+        await api.post('/integrations/housing/poll', {}).catch(() => {});
+      } finally {
+        load();
+      }
+    }, pollMs);
+    return () => clearInterval(interval);
+  }, [load]);
 
   const openFollowUps = useCallback(async () => {
     setFollowUpModalVisible(true);

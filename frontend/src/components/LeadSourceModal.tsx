@@ -127,8 +127,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     }
   }, []);
 
-  const loadPlatformLeads = useCallback(async (platform: PlatformRow) => {
-    if (platform.count <= 0) return;
+  const loadPlatformLeads = useCallback(async (platform: PlatformRow, force = false) => {
+    if (!force && platform.count <= 0) return;
     setLeadsLoading(true);
     setLeadsError(null);
     setSelectedPlatform(platform);
@@ -145,9 +145,20 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
   }, []);
 
   useEffect(() => {
-    if (visible) {
-      resetDrillDown();
+    if (!visible) return undefined;
+    resetDrillDown();
+    loadData();
+    const refresh = setInterval(() => {
       loadData();
+      if (selectedPlatform && view === 'leads') {
+        loadPlatformLeads(selectedPlatform, true);
+      }
+    }, 5 * 60 * 1000);
+    return () => clearInterval(refresh);
+  }, [loadData, loadPlatformLeads, resetDrillDown, selectedPlatform, view, visible]);
+
+  useEffect(() => {
+    if (visible) {
       Animated.parallel([
         Animated.timing(backdropAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
         Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 12, useNativeDriver: true }),
@@ -157,9 +168,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
       backdropAnim.setValue(0);
       slideAnim.setValue(60);
       scaleAnim.setValue(0.92);
-      resetDrillDown();
     }
-  }, [backdropAnim, loadData, resetDrillDown, scaleAnim, slideAnim, visible]);
+  }, [backdropAnim, scaleAnim, slideAnim, visible]);
 
   const handleClose = () => {
     Animated.parallel([
@@ -345,6 +355,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                     <Text style={[st.leadDate, { color: colors.textMuted }]}>{formatDate(lead.created_at)}</Text>
                     {isHousing ? (
                       <Text style={[st.realBadgeSmall, { color: '#00BFA5' }]}>Housing.com · Original</Text>
+                    ) : selectedPlatform?.platform === 'meta' ? (
+                      <Text style={[st.realBadgeSmall, { color: '#1877F2' }]}>Facebook · Meta Lead Ads</Text>
                     ) : (
                       <Text style={[st.leadDate, { color: colors.textMuted }]}>{lead.source}</Text>
                     )}

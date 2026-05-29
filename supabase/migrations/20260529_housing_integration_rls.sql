@@ -4,6 +4,9 @@
 alter table leads add column if not exists external_lead_id text;
 alter table leads add column if not exists integration_uuid text;
 alter table leads add column if not exists raw_payload jsonb;
+alter table leads add column if not exists lead_type text not null default 'standard';
+alter table leads add column if not exists brokerage_amount numeric;
+alter table bookings add column if not exists brokerage_amount numeric not null default 0;
 
 alter table leads enable row level security;
 alter table integration_events enable row level security;

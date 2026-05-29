@@ -27,6 +27,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
   const [showConfetti, setShowConfetti] = useState(false);
   const [employees, setEmployees] = useState<any[]>([]);
   const [showAssignDropdown, setShowAssignDropdown] = useState(false);
+  const [brokerageAmount, setBrokerageAmount] = useState('');
   const subAnim = React.useRef(new Animated.Value(0)).current;
   const confettiAnims = React.useRef([...Array(50)].map(() => new Animated.Value(0))).current;
 
@@ -57,9 +58,16 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
       load();
       setAiSummary(null);
       setShowAssignDropdown(false);
+      setBrokerageAmount('');
       api.get('/employees').then(r => setEmployees((r.data || []).filter((e: any) => e.active))).catch(() => {});
     }
   }, [visible, leadId, load]);
+
+  useEffect(() => {
+    if (data?.lead?.brokerage_amount) {
+      setBrokerageAmount(String(data.lead.brokerage_amount));
+    }
+  }, [data?.lead?.brokerage_amount]);
 
   const fetchSummary = async () => {
     if (!leadId) return;
@@ -155,8 +163,32 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
     if (!leadId) return;
     setBusy('assign');
     try {
-      await api.patch(`/leads/${leadId}`, { assigned_to: employeeId, stage: 'assigned' });
+      const payload: any = { assigned_to: employeeId, stage: 'assigned', lead_type: 'standard' };
+      const parsedBrokerage = parseFloat(brokerageAmount);
+      if (!Number.isNaN(parsedBrokerage) && parsedBrokerage > 0) {
+        payload.brokerage_amount = parsedBrokerage;
+      }
+      if (lead?.stage === 'broker') {
+        await api.post(`/leads/${leadId}/from-broker`, {
+          assigned_to: employeeId,
+          brokerage_amount: payload.brokerage_amount,
+        });
+      } else {
+        await api.patch(`/leads/${leadId}`, payload);
+      }
       setShowAssignDropdown(false);
+      await load(true);
+      onChanged?.();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const moveToBrokerPool = async () => {
+    if (!leadId) return;
+    setBusy('broker');
+    try {
+      await api.post(`/leads/${leadId}/to-broker`);
       await load(true);
       onChanged?.();
     } finally {
@@ -314,7 +346,33 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                 {/* Assign to Employee — Admin only */}
                 {isAdmin(userRole) && (
                   <View style={[styles.block, { borderColor: '#8B5CF6' + '40', backgroundColor: '#8B5CF6' + '08' }]}>
-                    <Text style={[styles.blockTitle, { color: '#8B5CF6' }]}>ASSIGN TO EMPLOYEE</Text>
+                    <Text style={[styles.blockTitle, { color: '#8B5CF6' }]}>
+                      {lead.stage === 'broker' ? 'ACTIVATE FROM BROKER POOL' : 'ASSIGN TO EMPLOYEE'}
+                    </Text>
+                    {lead.stage === 'broker' ? (
+                      <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8 }}>
+                        This lead is in the broker pool and was not auto-assigned.
+                      </Text>
+                    ) : null}
+                    <View style={{ marginBottom: 10 }}>
+                      <Text style={{ color: colors.textMuted, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>BROKERAGE AMOUNT (₹)</Text>
+                      <TextInput
+                        value={brokerageAmount}
+                        onChangeText={setBrokerageAmount}
+                        placeholder="Optional brokerage"
+                        keyboardType="numeric"
+                        style={{
+                          borderWidth: 1,
+                          borderColor: colors.border,
+                          borderRadius: 8,
+                          paddingHorizontal: 12,
+                          height: 40,
+                          color: colors.text,
+                          backgroundColor: colors.surfaceAlt,
+                        }}
+                        placeholderTextColor={colors.textMuted}
+                      />
+                    </View>
                     {lead.assigned_to ? (
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
                         <Ionicons name="person-circle" size={20} color="#8B5CF6" />
@@ -367,6 +425,26 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole 
                         )}
                       </View>
                     )}
+                    {lead.stage !== 'broker' ? (
+                      <Pressable
+                        onPress={moveToBrokerPool}
+                        disabled={busy === 'broker'}
+                        style={{
+                          marginTop: 12,
+                          height: 38,
+                          borderRadius: 8,
+                          borderWidth: 1,
+                          borderColor: colors.warning + '60',
+                          backgroundColor: colors.warning + '12',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                        }}
+                      >
+                        <Text style={{ color: colors.warning, fontWeight: '700', fontSize: 12 }}>
+                          Move to Broker Pool (no auto-assign)
+                        </Text>
+                      </Pressable>
+                    ) : null}
                   </View>
                 )}
 

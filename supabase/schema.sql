@@ -83,6 +83,8 @@ create table if not exists leads (
   external_lead_id text,
   integration_uuid text,
   raw_payload jsonb,
+  lead_type text not null default 'standard',
+  brokerage_amount numeric,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -145,6 +147,7 @@ create table if not exists bookings (
   unit_number text,
   tower text,
   booking_amount numeric not null default 0,
+  brokerage_amount numeric not null default 0,
   token_received numeric not null default 0,
   payment_status text not null default 'pending',
   payment_progress integer not null default 0,
@@ -262,7 +265,11 @@ alter table leads add column if not exists notes text;
 alter table leads add column if not exists external_lead_id text;
 alter table leads add column if not exists integration_uuid text;
 alter table leads add column if not exists raw_payload jsonb;
+alter table leads add column if not exists lead_type text not null default 'standard';
+alter table leads add column if not exists brokerage_amount numeric;
 alter table leads add column if not exists updated_at timestamptz not null default now();
+
+alter table bookings add column if not exists brokerage_amount numeric not null default 0;
 
 alter table visits add column if not exists assigned_name text;
 alter table visits add column if not exists property_details text;
@@ -327,6 +334,8 @@ create index if not exists idx_leads_source on leads(source);
 create index if not exists idx_leads_external_lead_id on leads(external_lead_id);
 create index if not exists idx_leads_phone_source on leads(phone, source);
 create index if not exists idx_leads_created_at on leads(created_at desc);
+create index if not exists idx_leads_lead_type on leads(lead_type);
+create index if not exists idx_leads_stage_broker on leads(stage) where stage = 'broker';
 create index if not exists idx_lead_notes_lead_id on lead_notes(lead_id);
 create index if not exists idx_activities_lead_id on activities(lead_id);
 create index if not exists idx_activities_user_id on activities(user_id);
