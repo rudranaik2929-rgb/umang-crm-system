@@ -78,6 +78,15 @@ Verify token: UMANGCRM123
 
 Set `FACEBOOK_PAGE_ACCESS_TOKEN` so the backend can retrieve full lead fields from each `leadgen_id`.
 
+Every POST to `/api/facebook/webhook` is:
+
+1. Logged to server stdout (`Facebook webhook POST received…`)
+2. Saved in `integration_events` (`webhook_received`, `leadgen_received`, `graph_fetched`, `created`)
+3. Fetched via Graph API using `leadgen_id`
+4. Inserted into `leads` with `source = Facebook` (visible on Dashboard → Total Leads → Meta)
+
+Debug recent events: `GET /api/integrations/facebook/events` (admin/manager/marketing).
+
 ## Deployment
 
 - Backend: `backend/Dockerfile` is ready for Render/Railway. `render.yaml` includes the Render service blueprint.

@@ -951,6 +951,13 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
         note_parts.append(f"Project: {project_name}")
     if clean_text(payload.get("project_id")):
         note_parts.append(f"Project ID: {clean_text(payload.get('project_id'))}")
+    if source == "Facebook":
+        if clean_text(payload.get("page_id")):
+            note_parts.append(f"Facebook Page ID: {clean_text(payload.get('page_id'))}")
+        if clean_text(payload.get("form_id")):
+            note_parts.append(f"Facebook Form ID: {clean_text(payload.get('form_id'))}")
+        if payload.get("created_time"):
+            note_parts.append(f"Lead created: {payload.get('created_time')}")
     if notes:
         note_parts.append(notes)
 
@@ -1055,18 +1062,48 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
     record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
     return {"status": "created", "lead": lead_record, "lead_id": lead_id}
 
-def extract_facebook_lead_ids(payload: Dict[str, Any]) -> List[str]:
-    lead_ids: List[str] = []
+def extract_facebook_lead_events(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Parse Meta leadgen webhook payloads (entry[].changes[].value)."""
+    events: List[Dict[str, Any]] = []
     for entry in payload.get("entry", []) if isinstance(payload, dict) else []:
-        for change in entry.get("changes", []) if isinstance(entry, dict) else []:
-            value = change.get("value", {}) if isinstance(change, dict) else {}
-            lead_id = clean_text(value.get("leadgen_id") or value.get("lead_id"))
-            if lead_id:
-                lead_ids.append(lead_id)
+        if not isinstance(entry, dict):
+            continue
+        page_id = clean_text(entry.get("id"))
+        for change in entry.get("changes", []) if isinstance(entry.get("changes"), list) else []:
+            if not isinstance(change, dict):
+                continue
+            field = clean_text(change.get("field"))
+            if field and field != "leadgen":
+                logging.info("Facebook webhook: skipping change field=%s", field)
+                continue
+            value = change.get("value", {}) if isinstance(change.get("value"), dict) else {}
+            leadgen_id = clean_text(value.get("leadgen_id") or value.get("lead_id"))
+            if not leadgen_id:
+                continue
+            events.append({
+                "leadgen_id": leadgen_id,
+                "page_id": page_id or clean_text(value.get("page_id")),
+                "form_id": clean_text(value.get("form_id")),
+                "created_time": value.get("created_time"),
+                "ad_id": clean_text(value.get("ad_id")),
+                "adgroup_id": clean_text(value.get("adgroup_id")),
+                "raw_value": value,
+            })
     direct_id = clean_text(payload.get("leadgen_id") or payload.get("lead_id")) if isinstance(payload, dict) else None
-    if direct_id:
-        lead_ids.append(direct_id)
-    return list(dict.fromkeys(lead_ids))
+    if direct_id and not any(e["leadgen_id"] == direct_id for e in events):
+        events.append({
+            "leadgen_id": direct_id,
+            "page_id": clean_text(payload.get("page_id")),
+            "form_id": clean_text(payload.get("form_id")),
+            "created_time": payload.get("created_time"),
+            "ad_id": clean_text(payload.get("ad_id")),
+            "adgroup_id": clean_text(payload.get("adgroup_id")),
+            "raw_value": payload,
+        })
+    return events
+
+def extract_facebook_lead_ids(payload: Dict[str, Any]) -> List[str]:
+    return list(dict.fromkeys(e["leadgen_id"] for e in extract_facebook_lead_events(payload)))
 
 def facebook_fields_to_payload(data: Dict[str, Any], leadgen_id: Optional[str] = None) -> Dict[str, Any]:
     payload: Dict[str, Any] = {"leadgen_id": leadgen_id or data.get("id")}
@@ -1078,17 +1115,92 @@ def facebook_fields_to_payload(data: Dict[str, Any], leadgen_id: Optional[str] =
     payload.update({k: v for k, v in data.items() if k not in {"field_data"}})
     return payload
 
+def merge_facebook_meta_fields(lead_payload: Dict[str, Any], event: Dict[str, Any]) -> Dict[str, Any]:
+    merged = {**lead_payload}
+    for key in ("page_id", "form_id", "created_time", "ad_id", "adgroup_id"):
+        if event.get(key) and not merged.get(key):
+            merged[key] = event[key]
+    if event.get("raw_value"):
+        merged["webhook_value"] = event["raw_value"]
+    return merged
+
 def fetch_facebook_lead(leadgen_id: str) -> Dict[str, Any]:
+    logging.info("Facebook Graph API: fetching lead details for leadgen_id=%s", leadgen_id)
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        logging.warning(
+            "Facebook Graph API: FACEBOOK_PAGE_ACCESS_TOKEN is not set; cannot fetch fields for leadgen_id=%s",
+            leadgen_id,
+        )
         return {
             "leadgen_id": leadgen_id,
             "notes": "Facebook leadgen_id received. Configure FACEBOOK_PAGE_ACCESS_TOKEN to retrieve lead fields.",
         }
     url = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/{leadgen_id}"
-    r = _http.get(url, params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN})
+    r = _http.get(url, params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN}, timeout=30)
     if r.status_code >= 400:
+        logging.error(
+            "Facebook Graph API: failed leadgen_id=%s status=%s body=%s",
+            leadgen_id,
+            r.status_code,
+            r.text[:500],
+        )
+        record_integration_event(
+            "Facebook",
+            {"leadgen_id": leadgen_id, "status_code": r.status_code, "response": r.text[:500]},
+            "graph_error",
+            external_id=leadgen_id,
+            error=r.text[:180],
+        )
         raise HTTPException(status_code=502, detail=f"Meta lead retrieval failed: {r.text[:180]}")
-    return facebook_fields_to_payload(r.json(), leadgen_id)
+    graph_data = r.json()
+    payload = facebook_fields_to_payload(graph_data, leadgen_id)
+    logging.info(
+        "Facebook Graph API: success leadgen_id=%s name=%s phone=%s email=%s",
+        leadgen_id,
+        payload.get("full_name") or payload.get("name"),
+        payload.get("phone_number") or payload.get("phone"),
+        payload.get("email"),
+    )
+    record_integration_event("Facebook", graph_data, "graph_fetched", external_id=leadgen_id)
+    return payload
+
+async def process_facebook_lead_event(
+    event: Dict[str, Any],
+    body: Dict[str, Any],
+) -> Dict[str, Any]:
+    leadgen_id = event["leadgen_id"]
+    logging.info(
+        "Facebook leadgen event: leadgen_id=%s page_id=%s form_id=%s created_time=%s",
+        leadgen_id,
+        event.get("page_id"),
+        event.get("form_id"),
+        event.get("created_time"),
+    )
+    record_integration_event(
+        "Facebook",
+        {"webhook": body, "event": event},
+        "leadgen_received",
+        external_id=leadgen_id,
+    )
+
+    has_inline_contact = any(
+        body.get(k) for k in ["phone", "phone_number", "mobile", "email", "full_name", "name"]
+    )
+    if has_inline_contact and clean_text(body.get("leadgen_id")) == leadgen_id:
+        lead_payload = merge_facebook_meta_fields(body, event)
+        logging.info("Facebook: using inline webhook fields for leadgen_id=%s", leadgen_id)
+    else:
+        lead_payload = merge_facebook_meta_fields(fetch_facebook_lead(leadgen_id), event)
+
+    result = create_integrated_lead(lead_payload, "Facebook")
+    logging.info(
+        "Facebook CRM insert: leadgen_id=%s status=%s lead_id=%s reason=%s",
+        leadgen_id,
+        result.get("status"),
+        result.get("lead_id"),
+        result.get("reason"),
+    )
+    return result
 
 def housing_expected_hash(current_time: str) -> str:
     return hmac.new(HOUSING_ENCRYPTION_KEY.encode("utf-8"), current_time.encode("utf-8"), hashlib.sha256).hexdigest()
@@ -1188,27 +1300,46 @@ async def create_lead_public(p: LeadCreatePublic):
 @api_router.get("/webhooks/facebook")
 async def verify_fb_webhook(request: Request):
     params = request.query_params
+    logging.info(
+        "Facebook webhook GET verify: mode=%s token_match=%s",
+        params.get("hub.mode"),
+        params.get("hub.verify_token") == FACEBOOK_VERIFY_TOKEN,
+    )
     if params.get("hub.mode") == "subscribe" and params.get("hub.verify_token") == FACEBOOK_VERIFY_TOKEN:
         return PlainTextResponse(params.get("hub.challenge", ""))
     raise HTTPException(status_code=403, detail="Invalid Facebook verify token")
 
 @api_router.post("/facebook/webhook")
+@api_router.post("/webhooks/facebook")
 async def facebook_webhook(request: Request):
-    body = await request_payload(request)
+    raw_body = await request.body()
+    logging.info(
+        "Facebook webhook POST received from %s content_length=%s",
+        request.client.host if request.client else "unknown",
+        len(raw_body),
+    )
+    try:
+        body = json.loads(raw_body.decode("utf-8")) if raw_body else {}
+    except Exception:
+        logging.error("Facebook webhook POST: invalid JSON body=%s", raw_body[:500])
+        raise HTTPException(status_code=400, detail="Invalid Facebook webhook payload")
     if not isinstance(body, dict):
         raise HTTPException(status_code=400, detail="Invalid Facebook webhook payload")
 
-    lead_ids = extract_facebook_lead_ids(body)
-    created, duplicates, ignored = [], [], []
+    logging.info("Facebook webhook payload: %s", json.dumps(body, default=str)[:4000])
+    record_integration_event("Facebook", body, "webhook_received")
 
-    if lead_ids:
-        for leadgen_id in lead_ids:
+    events = extract_facebook_lead_events(body)
+    logging.info("Facebook webhook: parsed %s leadgen event(s)", len(events))
+
+    created, duplicates, ignored, processed = [], [], [], []
+
+    if events:
+        for event in events:
+            leadgen_id = event["leadgen_id"]
             try:
-                if len(lead_ids) == 1 and any(body.get(k) for k in ["phone", "phone_number", "mobile", "email"]):
-                    lead_payload = body
-                else:
-                    lead_payload = fetch_facebook_lead(leadgen_id)
-                result = create_integrated_lead(lead_payload, "Facebook")
+                result = await process_facebook_lead_event(event, body)
+                processed.append({"leadgen_id": leadgen_id, "status": result.get("status")})
                 if result["status"] == "created":
                     created.append(result["lead_id"])
                 elif result["status"] == "duplicate":
@@ -1218,11 +1349,19 @@ async def facebook_webhook(request: Request):
             except HTTPException:
                 raise
             except Exception as exc:
-                logging.exception("Facebook webhook failed")
-                record_integration_event("Facebook", {"leadgen_id": leadgen_id}, "error", external_id=leadgen_id, error=str(exc))
+                logging.exception("Facebook webhook failed for leadgen_id=%s", leadgen_id)
+                record_integration_event(
+                    "Facebook",
+                    {"leadgen_id": leadgen_id, "event": event, "webhook": body},
+                    "error",
+                    external_id=leadgen_id,
+                    error=str(exc),
+                )
                 ignored.append({"leadgen_id": leadgen_id, "reason": str(exc)})
     else:
+        logging.warning("Facebook webhook: no leadgen_id found in payload; attempting direct body import")
         result = create_integrated_lead(body, "Facebook")
+        processed.append({"leadgen_id": None, "status": result.get("status")})
         if result["status"] == "created":
             created.append(result["lead_id"])
         elif result["status"] == "duplicate":
@@ -1230,7 +1369,33 @@ async def facebook_webhook(request: Request):
         else:
             ignored.append(result)
 
-    return {"status": "success", "created": created, "duplicates": duplicates, "ignored": ignored}
+    response = {
+        "status": "success",
+        "received": True,
+        "leadgen_events": len(events),
+        "processed": processed,
+        "created": created,
+        "duplicates": duplicates,
+        "ignored": ignored,
+    }
+    logging.info("Facebook webhook POST complete: %s", json.dumps(response, default=str))
+    return response
+
+@api_router.get("/integrations/facebook/events")
+async def facebook_integration_events(
+    limit: int = 20,
+    cu: User = Depends(get_current_user),
+):
+    """Recent Facebook webhook / Graph API events for debugging (admin/manager/marketing)."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    limit = min(max(limit, 1), 100)
+    rows = sb_select("integration_events", {
+        "source": "eq.Facebook",
+        "select": "event_id,source,external_id,status,lead_id,error,created_at",
+        "order": "created_at.desc",
+        "limit": str(limit),
+    })
+    return {"events": rows, "count": len(rows)}
 
 @api_router.post("/housing/webhook")
 async def housing_webhook(request: Request):

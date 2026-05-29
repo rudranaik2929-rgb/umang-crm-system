@@ -186,6 +186,53 @@ def test_list_leads_by_platform_housing(monkeypatch):
     assert body["leads"][0]["source"] == "Housing.com"
 
 
+def test_facebook_leadgen_webhook_payload(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    monkeypatch.setattr(main, "FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "page-token")
+
+    def fake_fetch(leadgen_id):
+        return {
+            "leadgen_id": leadgen_id,
+            "full_name": "Graph Lead",
+            "phone_number": "9876501234",
+            "email": "graph@example.com",
+            "city": "Pune",
+        }
+
+    monkeypatch.setattr(main, "fetch_facebook_lead", fake_fetch)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/facebook/webhook",
+        json={
+            "object": "page",
+            "entry": [{
+                "id": "PAGE_123",
+                "time": 1710000000,
+                "changes": [{
+                    "field": "leadgen",
+                    "value": {
+                        "leadgen_id": "LEADGEN_999",
+                        "page_id": "PAGE_123",
+                        "form_id": "FORM_456",
+                        "created_time": 1710000001,
+                    },
+                }],
+            }],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["received"] is True
+    assert body["leadgen_events"] == 1
+    assert body["created"]
+    assert inserted["leads"][0]["source"] == "Facebook"
+    assert inserted["leads"][0]["external_lead_id"] == "LEADGEN_999"
+    assert "Facebook Form ID" in (inserted["leads"][0].get("notes") or "")
+    assert any(e.get("status") == "webhook_received" for e in inserted.get("integration_events", []))
+
+
 def test_facebook_verify_and_direct_payload(monkeypatch):
     inserted = _install_fake_supabase(monkeypatch)
     monkeypatch.setattr(main, "FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")

@@ -47,18 +47,21 @@ export default function Integrations() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [fbEvents, setFbEvents] = useState<any[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, plat, verify] = await Promise.all([
+      const [s, plat, verify, fb] = await Promise.all([
         api.get('/integrations/status'),
         api.get('/stats/leads-by-platform'),
         api.get('/integrations/housing/verify'),
+        api.get('/integrations/facebook/events', { params: { limit: 5 } }).catch(() => ({ data: { events: [] } })),
       ]);
       setStatus(s.data || {});
       setPlatforms(Array.isArray(plat.data?.platforms) ? plat.data.platforms : []);
       setHousingVerify(verify.data || null);
+      setFbEvents(Array.isArray(fb.data?.events) ? fb.data.events : []);
     } finally {
       setLoading(false);
     }
@@ -137,7 +140,13 @@ export default function Integrations() {
               checks={[
                 ['Verify token', !!status?.facebook?.verify_token_configured],
                 ['Lead retrieval', !!status?.facebook?.lead_retrieval_configured],
+                ['Recent webhooks', fbEvents.length > 0],
               ]}
+              extraNote={
+                fbEvents.length
+                  ? `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'} · ${String(fbEvents[0].created_at || '').slice(0, 19)}`
+                  : 'Submit a test lead in Meta to see webhook events here'
+              }
             />
           </View>
 
