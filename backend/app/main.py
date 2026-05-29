@@ -1279,11 +1279,35 @@ def resolve_facebook_page_id(page_id: Optional[str] = None) -> str:
     resolved = clean_text(page_id or FACEBOOK_PAGE_ID)
     if resolved:
         return resolved
+
     profile = facebook_graph_get("me", {"fields": "id,name"})
-    resolved = clean_text(profile.get("id"))
-    if not resolved:
+    me_id = clean_text(profile.get("id"))
+    if not me_id:
         raise HTTPException(status_code=400, detail="Could not resolve Facebook Page ID. Set FACEBOOK_PAGE_ID in Render env.")
-    return resolved
+
+    def page_has_forms(candidate_id: str) -> bool:
+        try:
+            facebook_graph_get(f"{candidate_id}/leadgen_forms", {"limit": "1", "fields": "id"})
+            return True
+        except HTTPException:
+            return False
+
+    if page_has_forms(me_id):
+        return me_id
+
+    accounts = facebook_graph_paginate("me/accounts", {"fields": "id,name", "limit": "50"}, max_items=50)
+    for acct in accounts:
+        candidate = clean_text(acct.get("id"))
+        if candidate and page_has_forms(candidate):
+            return candidate
+
+    if accounts:
+        return clean_text(accounts[0].get("id")) or me_id
+
+    raise HTTPException(
+        status_code=400,
+        detail="Could not find a Facebook Page with Lead Ad forms. Set FACEBOOK_PAGE_ID in Render environment.",
+    )
 
 def list_facebook_leadgen_forms(page_id: str) -> List[Dict[str, Any]]:
     return facebook_graph_paginate(
