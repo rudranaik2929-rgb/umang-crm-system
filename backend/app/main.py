@@ -1246,17 +1246,23 @@ def normalize_meta_field_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
                 out["phone"] = s
     return out
 
-def facebook_graph_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+def facebook_graph_get(path: str, params: Optional[Dict[str, Any]] = None, access_token: Optional[str] = None) -> Dict[str, Any]:
+    token = access_token or FACEBOOK_PAGE_ACCESS_TOKEN
+    if not token:
         raise HTTPException(status_code=400, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured")
     url = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/{path.lstrip('/')}"
-    query = {"access_token": FACEBOOK_PAGE_ACCESS_TOKEN, **(params or {})}
+    query = {"access_token": token, **(params or {})}
     r = _http.get(url, params=query, timeout=60)
     if r.status_code >= 400:
         raise HTTPException(status_code=502, detail=f"Meta Graph API error: {r.text[:220]}")
     return r.json()
 
-def facebook_graph_paginate(path: str, params: Optional[Dict[str, Any]] = None, max_items: int = 500) -> List[Dict[str, Any]]:
+def facebook_graph_paginate(
+    path: str,
+    params: Optional[Dict[str, Any]] = None,
+    max_items: int = 500,
+    access_token: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     items: List[Dict[str, Any]] = []
     after: Optional[str] = None
     base_params = dict(params or {})
@@ -1264,7 +1270,7 @@ def facebook_graph_paginate(path: str, params: Optional[Dict[str, Any]] = None, 
         query = dict(base_params)
         if after:
             query["after"] = after
-        data = facebook_graph_get(path, query)
+        data = facebook_graph_get(path, query, access_token=access_token)
         batch = data.get("data") if isinstance(data.get("data"), list) else []
         if not batch:
             break
@@ -1275,55 +1281,67 @@ def facebook_graph_paginate(path: str, params: Optional[Dict[str, Any]] = None, 
             break
     return items[:max_items]
 
-def resolve_facebook_page_id(page_id: Optional[str] = None) -> str:
-    resolved = clean_text(page_id or FACEBOOK_PAGE_ID)
-    if resolved:
-        return resolved
+def resolve_facebook_page_context(page_id: Optional[str] = None) -> Tuple[str, str]:
+    """Return (page_id, access_token) for Lead Ads API calls."""
+    resolved_page = clean_text(page_id or FACEBOOK_PAGE_ID)
+    if resolved_page:
+        return resolved_page, FACEBOOK_PAGE_ACCESS_TOKEN
 
     profile = facebook_graph_get("me", {"fields": "id,name"})
     me_id = clean_text(profile.get("id"))
     if not me_id:
-        raise HTTPException(status_code=400, detail="Could not resolve Facebook Page ID. Set FACEBOOK_PAGE_ID in Render env.")
+        raise HTTPException(status_code=400, detail="Could not resolve Facebook identity. Set FACEBOOK_PAGE_ID in Render env.")
 
-    def page_has_forms(candidate_id: str) -> bool:
+    def page_has_forms(candidate_id: str, token: Optional[str] = None) -> bool:
         try:
-            facebook_graph_get(f"{candidate_id}/leadgen_forms", {"limit": "1", "fields": "id"})
+            facebook_graph_get(f"{candidate_id}/leadgen_forms", {"limit": "1", "fields": "id"}, access_token=token)
             return True
         except HTTPException:
             return False
 
     if page_has_forms(me_id):
-        return me_id
+        return me_id, FACEBOOK_PAGE_ACCESS_TOKEN
 
-    accounts = facebook_graph_paginate("me/accounts", {"fields": "id,name", "limit": "50"}, max_items=50)
+    accounts = facebook_graph_paginate(
+        "me/accounts",
+        {"fields": "id,name,access_token", "limit": "50"},
+        max_items=50,
+    )
     for acct in accounts:
         candidate = clean_text(acct.get("id"))
-        if candidate and page_has_forms(candidate):
-            return candidate
+        page_token = clean_text(acct.get("access_token"))
+        if candidate and page_token and page_has_forms(candidate, page_token):
+            return candidate, page_token
 
-    if accounts:
-        return clean_text(accounts[0].get("id")) or me_id
+    if resolved_page := clean_text(accounts[0].get("id") if accounts else ""):
+        page_token = clean_text(accounts[0].get("access_token")) if accounts else ""
+        if page_token:
+            return resolved_page, page_token
 
     raise HTTPException(
         status_code=400,
-        detail="Could not find a Facebook Page with Lead Ad forms. Set FACEBOOK_PAGE_ID in Render environment.",
+        detail="Could not access Lead Ad forms. Use a Page access token or set FACEBOOK_PAGE_ID with leads_retrieval permission.",
     )
 
-def list_facebook_leadgen_forms(page_id: str) -> List[Dict[str, Any]]:
+def resolve_facebook_page_id(page_id: Optional[str] = None) -> str:
+    return resolve_facebook_page_context(page_id)[0]
+
+def list_facebook_leadgen_forms(page_id: str, access_token: Optional[str] = None) -> List[Dict[str, Any]]:
     return facebook_graph_paginate(
         f"{page_id}/leadgen_forms",
         {"fields": "id,name,status,created_time", "limit": "100"},
         max_items=100,
+        access_token=access_token,
     )
 
-def list_facebook_form_leads(form_id: str, limit: int = 500, since_ts: Optional[int] = None) -> List[Dict[str, Any]]:
+def list_facebook_form_leads(form_id: str, limit: int = 500, since_ts: Optional[int] = None, access_token: Optional[str] = None) -> List[Dict[str, Any]]:
     params: Dict[str, Any] = {
         "fields": "created_time,id,ad_id,form_id,field_data",
         "limit": "100",
     }
     if since_ts:
         params["filtering"] = json.dumps([{"field": "time_created", "operator": "GREATER_THAN", "value": since_ts}])
-    return facebook_graph_paginate(f"{form_id}/leads", params, max_items=limit)
+    return facebook_graph_paginate(f"{form_id}/leads", params, max_items=limit, access_token=access_token)
 
 def import_facebook_graph_lead(graph_lead: Dict[str, Any]) -> Dict[str, Any]:
     leadgen_id = clean_text(graph_lead.get("id"))
@@ -1736,7 +1754,7 @@ async def facebook_import(payload: FacebookImportRequest, cu: User = Depends(get
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         raise HTTPException(status_code=400, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured on the server")
 
-    page_id = resolve_facebook_page_id(payload.page_id)
+    page_id, page_token = resolve_facebook_page_context(payload.page_id)
     days = min(max(payload.days, 1), 365)
     limit = min(max(payload.limit, 1), 1000)
     since_ts = int((now_utc() - timedelta(days=days)).timestamp())
@@ -1749,7 +1767,7 @@ async def facebook_import(payload: FacebookImportRequest, cu: User = Depends(get
             form_ids = [fid]
             forms_meta = [{"id": fid, "name": "Configured form"}]
     else:
-        forms = list_facebook_leadgen_forms(page_id)
+        forms = list_facebook_leadgen_forms(page_id, access_token=page_token)
         forms_meta = [{"id": f.get("id"), "name": f.get("name"), "status": f.get("status")} for f in forms]
         form_ids = [clean_text(f.get("id")) for f in forms if clean_text(f.get("id"))]
 
@@ -1761,7 +1779,7 @@ async def facebook_import(payload: FacebookImportRequest, cu: User = Depends(get
 
     for form_id in form_ids:
         try:
-            graph_leads = list_facebook_form_leads(form_id, limit=limit, since_ts=since_ts)
+            graph_leads = list_facebook_form_leads(form_id, limit=limit, since_ts=since_ts, access_token=page_token)
         except HTTPException as exc:
             failed += 1
             results.append({"form_id": form_id, "status": "failed", "error": exc.detail})
