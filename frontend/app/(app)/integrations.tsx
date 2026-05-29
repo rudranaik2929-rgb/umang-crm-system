@@ -39,6 +39,24 @@ type HousingVerify = {
   message?: string;
 };
 
+type FacebookVerify = {
+  token_configured: boolean;
+  token_valid: boolean;
+  token_error?: string | null;
+  db_meta_leads: number;
+  pending_webhook_events?: number;
+  last_error?: string | null;
+};
+
+type MetaLeadRow = {
+  lead_id: string;
+  name: string;
+  phone?: string;
+  email?: string;
+  source?: string;
+  created_at?: string;
+};
+
 export default function Integrations() {
   const { colors } = useTheme();
   const [status, setStatus] = useState<IntegrationStatus | null>(null);
@@ -48,20 +66,27 @@ export default function Integrations() {
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [fbEvents, setFbEvents] = useState<any[]>([]);
+  const [fbVerify, setFbVerify] = useState<FacebookVerify | null>(null);
+  const [metaLeads, setMetaLeads] = useState<MetaLeadRow[]>([]);
+  const [metaSyncing, setMetaSyncing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [s, plat, verify, fb] = await Promise.all([
+      const [s, plat, verify, fb, fbV, metaList] = await Promise.all([
         api.get('/integrations/status'),
         api.get('/stats/leads-by-platform'),
         api.get('/integrations/housing/verify'),
         api.get('/integrations/facebook/events', { params: { limit: 5 } }).catch(() => ({ data: { events: [] } })),
+        api.get('/integrations/facebook/verify').catch(() => ({ data: null })),
+        api.get('/leads/by-platform/meta', { params: { limit: 50 } }).catch(() => ({ data: { leads: [] } })),
       ]);
       setStatus(s.data || {});
       setPlatforms(Array.isArray(plat.data?.platforms) ? plat.data.platforms : []);
       setHousingVerify(verify.data || null);
       setFbEvents(Array.isArray(fb.data?.events) ? fb.data.events : []);
+      setFbVerify(fbV.data || null);
+      setMetaLeads(Array.isArray(metaList.data?.leads) ? metaList.data.leads : []);
     } finally {
       setLoading(false);
     }
@@ -98,6 +123,51 @@ export default function Integrations() {
       setSyncing(false);
     }
   };
+
+  const runMetaResync = async () => {
+    setMetaSyncing(true);
+    setMessage(null);
+    try {
+      const r = await api.post('/integrations/facebook/resync', {});
+      const created = Number(r.data?.created || 0);
+      const failed = Number(r.data?.failed || 0);
+      const retried = Number(r.data?.retried || 0);
+      if (created > 0) {
+        setMessage(`Meta resync: ${created} new lead(s) imported from ${retried} webhook event(s).`);
+      } else if (failed > 0 && retried > 0) {
+        const err = r.data?.results?.[0]?.error || '';
+        const isTestId = String(r.data?.results?.[0]?.leadgen_id || '') === '444444444444';
+        setMessage(
+          isTestId
+            ? 'Meta token is OK. Only Meta test webhooks (ID 444444444444) received so far — submit a real Lead Ad form to import leads.'
+            : `Meta resync: ${failed} failed. ${err.slice(0, 120)}`,
+        );
+      } else {
+        setMessage('Meta resync: no pending webhook leads to import. Submit a real Lead Ad form on Facebook.');
+      }
+      await load();
+    } catch (e: any) {
+      setMessage(e?.response?.data?.detail || 'Meta resync failed.');
+    } finally {
+      setMetaSyncing(false);
+    }
+  };
+
+  const metaExtraNote = useMemo(() => {
+    if (metaLeads.length > 0) {
+      return `${metaLeads.length} lead(s) in CRM · token ${fbVerify?.token_valid ? 'valid' : 'check Render env'}`;
+    }
+    if (fbVerify?.token_valid) {
+      return 'Token valid on server. Waiting for real Lead Ad submissions (not Meta webhook test ID 444444444444).';
+    }
+    if (fbVerify?.token_error) {
+      return fbVerify.token_error;
+    }
+    if (fbEvents.length) {
+      return `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'} · ${String(fbEvents[0].created_at || '').slice(0, 19)}`;
+    }
+    return 'Submit a real lead via your Facebook Lead Ad form to see leads here.';
+  }, [fbEvents, fbVerify, metaLeads.length]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -140,13 +210,14 @@ export default function Integrations() {
               checks={[
                 ['Verify token', !!status?.facebook?.verify_token_configured],
                 ['Lead retrieval', !!status?.facebook?.lead_retrieval_configured],
+                ['Page token valid', !!fbVerify?.token_valid],
                 ['Recent webhooks', fbEvents.length > 0],
               ]}
-              extraNote={
-                fbEvents.length
-                  ? `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'} · ${String(fbEvents[0].created_at || '').slice(0, 19)}`
-                  : 'Submit a test lead in Meta to see webhook events here'
-              }
+              extraNote={metaExtraNote}
+              actionLabel={metaSyncing ? 'Resyncing…' : 'Resync Meta Leads'}
+              actionIcon="sync-outline"
+              onAction={runMetaResync}
+              actionDisabled={metaSyncing || !fbVerify?.token_valid}
             />
           </View>
 
@@ -177,6 +248,29 @@ export default function Integrations() {
               </View>
             )}
           </View>
+
+          {metaLeads.length > 0 ? (
+            <View style={[styles.tablePanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <View style={styles.tableHead}>
+                <Text style={[styles.panelTitle, { color: colors.text }]}>Meta Leads in CRM</Text>
+                <Text style={[styles.panelSub, { color: colors.textMuted }]}>{metaLeads.length} from Facebook Lead Ads</Text>
+              </View>
+              {metaLeads.map((lead) => (
+                <View key={lead.lead_id} style={[styles.sourceRow, { borderTopColor: colors.border }]}>
+                  <Text style={[styles.sourceName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
+                  <Text style={[styles.sourceMetric, { color: colors.textSecondary }]} numberOfLines={1}>{lead.phone || lead.email || '—'}</Text>
+                  <Text style={[styles.sourceCount, { color: colors.text }]}>{String(lead.created_at || '').slice(0, 10)}</Text>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <View style={[styles.notice, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+              <Ionicons name="information-circle-outline" size={18} color={colors.info} />
+              <Text style={[styles.noticeText, { color: colors.textSecondary }]}>
+                Meta shows 0 leads because no real Facebook Lead Ad has been submitted yet. Localhost uses the same Render backend — submit a test lead from your live Lead Ad form (not Meta sample webhook test ID 444444444444).
+              </Text>
+            </View>
+          )}
         </ScrollView>
       )}
     </View>
