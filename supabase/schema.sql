@@ -33,6 +33,10 @@ create table if not exists users (
   picture text,
   role text not null default 'telecaller',
   employee_id text,
+  -- Per-employee sidebar/service access (source of truth). Empty = fall back to role defaults.
+  allowed_pages jsonb not null default '[]'::jsonb,
+  -- Which dashboard variant the user lands on (admin | manager | telecaller | ...).
+  dashboard_type text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -51,6 +55,8 @@ create table if not exists employees (
   phone text,
   role text not null,
   department text not null,
+  user_id text,
+  allowed_pages jsonb not null default '[]'::jsonb,
   active boolean not null default true,
   leads_assigned integer not null default 0,
   leads_closed integer not null default 0,
@@ -243,6 +249,10 @@ create table if not exists integration_events (
 -- Migration safety for older project databases.
 alter table users add column if not exists picture text;
 alter table users add column if not exists updated_at timestamptz not null default now();
+alter table users add column if not exists allowed_pages jsonb not null default '[]'::jsonb;
+alter table users add column if not exists dashboard_type text;
+alter table employees add column if not exists allowed_pages jsonb not null default '[]'::jsonb;
+alter table employees add column if not exists user_id text;
 
 alter table employees add column if not exists leads_assigned integer not null default 0;
 alter table employees add column if not exists leads_closed integer not null default 0;

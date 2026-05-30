@@ -41,7 +41,7 @@ export default function Index() {
       });
       if (loggedInUser) {
         if (!loggedInUser.role) router.replace('/select-role' as any);
-        else router.replace(defaultRouteFor(loggedInUser.role, loggedInUser.email) as any);
+        else router.replace(defaultRouteFor(loggedInUser.role, loggedInUser.email, loggedInUser.allowed_pages) as any);
       } else {
         alert('Login failed. Please check your credentials.');
       }
@@ -55,7 +55,7 @@ export default function Index() {
   const onContinue = () => {
     if (user) {
       if (!user.role) router.replace('/select-role' as any);
-      else router.replace(defaultRouteFor(user.role, user.email) as any);
+      else router.replace(defaultRouteFor(user.role, user.email, user.allowed_pages) as any);
     }
   };
 

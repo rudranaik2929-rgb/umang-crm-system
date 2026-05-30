@@ -3,11 +3,12 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platf
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
+import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { LineChart } from '../../src/components/LineChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/constants';
@@ -75,11 +76,14 @@ export default function Dashboard() {
   const { colors } = useTheme();
   const router = useRouter();
   const { user } = useAuth();
-  const [stats, setStats] = useState<any>(null);
-  const [graphData, setGraphData] = useState<any>(null);
-  const [leads, setLeads] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  // Hydrate from the last snapshot so re-navigating to the dashboard renders
+  // instantly while fresh data loads in the background.
+  const cached = getSnapshot<any>('dashboard');
+  const [stats, setStats] = useState<any>(cached?.stats ?? null);
+  const [graphData, setGraphData] = useState<any>(cached?.graphData ?? null);
+  const [leads, setLeads] = useState<any[]>(cached?.leads ?? []);
+  const [employees, setEmployees] = useState<any[]>(cached?.employees ?? []);
+  const [loading, setLoading] = useState(!cached);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [followUpModalVisible, setFollowUpModalVisible] = useState(false);
   const [followUps, setFollowUps] = useState<any[]>([]);
@@ -96,10 +100,15 @@ export default function Dashboard() {
         api.get('/leads'),
         api.get('/stats/employees'),
       ]);
-      setStats(s.data || {});
-      setGraphData(g.data || {});
-      setLeads(Array.isArray(l.data) ? l.data : []);
-      setEmployees(Array.isArray(e.data) ? e.data : []);
+      const nextStats = s.data || {};
+      const nextGraph = g.data || {};
+      const nextLeads = Array.isArray(l.data) ? l.data : [];
+      const nextEmployees = Array.isArray(e.data) ? e.data : [];
+      setStats(nextStats);
+      setGraphData(nextGraph);
+      setLeads(nextLeads);
+      setEmployees(nextEmployees);
+      setSnapshot('dashboard', { stats: nextStats, graphData: nextGraph, leads: nextLeads, employees: nextEmployees });
     } catch (err: any) {
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail;
@@ -216,8 +225,11 @@ export default function Dashboard() {
     value: Number(d.revenue || 0),
   }));
 
+  const showLeadAlerts = user?.role === 'admin' || user?.role === 'manager';
+
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
+      <NewLeadPopup enabled={showLeadAlerts} />
       <TopBar title="Dashboard" subtitle="Pipeline, revenue and team performance snapshot" />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heroGrid}>
@@ -331,18 +343,21 @@ export default function Dashboard() {
         <View style={styles.chartRow}>
           <LineChart
             title="Lead Volume"
-            subtitle="Daily lead count across the last 30 days"
+            subtitle="Daily new leads across the last 30 days"
             data={chartLeadData.length ? chartLeadData : [{ label: '0', value: 0 }]}
             color={colors.info}
+            unitLabel="leads"
+            defaultType="line"
             testID="leads-chart"
           />
           {canSeeRevenue(user?.role, user?.email) && (
             <LineChart
               title="Revenue Pipeline"
-              subtitle="Monthly booking and loan value"
+              subtitle="Monthly booking & loan value — compare month to month"
               data={chartRevenueData.length ? chartRevenueData : [{ label: '0', value: 0 }]}
               color={colors.warning}
               formatValue={formatCompact}
+              defaultType="bar"
               testID="revenue-chart"
             />
           )}

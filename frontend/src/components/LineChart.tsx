@@ -10,6 +10,11 @@ interface LineChartProps {
   color?: string;
   formatValue?: (v: number) => string;
   testID?: string;
+  // Chart type shown first. Bars read best for counts/comparisons, pie for
+  // share-of-total, line for trends over time.
+  defaultType?: 'line' | 'bar' | 'pie';
+  // Word used in the summary line, e.g. "leads", "bookings".
+  unitLabel?: string;
 }
 
 const PIE_COLORS = [
@@ -25,14 +30,16 @@ const PIE_COLORS = [
   '#F97316', // Vibrant Orange
 ];
 
-export function LineChart({ title, subtitle, data, color, formatValue, testID }: LineChartProps) {
+export function LineChart({ title, subtitle, data, color, formatValue, testID, defaultType = 'line', unitLabel }: LineChartProps) {
   const { colors } = useTheme();
-  const [chartType, setChartType] = useState<'line' | 'bar' | 'pie'>('line');
+  const [chartType, setChartType] = useState<'line' | 'bar' | 'pie'>(defaultType);
   
   const c = color || '#3B82F6';
   const cleanColor = c.replace('#', '');
   const max = Math.max(1, ...data.map(d => d.value));
   const total = data.reduce((sum, d) => sum + d.value, 0);
+  const peak = data.reduce((best, d) => (d.value > best.value ? d : best), { label: '', value: 0 });
+  const fmt = (v: number) => (formatValue ? formatValue(v) : String(v));
   const H = 180;
   const W_PADDING = 40;
   const isWeb = Platform.OS === 'web';
@@ -111,6 +118,14 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID }:
         <View style={{ flex: 1 }}>
           <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
           {subtitle && <Text style={[styles.subtitle, { color: colors.textMuted }]}>{subtitle}</Text>}
+          {data.length > 0 && (
+            <View style={styles.summaryRow}>
+              <Text style={[styles.summaryStrong, { color: c }]}>{fmt(total)}</Text>
+              <Text style={[styles.summaryMuted, { color: colors.textMuted }]}>
+                total{unitLabel ? ` ${unitLabel}` : ''}{peak.label ? `  ·  peak ${fmt(peak.value)} (${peak.label})` : ''}
+              </Text>
+            </View>
+          )}
         </View>
         <View style={[styles.toggleRow, { backgroundColor: colors.surfaceAlt }]}>
           {(['line', 'bar', 'pie'] as const).map((type) => (
@@ -288,6 +303,9 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
   title: { fontSize: 16, fontWeight: '700' },
   subtitle: { fontSize: 11, marginTop: 2 },
+  summaryRow: { flexDirection: 'row', alignItems: 'baseline', gap: 6, marginTop: 6, flexWrap: 'wrap' },
+  summaryStrong: { fontSize: 18, fontWeight: '800' },
+  summaryMuted: { fontSize: 11, fontWeight: '500' },
   toggleRow: { flexDirection: 'row', padding: 3, borderRadius: 8, alignItems: 'center' },
   toggleButton: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 6, borderWidth: 1, borderColor: 'transparent' },
   toggleText: { fontSize: 9, fontWeight: '600', letterSpacing: 0.5 },

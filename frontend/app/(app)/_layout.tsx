@@ -25,8 +25,8 @@ export default function AppLayout() {
     }
 
     const pageKey = pageKeyFromPathname(pathname);
-    if (pageKey && !canAccess(user.role, pageKey, user.email)) {
-      router.replace(defaultRouteFor(user.role, user.email) as any);
+    if (pageKey && !canAccess(user.role, pageKey, user.email, user.allowed_pages)) {
+      router.replace(defaultRouteFor(user.role, user.email, user.allowed_pages) as any);
     }
   }, [user, loading, router, pathname]);
 

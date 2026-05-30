@@ -453,6 +453,8 @@ class User(BaseModel):
     user_id: str; email: str; name: str; picture: Optional[str]=None
     role: Optional[str]=None; acting_as_employee_id: Optional[str]=None; created_at: datetime
     employee_id: Optional[str]=None
+    allowed_pages: Optional[List[str]] = None
+    dashboard_type: Optional[str] = None
 class RoleSet(BaseModel): role: str
 class ActAs(BaseModel): employee_id: Optional[str]=None
 class LeadCreatePublic(BaseModel):
@@ -495,9 +497,13 @@ class LoanUpdate(BaseModel):
     bank_name: Optional[str]=None; application_status: Optional[str]=None; progress: Optional[int]=None; bank_stage: Optional[str]=None
     documents_status: Optional[str]=None; pending_documents: Optional[List[str]]=None; emi_eligible: Optional[float]=None
     amount: Optional[float]=None; starred: Optional[bool]=None
-class EmployeeCreate(BaseModel): name: str; email: str; phone: Optional[str]=None; role: str; department: str
+class EmployeeCreate(BaseModel):
+    name: str; email: str; phone: Optional[str]=None; role: str; department: Optional[str]=None
+    password: Optional[str]=None
+    allowed_pages: Optional[List[str]]=None
 class EmployeeUpdate(BaseModel):
     name: Optional[str]=None; phone: Optional[str]=None; role: Optional[str]=None; active: Optional[bool]=None
+    allowed_pages: Optional[List[str]]=None; password: Optional[str]=None
 class TemplateCreate(BaseModel): name: str; body: str
 class CampaignCreate(BaseModel):
     name: str; template_id: Optional[str]=None; audience: str="all"; scheduled_at: Optional[datetime]=None
@@ -626,6 +632,10 @@ async def get_current_user(request: Request) -> User:
     users = sb_select("users", {"user_id": f"eq.{uid}", "select": "*"})
     if not users: raise HTTPException(401, "User not found")
     u = users[0]
+    # Employees default to acting as their own employee record so personal
+    # stats and lead assignment resolve after a cold-start session rebuild.
+    if u.get("employee_id") and not u.get("acting_as_employee_id") and u.get("role") != "admin":
+        u["acting_as_employee_id"] = u["employee_id"]
     # Cache for next time
     LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
     act_as = request.headers.get("X-Acting-As")
@@ -691,7 +701,12 @@ async def auth_session(request: Request, response: Response):
     
     if not db_password or not verify_password(password, db_password): 
         raise HTTPException(401, "Invalid email or password")
-    
+
+    # Employees act as their own employee record so personal stats / lead
+    # assignment resolve correctly without an explicit X-Acting-As header.
+    if u.get("employee_id") and not u.get("acting_as_employee_id") and u.get("role") != "admin":
+        u["acting_as_employee_id"] = u["employee_id"]
+
     return issue_session(u, response)
 
 @api_router.get("/auth/me")
@@ -1081,6 +1096,38 @@ def record_integration_event(source: str, payload: Any, status: str, lead_id: Op
     result = sb_insert("integration_events", event)
     return result or event
 
+def parse_external_datetime(value: Any) -> Optional[str]:
+    """Best-effort parse of a platform-provided lead time (Meta created_time,
+    Housing lead_date) into an ISO timestamp. Returns None if unparseable."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    # Epoch seconds / milliseconds.
+    if raw.isdigit():
+        try:
+            ts = int(raw)
+            if ts > 1e12:  # milliseconds
+                ts = ts / 1000.0
+            return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
+        except Exception:
+            return None
+    candidate = raw.replace("Z", "+00:00")
+    # Meta uses +0000 (no colon); normalize to +00:00.
+    m = re.search(r"([+-]\d{2})(\d{2})$", candidate)
+    if m:
+        candidate = candidate[: m.start()] + f"{m.group(1)}:{m.group(2)}"
+    for parser in (datetime.fromisoformat,):
+        try:
+            dt = parser(candidate)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(timezone.utc).isoformat()
+        except Exception:
+            pass
+    return None
+
 def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
     name = clean_text(pick_first(payload, [
         "customer_name", "full_name", "name", "lead_name", "first_name", "contact.name",
@@ -1136,6 +1183,10 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
     if notes:
         note_parts.append(notes)
 
+    external_created_at = parse_external_datetime(pick_first(payload, [
+        "created_time", "lead_date", "created_at", "lead_created_time", "submitted_at", "time",
+    ]))
+
     return {
         "name": name,
         "phone": phone,
@@ -1145,6 +1196,7 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
         "property_type": property_type,
         "source": source,
         "external_lead_id": external_id,
+        "external_created_at": external_created_at,
         "notes": "\n".join(note_parts) if note_parts else None,
     }
 
@@ -1206,6 +1258,9 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
     initial_stage = "broker" if brokerage else ("assigned" if assigned_to else "new")
     lead_type = "brokerage" if brokerage else "standard"
     now = now_utc().isoformat()
+    # Use the real platform submission time (Meta created_time / Housing lead_date)
+    # as the lead's created_at so dashboards show when the lead actually arrived.
+    created_at = normalized.get("external_created_at") or now
     lead_id = gen_id("lead")
     base_lead = {
         "lead_id": lead_id,
@@ -1221,7 +1276,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         "status": "active",
         "assigned_to": assigned_to,
         "lead_type": lead_type,
-        "created_at": now,
+        "created_at": created_at,
         "updated_at": now,
     }
     optional_lead = {
@@ -2430,6 +2485,40 @@ async def list_leads_by_platform(
         "leads": page,
     }
 
+@api_router.get("/leads/recent")
+async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user)):
+    """Most recent real leads with their platform + arrival time. Powers the
+    manager/admin 'new lead arrived' popup. Meta test/fake leads are excluded."""
+    limit = min(max(limit, 1), 100)
+    platform_labels = {
+        "manual": "Manual Entry", "housing": "Housing.com",
+        "meta": "Meta (Facebook)", "other": "Other", "brokerage": "Broker Pool",
+    }
+    db_leads = sb_select("leads", {
+        "select": "lead_id,name,phone,email,source,stage,status,external_lead_id,created_at",
+        "order": "created_at.desc",
+        "limit": str(limit * 3),
+    })
+    leads = merge_leads_with_cache(db_leads)
+    leads.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    out = []
+    for l in leads:
+        platform = classify_lead_platform(l.get("source"))
+        if platform == "meta" and not is_real_meta_lead(l):
+            continue
+        out.append({
+            "lead_id": l.get("lead_id"),
+            "name": l.get("name"),
+            "phone": l.get("phone"),
+            "source": l.get("source"),
+            "platform": platform,
+            "platform_label": platform_labels.get(platform, "Other"),
+            "created_at": l.get("created_at"),
+        })
+        if len(out) >= limit:
+            break
+    return {"total": len(out), "leads": out}
+
 @api_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
@@ -3075,15 +3164,54 @@ async def mark_notification_read(notification_id: str, cu: User=Depends(get_curr
     return updated or {"notification_id": notification_id, "is_read": True}
 
 # ---- Employees ----
+def _default_pages_for_role(role: str) -> List[str]:
+    """Sensible fallback service access when the manager doesn't tick any boxes."""
+    defaults = {
+        "admin": ["dashboard", "my-dashboard", "pipeline", "telecaller", "visits", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        "manager": ["my-dashboard", "pipeline", "bookings", "loans", "integrations", "broker", "employees"],
+        "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
+        "site_visit": ["my-dashboard", "visits", "pipeline"],
+        "booking": ["my-dashboard", "bookings", "pipeline"],
+        "loan": ["my-dashboard", "loans", "pipeline"],
+        "marketing": ["my-dashboard", "negative", "pipeline", "integrations"],
+    }
+    return defaults.get(role, ["my-dashboard", "pipeline"])
+
+
 @api_router.post("/employees")
 async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager"])
     if p.role not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
+
+    department = p.department or f"{p.role.title()} Department"
+    allowed_pages = p.allowed_pages if p.allowed_pages else _default_pages_for_role(p.role)
     eid = gen_id("emp")
+
+    # Create the login account so the employee can sign in immediately.
+    user_id = None
+    if p.password:
+        existing_user = sb_select("users", {"email": f"eq.{p.email}", "select": "user_id", "limit": "1"})
+        if existing_user:
+            raise HTTPException(status_code=400, detail="A login with this email already exists.")
+        user_id = gen_id("user")
+        user_row = {
+            "user_id": user_id,
+            "email": p.email,
+            "password_hash": get_password_hash(p.password),
+            "name": p.name,
+            "role": p.role,
+            "employee_id": eid,
+            "allowed_pages": allowed_pages,
+            "dashboard_type": p.role,
+            "created_at": now_utc().isoformat(),
+        }
+        sb_insert("users", user_row)
+
     e = {
         "employee_id": eid, "name": p.name, "email": p.email, "phone": p.phone,
-        "role": p.role, "department": p.department, "active": True,
+        "role": p.role, "department": department, "active": True,
+        "user_id": user_id, "allowed_pages": allowed_pages,
         "leads_assigned": 0, "leads_closed": 0, "last_login": None,
         "created_at": now_utc().isoformat(),
     }
@@ -3100,14 +3228,40 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     if data.get("role") and data["role"] not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
-    updated = sb_update("employees", "employee_id", eid, data)
+
+    # Sync relevant fields to the linked login (users) row.
+    password = data.pop("password", None)
+    rows = sb_select("employees", {"employee_id": f"eq.{eid}", "select": "*", "limit": "1"})
+    employee = rows[0] if rows else None
+    linked_user_id = (employee or {}).get("user_id")
+    if linked_user_id:
+        user_patch = {}
+        if "allowed_pages" in data:
+            user_patch["allowed_pages"] = data["allowed_pages"]
+        if "role" in data:
+            user_patch["role"] = data["role"]
+            user_patch["dashboard_type"] = data["role"]
+        if "name" in data:
+            user_patch["name"] = data["name"]
+        if password:
+            user_patch["password_hash"] = get_password_hash(password)
+        if user_patch:
+            sb_update("users", "user_id", linked_user_id, user_patch)
+            LOCAL_SESSIONS.clear()  # force re-read of refreshed permissions
+
+    updated = sb_update("employees", "employee_id", eid, data) if data else employee
     if not updated: raise HTTPException(404, "Employee not found")
     return updated
 
 @api_router.delete("/employees/{eid}")
 async def delete_employee(eid: str, cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager"])
+    rows = sb_select("employees", {"employee_id": f"eq.{eid}", "select": "user_id", "limit": "1"})
+    linked_user_id = (rows[0] if rows else {}).get("user_id")
     sb_delete("employees", "employee_id", eid)
+    if linked_user_id:
+        sb_delete("users", "user_id", linked_user_id)
+        LOCAL_SESSIONS.clear()
     return {"ok": True}
 
 # ---- Templates & Campaigns ----

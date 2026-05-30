@@ -87,8 +87,23 @@ const DEFAULT_ROUTES: Record<string, string> = {
 
 const ROUTE_ITEMS = NAV_ITEMS;
 
-export function visibleNavFor(role?: string | null, email?: string | null) {
-  return NAV_ITEMS.filter((n) => canAccess(role, n.key, email));
+// Services a manager can grant when adding an employee (checkbox list).
+export const ALL_SERVICES = NAV_ITEMS.filter((n) => n.key !== 'my-dashboard');
+
+// Resolve the effective set of accessible page keys for a user. Per-employee
+// allowed_pages is the source of truth; owners always get everything; legacy
+// users with no explicit list fall back to role defaults.
+export function effectivePages(role?: string | null, email?: string | null, allowedPages?: string[] | null): string[] {
+  if (isOwner(role, email)) return NAV_ITEMS.map((n) => n.key);
+  if (Array.isArray(allowedPages) && allowedPages.length > 0) {
+    // Everyone keeps a personal dashboard as a safe landing page.
+    return Array.from(new Set(['my-dashboard', ...allowedPages]));
+  }
+  return ROLE_ACCESS[role || 'admin'] || ROLE_ACCESS.admin;
+}
+
+export function visibleNavFor(role?: string | null, email?: string | null, allowedPages?: string[] | null) {
+  return NAV_ITEMS.filter((n) => canAccess(role, n.key, email, allowedPages));
 }
 
 export function isAdmin(role?: string | null) {
@@ -99,10 +114,9 @@ export function canSeeRevenue(role?: string | null, email?: string | null) {
   return isOwner(role, email);
 }
 
-export function canAccess(role: string | null | undefined, page: string, email?: string | null): boolean {
-  if (page === 'dashboard') return isOwner(role, email);
-  const r = role || 'admin';
-  return (ROLE_ACCESS[r] || ROLE_ACCESS.admin).includes(page);
+export function canAccess(role: string | null | undefined, page: string, email?: string | null, allowedPages?: string[] | null): boolean {
+  if (page === 'dashboard' && isOwner(role, email)) return true;
+  return effectivePages(role, email, allowedPages).includes(page);
 }
 
 export function pageKeyFromPathname(pathname?: string | null): string | null {
@@ -111,7 +125,14 @@ export function pageKeyFromPathname(pathname?: string | null): string | null {
   return ROUTE_ITEMS.find((item) => item.path.split('/').pop() === slug)?.key || null;
 }
 
-export function defaultRouteFor(role?: string | null, email?: string | null): string {
+export function defaultRouteFor(role?: string | null, email?: string | null, allowedPages?: string[] | null): string {
   if (isOwner(role, email)) return DEFAULT_ROUTES.admin;
-  return DEFAULT_ROUTES[role || ''] || '/(app)/my-dashboard';
+  // Prefer the role's natural landing if the employee has access to it,
+  // otherwise land on the first granted service (always at least my-dashboard).
+  const pages = effectivePages(role, email, allowedPages);
+  const roleRoute = DEFAULT_ROUTES[role || ''];
+  const roleKey = roleRoute ? pageKeyFromPathname(roleRoute) : null;
+  if (roleKey && pages.includes(roleKey)) return roleRoute;
+  const firstItem = NAV_ITEMS.find((n) => pages.includes(n.key));
+  return firstItem?.path || '/(app)/my-dashboard';
 }

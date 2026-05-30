@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { api, setToken, setActAsId, warmUpBackend } from '../lib/api';
+import { api, setToken, setActAsId, warmUpBackend, clearSnapshots } from '../lib/api';
 
 export interface User {
   user_id: string;
@@ -8,6 +8,8 @@ export interface User {
   picture?: string | null;
   role?: string | null;
   acting_as_employee_id?: string | null;
+  allowed_pages?: string[] | null;
+  dashboard_type?: string | null;
 }
 
 interface AuthContextType {
@@ -66,6 +68,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       await api.post('/auth/logout');
     } catch {}
+    clearSnapshots();
     await setToken(null);
     setUser(null);
   }, []);

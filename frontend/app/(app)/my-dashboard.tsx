@@ -7,7 +7,8 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api } from '../../src/lib/api';
 import { LineChart } from '../../src/components/LineChart';
-import { roleLabel } from '../../src/lib/constants';
+import { NewLeadPopup } from '../../src/components/NewLeadPopup';
+import { roleLabel, canSeeRevenue } from '../../src/lib/constants';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -84,6 +85,7 @@ export default function MyDashboard() {
 
   return (
     <View style={{ flex: 1 }}>
+      <NewLeadPopup enabled={role === 'manager' || role === 'admin'} />
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         <View style={{ flex: 1 }}>
           <TopBar title="My Dashboard" subtitle={`${roleLabel(role)} workspace`} />
@@ -165,16 +167,19 @@ export default function MyDashboard() {
                 subtitle="New leads acquired daily — last 30 days"
                 data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(5), value: d.count }))}
                 color="#3B82F6"
+                unitLabel="leads"
+                defaultType="line"
                 testID="my-chart-leads"
               />
             )}
-            {graphData?.revenue_by_month && (
+            {graphData?.revenue_by_month && canSeeRevenue(user?.role, user?.email) && (
               <LineChart
                 title="Revenue Pipeline"
                 subtitle="Monthly booking revenue — last 12 months"
                 data={graphData.revenue_by_month.map((d: any) => ({ label: d.month.slice(5), value: d.revenue }))}
                 color="#10B981"
                 formatValue={(v: number) => `₹${(v / 100000).toFixed(1)}L`}
+                defaultType="bar"
                 testID="my-chart-revenue"
               />
             )}

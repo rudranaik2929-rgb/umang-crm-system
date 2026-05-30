@@ -84,6 +84,16 @@ export default function Visits() {
         const myLeadIds = new Set((l.data || []).filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id).map((x: any) => x.lead_id));
         visitData = visitData.filter((x: any) => myLeadIds.has(x.lead_id));
       }
+      // Once a visit converts to a booking (Booking Done -> interested) or is
+      // cancelled (Not Interested), the lead has moved to the next step, so it
+      // drops off the active site-visit list.
+      const leadStageById = new Map<string, string>((l.data || []).map((x: any): [string, string] => [x.lead_id, x.stage]));
+      visitData = visitData.filter((x: any) => {
+        if (x.status === 'cancelled' || x.interested === true) return false;
+        const stage = leadStageById.get(x.lead_id);
+        if (stage && ['booking', 'loan', 'registration', 'closed'].includes(stage)) return false;
+        return true;
+      });
       setVisits(visitData);
       // Filter out leads that already have an active visit (scheduled or rescheduled)
       const activeVisitLeadIds = new Set(

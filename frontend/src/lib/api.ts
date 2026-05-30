@@ -133,4 +133,24 @@ api.interceptors.request.use(async (config) => {
 
 export const BACKEND = BACKEND_URL;
 
+// ============================================================
+// LIGHTWEIGHT STALE-WHILE-REVALIDATE CACHE
+// ============================================================
+// Keeps the last successful payload per key in memory so screens can render
+// instantly on re-navigation while they refresh in the background. Cleared on
+// logout to avoid leaking data across sessions/tabs.
+const _snapshotCache = new Map<string, any>();
+
+export function getSnapshot<T = any>(key: string): T | undefined {
+    return _snapshotCache.get(key);
+}
+
+export function setSnapshot(key: string, value: any) {
+    _snapshotCache.set(key, value);
+}
+
+export function clearSnapshots() {
+    _snapshotCache.clear();
+}
+
 export default api;
