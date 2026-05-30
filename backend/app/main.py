@@ -592,10 +592,38 @@ def ensure_roles(cu: User, allowed: Iterable[str]):
     if cu.role not in set(allowed) and cu.email != "htshpatil13@gmail.com":
         raise HTTPException(status_code=403, detail="You do not have permission for this action.")
 
+def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
+    if uid in HARDCODED_USERS:
+        return dict(HARDCODED_USERS[uid])
+    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "*"})
+    if not users:
+        raise HTTPException(401, "User not found")
+    u = users[0]
+    if u.get("employee_id") and not u.get("acting_as_employee_id") and u.get("role") != "admin":
+        u["acting_as_employee_id"] = u["employee_id"]
+    if u.get("employee_id"):
+        emps = sb_select("employees", {
+            "employee_id": f"eq.{u['employee_id']}",
+            "select": "active",
+            "limit": "1",
+        })
+        if emps and emps[0].get("active") is False:
+            raise HTTPException(401, "Account is disabled. Contact your manager.")
+    return u
+
+def invalidate_sessions_for_user(user_id: str):
+    """Force re-login for one user (e.g. after password reset). Never clears all sessions."""
+    sb_delete("sessions", "user_id", user_id)
+    for tok, sess in list(LOCAL_SESSIONS.items()):
+        if (sess.get("user") or {}).get("user_id") == user_id:
+            LOCAL_SESSIONS.pop(tok, None)
+
 async def get_current_user(request: Request) -> User:
     token = await get_session_token(request)
     if not token: raise HTTPException(401, "Not authenticated")
-    if token.count(".") == 2 and not decode_jwt(token):
+
+    jwt_payload = decode_jwt(token) if token.count(".") == 2 else None
+    if token.count(".") == 2 and not jwt_payload:
         raise HTTPException(401, "Invalid token")
     
     # 1. Check in-memory cache first (fastest)
@@ -605,41 +633,27 @@ async def get_current_user(request: Request) -> User:
             del LOCAL_SESSIONS[token]
             raise HTTPException(401, "Session expired")
         u = dict(sess["user"])
-        # Apply X-Acting-As header override (per-request, not persisted)
         act_as = request.headers.get("X-Acting-As")
         if act_as:
             u["acting_as_employee_id"] = act_as
         return User(**u)
 
-    # 2. Look up session in Supabase
+    # 2. Look up session in Supabase, or fall back to a valid signed JWT so admin
+    #    stays logged in after employee delete/edit (which must not wipe all sessions).
     rows = sb_select("sessions", {"session_token": f"eq.{token}", "select": "*"})
-    if not rows: raise HTTPException(401, "Invalid session")
-    sess = rows[0]
-    exp = sess.get("expires_at", "")
-    if exp and datetime.fromisoformat(exp.replace("Z","+00:00")) <= now_utc():
-        raise HTTPException(401, "Session expired")
-    
-    uid = sess["user_id"]
-    
-    # 3. Try hardcoded users first (survives server restart)
-    if uid in HARDCODED_USERS:
-        u = dict(HARDCODED_USERS[uid])
-        # Re-cache locally for speed
-        LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
-        act_as = request.headers.get("X-Acting-As")
-        if act_as:
-            u["acting_as_employee_id"] = act_as
-        return User(**u)
-    
-    # 4. Look up in users table (real database users)
-    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "*"})
-    if not users: raise HTTPException(401, "User not found")
-    u = users[0]
-    # Employees default to acting as their own employee record so personal
-    # stats and lead assignment resolve after a cold-start session rebuild.
-    if u.get("employee_id") and not u.get("acting_as_employee_id") and u.get("role") != "admin":
-        u["acting_as_employee_id"] = u["employee_id"]
-    # Cache for next time
+    if rows:
+        sess = rows[0]
+        exp = sess.get("expires_at", "")
+        if exp and datetime.fromisoformat(exp.replace("Z","+00:00")) <= now_utc():
+            raise HTTPException(401, "Session expired")
+        uid = sess["user_id"]
+    elif jwt_payload and jwt_payload.get("sub"):
+        uid = jwt_payload["sub"]
+        exp = datetime.fromtimestamp(int(jwt_payload["exp"]), tz=timezone.utc).isoformat()
+    else:
+        raise HTTPException(401, "Invalid session")
+
+    u = _resolve_user_by_id(uid, exp)
     LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
     act_as = request.headers.get("X-Acting-As")
     if act_as:
@@ -3339,7 +3353,8 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
             updated_user = sb_update("users", "user_id", linked_user_id, user_patch)
             if not updated_user:
                 raise HTTPException(status_code=500, detail="Could not update employee login.")
-            LOCAL_SESSIONS.clear()
+            if password:
+                invalidate_sessions_for_user(linked_user_id)
 
     updated = sb_update("employees", "employee_id", eid, data) if data else employee
     if not updated:
@@ -3354,7 +3369,7 @@ async def delete_employee(eid: str, cu: User=Depends(get_current_user)):
     sb_delete("employees", "employee_id", eid)
     if linked_user_id:
         sb_delete("users", "user_id", linked_user_id)
-        LOCAL_SESSIONS.clear()
+        invalidate_sessions_for_user(linked_user_id)
     return {"ok": True}
 
 # ---- Templates & Campaigns ----

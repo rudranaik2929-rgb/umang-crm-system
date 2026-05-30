@@ -27,16 +27,36 @@ export default function Employees() {
   const [editEmployee, setEditEmployee] = useState<any | null>(null);
 
   const load = useCallback(async () => {
-    try { const r = await api.get('/employees'); setEmployees(r.data || []); }
-    finally { setLoading(false); }
+    try {
+      const r = await api.get('/employees');
+      setEmployees(r.data || []);
+    } catch (e: any) {
+      if (e?.response?.status === 401) {
+        alert('Session expired. Please log in again.');
+      }
+    } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
   const remove = async (id: string) => {
-    await api.delete(`/employees/${id}`); await load();
+    try {
+      await api.delete(`/employees/${id}`);
+      setEmployees((prev) => prev.filter((e) => e.employee_id !== id));
+      await load();
+    } catch (e: any) {
+      const msg = e?.response?.status === 401
+        ? 'Session expired. Please log in again.'
+        : (e?.response?.data?.detail || 'Could not delete employee.');
+      alert(msg);
+    }
   };
   const toggle = async (e: any) => {
-    await api.patch(`/employees/${e.employee_id}`, { active: !e.active }); await load();
+    try {
+      await api.patch(`/employees/${e.employee_id}`, { active: !e.active });
+      await load();
+    } catch (err: any) {
+      alert(err?.response?.data?.detail || 'Could not update employee status.');
+    }
   };
 
   return (
