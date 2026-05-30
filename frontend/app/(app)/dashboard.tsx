@@ -352,8 +352,8 @@ export default function Dashboard() {
           />
           {canSeeRevenue(user?.role, user?.email) && (
             <LineChart
-              title="Revenue Pipeline"
-              subtitle="Monthly booking & loan value — compare month to month"
+              title="Brokerage Trend"
+              subtitle="Total brokerage collected per month — last 12 months"
               data={chartRevenueData.length ? chartRevenueData : [{ label: '0', value: 0 }]}
               color={colors.warning}
               formatValue={formatCompact}
@@ -470,8 +470,8 @@ function RevenuePanel({ revenue, bookings, confirmedBookings, disbursedLoans }: 
     <View style={[styles.panel, styles.heroPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
       <View style={styles.panelHeader}>
         <View>
-          <Text style={[styles.panelTitle, { color: colors.text }]}>Revenue Pipeline</Text>
-          <Text style={[styles.panelSub, { color: colors.textMuted }]}>Bookings plus disbursed loan value</Text>
+          <Text style={[styles.panelTitle, { color: colors.text }]}>Total Brokerage</Text>
+          <Text style={[styles.panelSub, { color: colors.textMuted }]}>Sum of brokerage entered on all bookings</Text>
         </View>
         <Ionicons name="cash-outline" size={20} color={colors.warning} />
       </View>
@@ -481,7 +481,7 @@ function RevenuePanel({ revenue, bookings, confirmedBookings, disbursedLoans }: 
       <View style={styles.revenueStats}>
         <TinyStat label="Bookings" value={bookings} color={colors.warning} />
         <TinyStat label="Confirmed" value={confirmedBookings} color={colors.positive} />
-        <TinyStat label="Disbursed" value={disbursedLoans} color="#8B5CF6" />
+        <TinyStat label="Disbursed Loans" value={disbursedLoans} color="#8B5CF6" />
       </View>
     </View>
   );

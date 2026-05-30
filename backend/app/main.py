@@ -482,14 +482,21 @@ class SiteVisitFollowUpCreate(BaseModel):
     visit_id: str; follow_up_date: str; follow_up_time: str; follow_up_day: str
     notes: Optional[str]=None
 class BookingCreate(BaseModel):
-    lead_id: str; property_name: str; booking_amount: float; token_received: float=0
+    lead_id: str; property_name: str; booking_amount: float=0; token_received: float=0
     unit_number: Optional[str]=None; tower: Optional[str]=None
+    flat_cost: Optional[float]=None; agreement_value: Optional[float]=None
+    stamp_duty: Optional[float]=None; registration_fees: Optional[float]=None
+    gst: Optional[float]=None; society_charges: Optional[float]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
 class BookingUpdate(BaseModel):
     token_received: Optional[float]=None; agreement_status: Optional[str]=None; status: Optional[str]=None
     property_name: Optional[str]=None; booking_amount: Optional[float]=None
     unit_number: Optional[str]=None; tower: Optional[str]=None
+    flat_cost: Optional[float]=None; agreement_value: Optional[float]=None
+    stamp_duty: Optional[float]=None; registration_fees: Optional[float]=None
+    gst: Optional[float]=None; society_charges: Optional[float]=None
+    brokerage_amount: Optional[float]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
 class LoanCreate(BaseModel):
@@ -974,6 +981,25 @@ def ensure_visit_record(lead_id: str, lead_name: Optional[str] = None, assigned_
     result = sb_insert("visits", v)
     SESSION_CACHE["visits"].insert(0, result or v)
     return result or v
+
+def booking_brokerage_amount(booking: Dict[str, Any]) -> float:
+    """Brokerage stored in brokerage_amount column or embedded in agreement_status."""
+    val = float(booking.get("brokerage_amount") or 0)
+    if val > 0:
+        return val
+    raw = str(booking.get("agreement_status") or "")
+    m = re.search(r"Brokerage:\s*([0-9.]+)", raw)
+    return float(m.group(1)) if m else 0.0
+
+def is_legacy_skeleton_booking(booking: Dict[str, Any]) -> bool:
+    """Auto-created placeholder rows (site-visit sync) — hidden from the booking list."""
+    return (
+        str(booking.get("property_name") or "").strip().lower() == "selected property"
+        and float(booking.get("booking_amount") or 0) == 0
+        and float(booking.get("token_received") or 0) == 0
+        and not booking.get("flat_cost")
+        and not booking.get("agreement_value")
+    )
 
 def ensure_booking_record(lead_id: str, lead_name: Optional[str] = None):
     existing = first_related_record("bookings", "bookings", lead_id)
@@ -2686,8 +2712,6 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             ensure_visit_record(lead_id, old_lead.get("name", "Lead"), old_lead.get("assigned_to"))
             if p.stage == "positive":
                 create_notification(old_lead.get("assigned_to"), "Positive lead", f"{old_lead.get('name', 'Lead')} is ready for site visit follow-up.", lead_id=lead_id)
-        elif p.stage == "booking":
-            ensure_booking_record(lead_id, old_lead.get("name", "Lead"))
         elif p.stage == "loan":
             ensure_loan_record(lead_id, old_lead.get("name", "Lead"))
         elif p.stage == "closed":
@@ -2730,8 +2754,6 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     # Auto-create related records when lead enters a new department stage
     if new_stage in ["positive", "site_visit"]:
         ensure_visit_record(lead_id, lead.get("name", "Lead"), lead.get("assigned_to"))
-    elif new_stage == "booking":
-        ensure_booking_record(lead_id, lead.get("name", "Lead"))
     elif new_stage == "loan":
         ensure_loan_record(lead_id, lead.get("name", "Lead"))
     elif new_stage == "closed":
@@ -2854,7 +2876,6 @@ async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_c
         lead_id = visit_record["lead_id"]
         if p.interested is True:
             sync_lead_stage(lead_id, "booking", force=False)
-            ensure_booking_record(lead_id, visit_record.get("lead_name"))
             log_activity(cu, "site_visit_interested", "Site visit marked interested; moved to booking department.", lead_id=lead_id)
         else:
             sync_lead_stage(lead_id, "site_visit", force=True)
@@ -2963,19 +2984,26 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
         else:
             raise HTTPException(404, "Lead not found")
     bid = gen_id("bkg")
+    amount = float(p.booking_amount or 0)
+    token = float(p.token_received or 0)
     b = {
         "booking_id": bid, "lead_id": p.lead_id, "lead_name": lead_name,
-        "property_name": p.property_name, "booking_amount": p.booking_amount,
-        "token_received": p.token_received, "agreement_status": "pending",
-        "payment_progress": p.payment_progress if p.payment_progress is not None else (int((p.token_received / p.booking_amount) * 100) if p.booking_amount else 0),
+        "property_name": p.property_name or "Property TBD", "booking_amount": amount,
+        "token_received": token, "agreement_status": "pending",
+        "payment_progress": p.payment_progress if p.payment_progress is not None else (int((token / amount) * 100) if amount else 0),
         "status": "active", "created_at": now_utc().isoformat(),
     }
-    if p.unit_number: b["unit_number"] = p.unit_number
-    if p.tower: b["tower"] = p.tower
-    if p.payment_status: b["payment_status"] = p.payment_status
-    if p.booking_date: b["booking_date"] = p.booking_date.isoformat()
-    if p.starred is not None: b["starred"] = p.starred
-    if p.completed_tasks is not None: b["completed_tasks"] = p.completed_tasks
+    optional_costs = {
+        "unit_number": p.unit_number, "tower": p.tower,
+        "flat_cost": p.flat_cost, "agreement_value": p.agreement_value,
+        "stamp_duty": p.stamp_duty, "registration_fees": p.registration_fees,
+        "gst": p.gst, "society_charges": p.society_charges,
+        "payment_status": p.payment_status, "booking_date": p.booking_date.isoformat() if p.booking_date else None,
+        "starred": p.starred, "completed_tasks": p.completed_tasks,
+    }
+    for k, v in optional_costs.items():
+        if v is not None:
+            b[k] = v
     result = sb_insert("bookings", b)
     SESSION_CACHE["bookings"].insert(0, result or b)
     # Auto-sync lead stage to booking
@@ -2985,10 +3013,11 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
 @api_router.get("/bookings")
 async def list_bookings(cu: User=Depends(get_current_user)):
     bookings = sb_select("bookings", {"select": "*", "order": "created_at.desc"})
-    # Deduplicate bookings (cache wins)
     cache_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
     db_only = [b for b in bookings if b.get("booking_id") not in cache_ids]
-    return SESSION_CACHE["bookings"] + db_only
+    merged = SESSION_CACHE["bookings"] + db_only
+    # Hide legacy auto-created skeleton rows; only explicit New Booking entries show.
+    return [b for b in merged if not is_legacy_skeleton_booking(b)]
 
 @api_router.patch("/bookings/{booking_id}")
 async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get_current_user)):
@@ -3459,6 +3488,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     # Deduplicate bookings
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
     bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
+    bookings = [b for b in bookings if not is_legacy_skeleton_booking(b)]
     
     # Deduplicate visits
     cache_vis_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
@@ -3498,8 +3528,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
             
     employees = fetched["employees"]
     campaigns = fetched["campaigns"]
-    rev = sum(float(b.get("booking_amount", 0) or 0) for b in bookings)
-    rev += sum(float(l.get("amount", 0) or 0) for l in loans if l.get("application_status") == "disbursed" or l.get("bank_stage") == "disbursal")
+    rev = sum(booking_brokerage_amount(b) for b in bookings)
     activity_followups = sum(1 for a in activities if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
     follow_up_visits = sum(1 for v in visits if v.get("status") == "follow_up")
     follow_up_total = max(len(followups), activity_followups, follow_up_visits)
@@ -3567,7 +3596,7 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     start_date = (now - timedelta(days=30)).isoformat()
     graph_data = sb_select_parallel({
         "leads": ("leads", {"select": "lead_id,created_at", "created_at": f"gte.{start_date}"}),
-        "bookings": ("bookings", {"select": "booking_id,booking_amount,created_at", "status": "eq.confirmed"}),
+        "bookings": ("bookings", {"select": "booking_id,brokerage_amount,agreement_status,created_at"}),
         "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
     })
     leads = graph_data["leads"]
@@ -3608,18 +3637,12 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
         months_map[d] = 0.0
         
     for b in bookings:
+        if is_legacy_skeleton_booking(b):
+            continue
         d = b.get("created_at", "")[:7]
         if d in months_map:
-            val = float(b.get("booking_amount", 0) or 0)
-            months_map[d] += val
+            months_map[d] += booking_brokerage_amount(b)
 
-    for l in loans:
-        if l.get("application_status") == "disbursed" or l.get("bank_stage") == "disbursal":
-            d = l.get("created_at", "")[:7]
-            if d in months_map:
-                val = float(l.get("amount", 0) or 0)
-                months_map[d] += val
-            
     for d, rev in sorted(months_map.items()):
         rev_by_month.append({"month": d, "revenue": rev})
 

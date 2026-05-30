@@ -47,7 +47,12 @@ export default function Bookings() {
         bookingData = bookingData.filter((x: any) => myLeadIds.has(x.lead_id));
       }
       setBookings(bookingData);
-      setLeads((l.data || []).filter((x: any) => x.status !== 'negative' && ['booking'].includes(x.stage)));
+      const bookedLeadIds = new Set(bookingData.map((x: any) => x.lead_id));
+      setLeads((l.data || []).filter((x: any) =>
+        x.status !== 'negative'
+        && x.stage === 'booking'
+        && !bookedLeadIds.has(x.lead_id)
+      ));
     } finally { setLoading(false); }
   }, [user]);
 
@@ -121,8 +126,10 @@ export default function Bookings() {
           ) : bookings.map((b) => {
             const rawAgreement = b.agreement_status || 'pending';
             const realAgreementStatus = rawAgreement.split(' | ')[0] || 'pending';
-            const brokerageMatch = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
-            const brokerageAmount = brokerageMatch ? parseFloat(brokerageMatch[1]) : 0;
+            const brokerageAmount = Number(b.brokerage_amount || 0) || (() => {
+              const m = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
+              return m ? parseFloat(m[1]) : 0;
+            })();
             const completed = completedTasksFor(b);
             const completedSet = new Set(completed);
             const completedLabels = BOOKING_TASKS.filter((task) => completedSet.has(task.key));
@@ -207,11 +214,7 @@ export default function Bookings() {
                         const val = localBrokerage[b.booking_id];
                         if (val === undefined) return;
                         const parsedVal = parseFloat(val) || 0;
-                        const existingStatus = b.agreement_status ? b.agreement_status.replace(/ \| Brokerage:\s*[0-9.]+/, '').trim() : 'pending';
-                        const newStatus = parsedVal > 0 ? `${existingStatus} | Brokerage: ${parsedVal}` : existingStatus;
-                        if (newStatus !== b.agreement_status) {
-                          update(b.booking_id, { agreement_status: newStatus }, 'brokerage');
-                        }
+                        update(b.booking_id, { brokerage_amount: parsedVal }, 'brokerage');
                       }}
                       style={{ height: 28, width: 140, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
                     />
@@ -287,42 +290,71 @@ export default function Bookings() {
 function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any) {
   const [leadId, setLeadId] = useState('');
   const [property, setProperty] = useState('');
-  const [amount, setAmount] = useState('5000000');
-  const [token, setToken] = useState('100000');
+  const [amount, setAmount] = useState('');
+  const [token, setToken] = useState('');
+  const [flatCost, setFlatCost] = useState('');
+  const [agreementValue, setAgreementValue] = useState('');
+  const [stampDuty, setStampDuty] = useState('');
+  const [registrationFees, setRegistrationFees] = useState('');
+  const [gst, setGst] = useState('');
+  const [societyCharges, setSocietyCharges] = useState('');
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (visible && leads[0]) setLeadId(leads[0].lead_id);
+    if (visible) {
+      setError(null);
+      setProperty(''); setAmount(''); setToken('');
+      setFlatCost(''); setAgreementValue(''); setStampDuty('');
+      setRegistrationFees(''); setGst(''); setSocietyCharges('');
+    }
   }, [visible, leads]);
 
+  const parseNum = (v: string) => {
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
+
   const submit = async () => {
-    if (!leadId || !property) return;
+    if (!leadId) return;
     setBusy(true);
+    setError(null);
     try {
-      await api.post('/bookings', {
+      const payload: any = {
         lead_id: leadId,
-        property_name: property,
-        booking_amount: parseFloat(amount) || 0,
-        token_received: parseFloat(token) || 0,
-      });
+        property_name: property.trim() || 'Property TBD',
+        booking_amount: parseNum(amount) ?? 0,
+        token_received: parseNum(token) ?? 0,
+      };
+      const flat = parseNum(flatCost); if (flat !== undefined) payload.flat_cost = flat;
+      const agr = parseNum(agreementValue); if (agr !== undefined) payload.agreement_value = agr;
+      const stamp = parseNum(stampDuty); if (stamp !== undefined) payload.stamp_duty = stamp;
+      const reg = parseNum(registrationFees); if (reg !== undefined) payload.registration_fees = reg;
+      const gstVal = parseNum(gst); if (gstVal !== undefined) payload.gst = gstVal;
+      const soc = parseNum(societyCharges); if (soc !== undefined) payload.society_charges = soc;
+      await api.post('/bookings', payload);
       onCreated();
-      setProperty(''); setAmount('5000000'); setToken('100000');
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Could not create booking.');
     } finally { setBusy(false); }
   };
+
+  const selectedLead = leads.find((l: any) => l.lead_id === leadId);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '90%' }]} onPress={(e: any) => e?.stopPropagation?.()}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>New Booking</Text>
           {leads.length === 0 ? (
             <Text style={{ color: colors.textSecondary, marginTop: 14, fontSize: 13 }}>
-              No leads available yet.
+              No leads ready for booking. Mark a site visit as Booking Done first, then add the booking here.
             </Text>
           ) : (
-            <>
-              <Text style={[styles.label, { color: colors.textMuted }]}>LEAD</Text>
-              <ScrollView style={{ maxHeight: 160 }} contentContainerStyle={{ gap: 6 }}>
+            <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
+              <Text style={[styles.label, { color: colors.textMuted }]}>LEAD (FROM SITE VISIT → BOOKING DONE)</Text>
+              <ScrollView style={{ maxHeight: 140 }} contentContainerStyle={{ gap: 6 }}>
                 {leads.map((l: any) => (
                   <Pressable key={l.lead_id} testID={`booking-lead-${l.lead_id}`} onPress={() => setLeadId(l.lead_id)}
                     style={[styles.leadOpt, {
@@ -331,18 +363,31 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
                     }]}
                   >
                     <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>{l.name}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone} · {l.location || ''}</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone}{l.location ? ` · ${l.location}` : ''}</Text>
                   </Pressable>
                 ))}
               </ScrollView>
-              <FormField label="PROPERTY NAME" testID="booking-property" value={property} onChange={setProperty} colors={colors} placeholder="Umang Skylark – 3BHK Tower B" />
-              <FormField label="BOOKING AMOUNT (₹)" testID="booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
-              <FormField label="TOKEN RECEIVED (₹)" testID="booking-token-input" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
-              <Pressable testID="booking-submit" onPress={submit} disabled={busy}
-                style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}>
+              {selectedLead ? (
+                <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 8 }}>
+                  Selected: {selectedLead.name} · {selectedLead.phone || 'No phone'}
+                </Text>
+              ) : null}
+              <FormField label="PROPERTY NAME (OPTIONAL)" testID="booking-property" value={property} onChange={setProperty} colors={colors} placeholder="Umang Skylark – 3BHK Tower B" />
+              <FormField label="BOOKING AMOUNT (₹, OPTIONAL)" testID="booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
+              <FormField label="TOKEN RECEIVED (₹, OPTIONAL)" testID="booking-token-input" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
+              <Text style={[styles.label, { color: colors.textMuted, marginTop: 16 }]}>COST BREAKDOWN (ALL OPTIONAL)</Text>
+              <FormField label="FLAT COST (₹)" testID="booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
+              <FormField label="AGREEMENT VALUE (₹)" testID="booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
+              <FormField label="STAMP DUTY (₹)" testID="booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
+              <FormField label="REGISTRATION FEES (₹)" testID="booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
+              <FormField label="GST (₹)" testID="booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
+              <FormField label="SOCIETY CHARGES (₹)" testID="booking-society-charges" value={societyCharges} onChange={setSocietyCharges} colors={colors} keyboardType="numeric" />
+              {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
+              <Pressable testID="booking-submit" onPress={submit} disabled={busy || !leadId}
+                style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center', opacity: leadId ? 1 : 0.5 }]}>
                 {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Create Booking</Text>}
               </Pressable>
-            </>
+            </ScrollView>
           )}
         </Pressable>
       </Pressable>
@@ -354,6 +399,12 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
   const [property, setProperty] = useState('');
   const [amount, setAmount] = useState('');
   const [token, setToken] = useState('');
+  const [flatCost, setFlatCost] = useState('');
+  const [agreementValue, setAgreementValue] = useState('');
+  const [stampDuty, setStampDuty] = useState('');
+  const [registrationFees, setRegistrationFees] = useState('');
+  const [gst, setGst] = useState('');
+  const [societyCharges, setSocietyCharges] = useState('');
   const [status, setStatus] = useState('');
   const [agreement, setAgreement] = useState('');
   const [busy, setBusy] = useState(false);
@@ -361,23 +412,42 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
   useEffect(() => {
     if (!booking) return;
     setProperty(booking.property_name || '');
-    setAmount(String(booking.booking_amount || 0));
-    setToken(String(booking.token_received || 0));
+    setAmount(String(booking.booking_amount || ''));
+    setToken(String(booking.token_received || ''));
+    setFlatCost(booking.flat_cost != null ? String(booking.flat_cost) : '');
+    setAgreementValue(booking.agreement_value != null ? String(booking.agreement_value) : '');
+    setStampDuty(booking.stamp_duty != null ? String(booking.stamp_duty) : '');
+    setRegistrationFees(booking.registration_fees != null ? String(booking.registration_fees) : '');
+    setGst(booking.gst != null ? String(booking.gst) : '');
+    setSocietyCharges(booking.society_charges != null ? String(booking.society_charges) : '');
     setStatus(booking.status || 'active');
     setAgreement((booking.agreement_status || 'pending').split(' | ')[0]);
   }, [booking]);
+
+  const parseNum = (v: string) => {
+    if (!v.trim()) return undefined;
+    const n = parseFloat(v);
+    return Number.isFinite(n) ? n : undefined;
+  };
 
   const submit = async () => {
     if (!booking) return;
     setBusy(true);
     try {
-      await api.patch(`/bookings/${booking.booking_id}`, {
+      const payload: any = {
         property_name: property,
-        booking_amount: parseFloat(amount) || 0,
-        token_received: parseFloat(token) || 0,
+        booking_amount: parseNum(amount) ?? 0,
+        token_received: parseNum(token) ?? 0,
         status,
         agreement_status: agreement,
-      });
+      };
+      const flat = parseNum(flatCost); if (flat !== undefined) payload.flat_cost = flat;
+      const agr = parseNum(agreementValue); if (agr !== undefined) payload.agreement_value = agr;
+      const stamp = parseNum(stampDuty); if (stamp !== undefined) payload.stamp_duty = stamp;
+      const reg = parseNum(registrationFees); if (reg !== undefined) payload.registration_fees = reg;
+      const gstVal = parseNum(gst); if (gstVal !== undefined) payload.gst = gstVal;
+      const soc = parseNum(societyCharges); if (soc !== undefined) payload.society_charges = soc;
+      await api.patch(`/bookings/${booking.booking_id}`, payload);
       onSaved();
     } finally {
       setBusy(false);
@@ -389,22 +459,30 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable
           onPress={(event: any) => event?.stopPropagation?.()}
-          style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '90%' }]}
         >
           <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Booking</Text>
-          <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
-          <FormField label="BOOKING AMOUNT (₹)" testID="edit-booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
-          <FormField label="TOKEN RECEIVED (₹)" testID="edit-booking-token" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
-          <FormField label="STATUS" testID="edit-booking-status" value={status} onChange={setStatus} colors={colors} />
-          <FormField label="AGREEMENT STATUS" testID="edit-booking-agreement" value={agreement} onChange={setAgreement} colors={colors} />
-          <Pressable
-            testID="edit-booking-submit"
-            onPress={submit}
-            disabled={busy}
-            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}
-          >
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Booking</Text>}
-          </Pressable>
+          <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
+            <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
+            <FormField label="BOOKING AMOUNT (₹)" testID="edit-booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
+            <FormField label="TOKEN RECEIVED (₹)" testID="edit-booking-token" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
+            <FormField label="FLAT COST (₹)" testID="edit-booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
+            <FormField label="AGREEMENT VALUE (₹)" testID="edit-booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
+            <FormField label="STAMP DUTY (₹)" testID="edit-booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
+            <FormField label="REGISTRATION FEES (₹)" testID="edit-booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
+            <FormField label="GST (₹)" testID="edit-booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
+            <FormField label="SOCIETY CHARGES (₹)" testID="edit-booking-society-charges" value={societyCharges} onChange={setSocietyCharges} colors={colors} keyboardType="numeric" />
+            <FormField label="STATUS" testID="edit-booking-status" value={status} onChange={setStatus} colors={colors} />
+            <FormField label="AGREEMENT STATUS" testID="edit-booking-agreement" value={agreement} onChange={setAgreement} colors={colors} />
+            <Pressable
+              testID="edit-booking-submit"
+              onPress={submit}
+              disabled={busy}
+              style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}
+            >
+              {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Booking</Text>}
+            </Pressable>
+          </ScrollView>
         </Pressable>
       </Pressable>
     </Modal>

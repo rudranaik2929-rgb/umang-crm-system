@@ -195,16 +195,7 @@ export default function Visits() {
 
                   <ActBtn label="Booking Done" icon="cash-outline" color={colors.primary}
                     busy={busy === `${v.visit_id}-booking`}
-                    onPress={async () => {
-                      setBusy(`${v.visit_id}-booking`);
-                      try {
-                        await api.patch(`/visits/${v.visit_id}`, { status: 'completed', interested: true });
-                        await api.patch(`/leads/${v.lead_id}`, { stage: 'booking' });
-                        // Create a skeleton booking record
-                        await api.post('/bookings', { lead_id: v.lead_id, property_name: 'Selected Property', booking_amount: 0 });
-                        await load();
-                      } finally { setBusy(null); }
-                    }}
+                    onPress={() => update(v.visit_id, { status: 'completed', interested: true }, 'booking')}
                     testID={`visit-booking-ready-${v.visit_id}`} />
                 </View>
               </View>

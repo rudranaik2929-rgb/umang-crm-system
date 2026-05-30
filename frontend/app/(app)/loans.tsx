@@ -82,19 +82,21 @@ export default function Loans() {
         }
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
-        {loading ? <ActivityIndicator color={colors.primary} /> :
-          (() => {
+        {loading ? <ActivityIndicator color={colors.primary} /> : (() => {
             const activeLoans = loans.filter((lo) => lo.bank_stage !== 'disbursal' && lo.application_status !== 'disbursed');
-            return activeLoans.length === 0 ? (
-              <EmptyState
-                variant="leads"
-                title="No loan applications"
-                description="Initiate a loan application to start. Track Setup → Sanction (50%) → Disbursal (100%) in one clean, structured pipeline."
-                actionLabel="Start an Application"
-                onAction={() => setShowCreate(true)}
-                testIDAction="empty-create-loan"
-              />
-            ) : activeLoans.map((lo) => {
+            const historyLoans = loans.filter((lo) => lo.bank_stage === 'disbursal' || lo.application_status === 'disbursed');
+            return (
+              <>
+                {activeLoans.length === 0 ? (
+                  <EmptyState
+                    variant="leads"
+                    title="No loan applications"
+                    description="Initiate a loan application to start. Track Setup → Sanction (50%) → Disbursal (100%) in one clean, structured pipeline."
+                    actionLabel="Start an Application"
+                    onAction={() => setShowCreate(true)}
+                    testIDAction="empty-create-loan"
+                  />
+                ) : activeLoans.map((lo) => {
               const hasSetup = lo.bank_name === 'Self Loan Adjustment' || lo.bank_name === 'Developer Loan Adjustment' || lo.bank_name === 'Umang Hometech LLP Loan';
               return (
                 <View key={lo.loan_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -282,7 +284,48 @@ export default function Loans() {
                   </View>
                 </View>
               );
-            });
+            })}
+
+                {historyLoans.length > 0 && (
+                  <View style={{ marginTop: 8, gap: 12 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <Text style={[styles.sectionTitle, { color: colors.text }]}>Disbursal History</Text>
+                      <Badge text={`${historyLoans.length} CLOSED`} color={colors.positive} />
+                    </View>
+                    <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                      Completed disbursals stay here for reference. You can delete old records when no longer needed.
+                    </Text>
+                    {historyLoans.map((lo) => (
+                      <View key={`hist-${lo.loan_id}`} style={[styles.card, styles.historyCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+                        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+                          <View style={[styles.iconBig, { backgroundColor: colors.positive + '18' }]}>
+                            <Ionicons name="checkmark-done" size={18} color={colors.positive} />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.cardTitle, { color: colors.text }]}>{lo.lead_name}</Text>
+                            <Text style={[styles.cardSub, { color: colors.textMuted }]}>
+                              {lo.bank_name || 'Loan'}{canSeeRevenue(user?.role, user?.email) ? ` · ₹${(lo.amount || 0).toLocaleString('en-IN')}` : ''}
+                            </Text>
+                            <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+                              <Badge text="DISBURSED" color={colors.positive} />
+                              <Badge text="100%" color={colors.info} />
+                            </View>
+                          </View>
+                          <Pressable
+                            testID={`loan-history-delete-${lo.loan_id}`}
+                            onPress={() => deleteLoan(lo)}
+                            style={[styles.historyDelete, { borderColor: colors.negative + '55', backgroundColor: colors.negative + '10' }]}
+                          >
+                            <Ionicons name="trash-outline" size={14} color={colors.negative} />
+                            <Text style={{ color: colors.negative, fontSize: 11, fontWeight: '600' }}>Delete</Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                )}
+              </>
+            );
           })()
         }
       </ScrollView>
@@ -456,6 +499,9 @@ const styles = StyleSheet.create({
   docPill: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 999, borderWidth: 1 },
   actions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 16 },
   act: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, height: 30, borderRadius: 6, borderWidth: 1 },
+  sectionTitle: { fontSize: 16, fontWeight: '700' },
+  historyCard: { opacity: 0.95 },
+  historyDelete: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, height: 32, borderRadius: 6, borderWidth: 1 },
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
   modal: { width: '92%', maxWidth: 480, padding: 20, borderRadius: 12, borderWidth: 1 },
   label: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginBottom: 6 },

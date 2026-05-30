@@ -174,8 +174,8 @@ export default function MyDashboard() {
             )}
             {graphData?.revenue_by_month && canSeeRevenue(user?.role, user?.email) && (
               <LineChart
-                title="Revenue Pipeline"
-                subtitle="Monthly booking revenue — last 12 months"
+                title="Total Brokerage"
+                subtitle="Monthly brokerage collected — last 12 months"
                 data={graphData.revenue_by_month.map((d: any) => ({ label: d.month.slice(5), value: d.revenue }))}
                 color="#10B981"
                 formatValue={(v: number) => `₹${(v / 100000).toFixed(1)}L`}

@@ -154,6 +154,12 @@ create table if not exists bookings (
   tower text,
   booking_amount numeric not null default 0,
   brokerage_amount numeric not null default 0,
+  flat_cost numeric,
+  agreement_value numeric,
+  stamp_duty numeric,
+  registration_fees numeric,
+  gst numeric,
+  society_charges numeric,
   token_received numeric not null default 0,
   payment_status text not null default 'pending',
   payment_progress integer not null default 0,
@@ -281,6 +287,12 @@ alter table leads add column if not exists brokerage_amount numeric;
 alter table leads add column if not exists updated_at timestamptz not null default now();
 
 alter table bookings add column if not exists brokerage_amount numeric not null default 0;
+alter table bookings add column if not exists flat_cost numeric;
+alter table bookings add column if not exists agreement_value numeric;
+alter table bookings add column if not exists stamp_duty numeric;
+alter table bookings add column if not exists registration_fees numeric;
+alter table bookings add column if not exists gst numeric;
+alter table bookings add column if not exists society_charges numeric;
 
 alter table visits add column if not exists assigned_name text;
 alter table visits add column if not exists property_details text;
