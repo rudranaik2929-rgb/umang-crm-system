@@ -24,6 +24,7 @@ export default function Employees() {
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [editEmployee, setEditEmployee] = useState<any | null>(null);
 
   const load = useCallback(async () => {
     try { const r = await api.get('/employees'); setEmployees(r.data || []); }
@@ -89,6 +90,10 @@ export default function Employees() {
                     <Badge text={e.active ? 'ACTIVE' : 'DISABLED'} color={e.active ? colors.positive : colors.textMuted} />
                   </View>
                   <View style={{ width: 120, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 }}>
+                    <Pressable testID={`emp-edit-${e.employee_id}`} onPress={() => setEditEmployee(e)}
+                      style={[styles.iconAct, { borderColor: colors.border }]}>
+                      <Ionicons name="create-outline" size={14} color={colors.primary} />
+                    </Pressable>
                     <Pressable testID={`emp-toggle-${e.employee_id}`} onPress={() => toggle(e)}
                       style={[styles.iconAct, { borderColor: colors.border }]}>
                       <Ionicons name={e.active ? 'pause-circle-outline' : 'play-circle-outline'} size={14} color={colors.textSecondary} />
@@ -105,6 +110,13 @@ export default function Employees() {
       </ScrollView>
 
       <AddEmployeeModal visible={showAdd} onClose={() => setShowAdd(false)} onCreated={async () => { setShowAdd(false); await load(); }} colors={colors} />
+      <EditEmployeeModal
+        visible={!!editEmployee}
+        employee={editEmployee}
+        onClose={() => setEditEmployee(null)}
+        onSaved={async () => { setEditEmployee(null); await load(); }}
+        colors={colors}
+      />
     </View>
   );
 }
@@ -196,6 +208,109 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
           <Pressable testID="emp-submit" onPress={submit} disabled={busy || !canSubmit}
             style={[styles.primary, { backgroundColor: colors.primary, marginTop: 14, height: 42, justifyContent: 'center', opacity: canSubmit ? 1 : 0.5 }]}>
             {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Create Login & Add Employee</Text>}
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
+function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any) {
+  const [name, setName] = useState('');
+  const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
+  const [password, setPassword] = useState('');
+  const [role, setRole] = useState('telecaller');
+  const [pages, setPages] = useState<string[]>([]);
+  const [active, setActive] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!visible || !employee) return;
+    setName(employee.name || '');
+    setEmail(employee.email || '');
+    setPhone(employee.phone || '');
+    setPassword('');
+    setRole(employee.role || 'telecaller');
+    setPages(Array.isArray(employee.allowed_pages) && employee.allowed_pages.length
+      ? employee.allowed_pages
+      : ROLE_DEFAULT_SERVICES[employee.role] || ['pipeline']);
+    setActive(employee.active !== false);
+    setError(null);
+  }, [visible, employee]);
+
+  const togglePage = (key: string) => {
+    setPages((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]));
+  };
+
+  const submit = async () => {
+    if (!employee?.employee_id || !name || !email) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const payload: any = { name, email, phone, role, active, allowed_pages: pages };
+      if (password.trim()) payload.password = password.trim();
+      await api.patch(`/employees/${employee.employee_id}`, payload);
+      onSaved();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Could not update employee.');
+    } finally { setBusy(false); }
+  };
+
+  if (!employee) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Pressable style={styles.backdrop} onPress={onClose}>
+        <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '88%' }]} onPress={(e: any) => e?.stopPropagation?.()}>
+          <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Employee</Text>
+          <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
+            Update login email, reset password, role, and sidebar access. Leave password blank to keep the current one.
+          </Text>
+          <ScrollView style={{ marginTop: 4 }} contentContainerStyle={{ paddingBottom: 4 }}>
+            <Field label="FULL NAME" testID="edit-emp-name" value={name} onChange={setName} colors={colors} />
+            <Field label="LOGIN EMAIL" testID="edit-emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
+            <Field label="NEW PASSWORD (OPTIONAL)" testID="edit-emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry />
+            <Field label="PHONE" testID="edit-emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
+            <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE</Text>
+            <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
+              {ROLES.filter((r) => r.key !== 'admin').map((r) => (
+                <Pressable key={r.key} onPress={() => setRole(r.key)}
+                  style={[styles.chip, {
+                    borderColor: role === r.key ? colors.primary : colors.border,
+                    backgroundColor: role === r.key ? colors.primary + '20' : colors.surfaceAlt,
+                  }]}>
+                  <Text style={{ color: role === r.key ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>{r.label}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <Pressable onPress={() => setActive((v) => !v)} style={[styles.checkRow, { marginTop: 14, borderColor: active ? colors.positive : colors.border, backgroundColor: active ? colors.positive + '12' : colors.surfaceAlt }]}>
+              <View style={[styles.checkbox, { borderColor: active ? colors.positive : colors.border, backgroundColor: active ? colors.positive : 'transparent' }]}>
+                {active ? <Ionicons name="checkmark" size={13} color="#fff" /> : null}
+              </View>
+              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '500' }}>Account active (can log in)</Text>
+            </Pressable>
+            <Text style={[styles.label, { color: colors.textMuted, marginTop: 16 }]}>SIDEBAR SERVICES</Text>
+            <View style={{ gap: 8 }}>
+              {ALL_SERVICES.map((svc) => {
+                const checked = pages.includes(svc.key);
+                return (
+                  <Pressable key={svc.key} onPress={() => togglePage(svc.key)}
+                    style={[styles.checkRow, { borderColor: checked ? colors.primary : colors.border, backgroundColor: checked ? colors.primary + '12' : colors.surfaceAlt }]}>
+                    <View style={[styles.checkbox, { borderColor: checked ? colors.primary : colors.border, backgroundColor: checked ? colors.primary : 'transparent' }]}>
+                      {checked ? <Ionicons name="checkmark" size={13} color="#fff" /> : null}
+                    </View>
+                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '500' }}>{svc.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </ScrollView>
+          {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
+          <Pressable testID="edit-emp-submit" onPress={submit} disabled={busy || !name || !email}
+            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 14, height: 42, justifyContent: 'center', opacity: name && email ? 1 : 0.5 }]}>
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Changes</Text>}
           </Pressable>
         </Pressable>
       </Pressable>

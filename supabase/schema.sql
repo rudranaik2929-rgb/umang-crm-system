@@ -249,6 +249,7 @@ create table if not exists integration_events (
 -- Migration safety for older project databases.
 alter table users add column if not exists picture text;
 alter table users add column if not exists updated_at timestamptz not null default now();
+alter table users add column if not exists employee_id text;
 alter table users add column if not exists allowed_pages jsonb not null default '[]'::jsonb;
 alter table users add column if not exists dashboard_type text;
 alter table employees add column if not exists allowed_pages jsonb not null default '[]'::jsonb;

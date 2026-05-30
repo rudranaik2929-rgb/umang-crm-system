@@ -31,6 +31,9 @@ def verify_password(plain_password, hashed_password):
 def get_password_hash(password):
     return pwd_context.hash(password)
 
+def normalize_email(email: Optional[str]) -> str:
+    return (email or "").strip().lower()
+
 app = FastAPI(title="Umang Hometech LLP CRM")
 
 # Compress large JSON responses (e.g. full lead lists) to cut transfer time.
@@ -502,7 +505,7 @@ class EmployeeCreate(BaseModel):
     password: Optional[str]=None
     allowed_pages: Optional[List[str]]=None
 class EmployeeUpdate(BaseModel):
-    name: Optional[str]=None; phone: Optional[str]=None; role: Optional[str]=None; active: Optional[bool]=None
+    name: Optional[str]=None; email: Optional[str]=None; phone: Optional[str]=None; role: Optional[str]=None; active: Optional[bool]=None
     allowed_pages: Optional[List[str]]=None; password: Optional[str]=None
 class TemplateCreate(BaseModel): name: str; body: str
 class CampaignCreate(BaseModel):
@@ -647,7 +650,8 @@ async def get_current_user(request: Request) -> User:
 @api_router.post("/auth/session")
 async def auth_session(request: Request, response: Response):
     body = await request.json()
-    email, password = body.get("email"), body.get("password")
+    email = normalize_email(body.get("email"))
+    password = body.get("password") or ""
     
     # Hardcoded fallback for demo
     if email in ["umang@admin", "htshpatil13@gmail.com"] and password == "umang@admin":
@@ -701,6 +705,15 @@ async def auth_session(request: Request, response: Response):
     
     if not db_password or not verify_password(password, db_password): 
         raise HTTPException(401, "Invalid email or password")
+
+    if u.get("employee_id"):
+        emps = sb_select("employees", {
+            "employee_id": f"eq.{u['employee_id']}",
+            "select": "active",
+            "limit": "1",
+        })
+        if emps and emps[0].get("active") is False:
+            raise HTTPException(401, "Account is disabled. Contact your manager.")
 
     # Employees act as their own employee record so personal stats / lead
     # assignment resolve correctly without an explicit X-Acting-As header.
@@ -3178,45 +3191,75 @@ def _default_pages_for_role(role: str) -> List[str]:
     return defaults.get(role, ["my-dashboard", "pipeline"])
 
 
+def _build_login_row(name: str, email: str, password: str, role: str, employee_id: str, allowed_pages: List[str]) -> Dict[str, Any]:
+    return {
+        "user_id": gen_id("user"),
+        "email": normalize_email(email),
+        "password_hash": get_password_hash(password),
+        "name": name,
+        "role": role,
+        "employee_id": employee_id,
+        "allowed_pages": allowed_pages,
+        "dashboard_type": role,
+        "created_at": now_utc().isoformat(),
+        "updated_at": now_utc().isoformat(),
+    }
+
+
+def _insert_login_or_raise(user_row: Dict[str, Any]) -> Dict[str, Any]:
+    inserted = sb_insert("users", user_row)
+    if not inserted:
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Could not save employee login in Supabase. "
+                "Run supabase/employee_login_migration.sql in the Supabase SQL Editor, then try again."
+            ),
+        )
+    return inserted
+
+
 @api_router.post("/employees")
 async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager"])
     if p.role not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
+    if not p.password or len(p.password.strip()) < 4:
+        raise HTTPException(status_code=400, detail="Password is required (minimum 4 characters).")
+
+    email = normalize_email(p.email)
+    if not email:
+        raise HTTPException(status_code=400, detail="Valid login email is required.")
 
     department = p.department or f"{p.role.title()} Department"
     allowed_pages = p.allowed_pages if p.allowed_pages else _default_pages_for_role(p.role)
     eid = gen_id("emp")
 
-    # Create the login account so the employee can sign in immediately.
-    user_id = None
-    if p.password:
-        existing_user = sb_select("users", {"email": f"eq.{p.email}", "select": "user_id", "limit": "1"})
-        if existing_user:
-            raise HTTPException(status_code=400, detail="A login with this email already exists.")
-        user_id = gen_id("user")
-        user_row = {
-            "user_id": user_id,
-            "email": p.email,
-            "password_hash": get_password_hash(p.password),
-            "name": p.name,
-            "role": p.role,
-            "employee_id": eid,
-            "allowed_pages": allowed_pages,
-            "dashboard_type": p.role,
-            "created_at": now_utc().isoformat(),
-        }
-        sb_insert("users", user_row)
+    existing_user = sb_select("users", {"email": f"eq.{email}", "select": "user_id", "limit": "1"})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="A login with this email already exists.")
+
+    existing_emp = sb_select("employees", {"email": f"eq.{email}", "select": "employee_id", "limit": "1"})
+    if existing_emp:
+        raise HTTPException(status_code=400, detail="An employee with this email already exists.")
+
+    user_row = _build_login_row(p.name, email, p.password.strip(), p.role, eid, allowed_pages)
+    user_id = user_row["user_id"]
+    _insert_login_or_raise(user_row)
 
     e = {
-        "employee_id": eid, "name": p.name, "email": p.email, "phone": p.phone,
+        "employee_id": eid, "name": p.name, "email": email, "phone": p.phone,
         "role": p.role, "department": department, "active": True,
         "user_id": user_id, "allowed_pages": allowed_pages,
         "leads_assigned": 0, "leads_closed": 0, "last_login": None,
         "created_at": now_utc().isoformat(),
+        "updated_at": now_utc().isoformat(),
     }
     result = sb_insert("employees", e)
-    return result or e
+    if not result:
+        sb_delete("users", "user_id", user_id)
+        raise HTTPException(status_code=500, detail="Could not create employee record.")
+    return result
 
 @api_router.get("/employees")
 async def list_employees(cu: User=Depends(get_current_user)):
@@ -3228,14 +3271,58 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
     data = {k: v for k, v in p.model_dump().items() if v is not None}
     if data.get("role") and data["role"] not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
+    if "email" in data:
+        data["email"] = normalize_email(data["email"])
+        if not data["email"]:
+            raise HTTPException(status_code=400, detail="Valid login email is required.")
+    if "password" in data:
+        pwd = (data["password"] or "").strip()
+        if pwd and len(pwd) < 4:
+            raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
+        if not pwd:
+            data.pop("password", None)
 
-    # Sync relevant fields to the linked login (users) row.
-    password = data.pop("password", None)
     rows = sb_select("employees", {"employee_id": f"eq.{eid}", "select": "*", "limit": "1"})
     employee = rows[0] if rows else None
-    linked_user_id = (employee or {}).get("user_id")
+    if not employee:
+        raise HTTPException(404, "Employee not found")
+
+    if data.get("email") and data["email"] != employee.get("email"):
+        clash = sb_select("users", {"email": f"eq.{data['email']}", "select": "user_id", "limit": "1"})
+        if clash and clash[0].get("user_id") != employee.get("user_id"):
+            raise HTTPException(status_code=400, detail="Another login already uses this email.")
+        clash_emp = sb_select("employees", {"email": f"eq.{data['email']}", "select": "employee_id", "limit": "1"})
+        if clash_emp and clash_emp[0].get("employee_id") != eid:
+            raise HTTPException(status_code=400, detail="Another employee already uses this email.")
+
+    password = data.pop("password", None)
+    linked_user_id = employee.get("user_id")
+    allowed_pages = data.get("allowed_pages") or employee.get("allowed_pages") or _default_pages_for_role(employee.get("role") or "telecaller")
+    role = data.get("role") or employee.get("role")
+    name = data.get("name") or employee.get("name")
+    email = data.get("email") or employee.get("email")
+
+    # Create missing login for employees added before login support or failed inserts.
+    if not linked_user_id and password:
+        user_row = _build_login_row(name, email, password, role, eid, allowed_pages)
+        inserted = _insert_login_or_raise(user_row)
+        linked_user_id = inserted["user_id"]
+        data["user_id"] = linked_user_id
+
     if linked_user_id:
-        user_patch = {}
+        user_patch: Dict[str, Any] = {}
+        user_exists = sb_select("users", {"user_id": f"eq.{linked_user_id}", "select": "user_id", "limit": "1"})
+        if not user_exists:
+            if not password:
+                raise HTTPException(
+                    status_code=400,
+                    detail="This employee has no working login yet. Enter a new password and save to create one.",
+                )
+            user_row = _build_login_row(name, email, password, role, eid, allowed_pages)
+            inserted = _insert_login_or_raise(user_row)
+            linked_user_id = inserted["user_id"]
+            data["user_id"] = linked_user_id
+            password = None  # already applied on insert
         if "allowed_pages" in data:
             user_patch["allowed_pages"] = data["allowed_pages"]
         if "role" in data:
@@ -3243,14 +3330,20 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
             user_patch["dashboard_type"] = data["role"]
         if "name" in data:
             user_patch["name"] = data["name"]
+        if "email" in data:
+            user_patch["email"] = data["email"]
         if password:
             user_patch["password_hash"] = get_password_hash(password)
         if user_patch:
-            sb_update("users", "user_id", linked_user_id, user_patch)
-            LOCAL_SESSIONS.clear()  # force re-read of refreshed permissions
+            user_patch["updated_at"] = now_utc().isoformat()
+            updated_user = sb_update("users", "user_id", linked_user_id, user_patch)
+            if not updated_user:
+                raise HTTPException(status_code=500, detail="Could not update employee login.")
+            LOCAL_SESSIONS.clear()
 
     updated = sb_update("employees", "employee_id", eid, data) if data else employee
-    if not updated: raise HTTPException(404, "Employee not found")
+    if not updated:
+        raise HTTPException(500, "Could not update employee.")
     return updated
 
 @api_router.delete("/employees/{eid}")
