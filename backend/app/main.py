@@ -472,6 +472,7 @@ class LeadUpdate(BaseModel):
     starred: Optional[bool]=None
     lead_type: Optional[str]=None
     brokerage_amount: Optional[float]=None
+    call_status: Optional[str]=None
 class NoteCreate(BaseModel): text: str; type: str="call_note"
 class SiteVisitCreate(BaseModel): lead_id: str; scheduled_at: datetime; assigned_to: Optional[str]=None
 class SiteVisitUpdate(BaseModel):
@@ -1181,6 +1182,45 @@ def parse_external_datetime(value: Any) -> Optional[str]:
             pass
     return None
 
+def format_budget_lakhs(val: Any) -> Optional[str]:
+    """Short lakh label for display/storage (45 not 4500000)."""
+    if val is None or val == "":
+        return None
+    try:
+        n = float(val)
+    except (TypeError, ValueError):
+        return clean_text(val)
+    if n <= 0:
+        return None
+    if n >= 100000:
+        lakhs = n / 100000
+    elif n >= 1000:
+        lakhs = n / 100000
+    else:
+        lakhs = n
+    if lakhs == int(lakhs):
+        return str(int(lakhs))
+    return f"{lakhs:.1f}".rstrip("0").rstrip(".")
+
+def format_budget_range_lakhs(min_price: Any, max_price: Any) -> Optional[str]:
+    a = format_budget_lakhs(min_price)
+    b = format_budget_lakhs(max_price)
+    if a and b:
+        return f"{a} - {b}"
+    return a or b
+
+def extract_bhk_configuration(payload: Dict[str, Any]) -> Optional[str]:
+    for key in ("configuration", "config", "bhk", "requirement", "unit_type", "property_type", "property_field"):
+        raw = clean_text(payload.get(key))
+        if not raw:
+            continue
+        m = re.search(r"(\d)\s*bhk", raw, re.I)
+        if m:
+            return f"{m.group(1)} BHK"
+        if re.fullmatch(r"\d+", raw.strip()):
+            return f"{raw.strip()} BHK"
+    return None
+
 def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
     name = clean_text(pick_first(payload, [
         "customer_name", "full_name", "name", "lead_name", "first_name", "contact.name",
@@ -1202,11 +1242,8 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
         "budget", "price", "budget_range", "max_budget", "requirement_budget",
     ]))
     if not budget and (min_price or max_price):
-        if min_price and max_price:
-            budget = f"{min_price} - {max_price}"
-        else:
-            budget = clean_text(min_price or max_price)
-    property_type = clean_text(pick_first(payload, [
+        budget = format_budget_range_lakhs(min_price, max_price)
+    property_type = extract_bhk_configuration(payload) or clean_text(pick_first(payload, [
         "property_type", "configuration", "config", "bhk", "requirement", "unit_type",
     ]))
     external_id = clean_text(pick_first(payload, [
@@ -2667,6 +2704,9 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     
     data = model_payload(p)
     data["updated_at"] = now_utc().isoformat()
+    valid_call_statuses = {"ringing", "out_of_service", "call_back", "disconnect"}
+    if data.get("call_status") and data["call_status"] not in valid_call_statuses:
+        raise HTTPException(status_code=400, detail="Invalid call status")
     
     # Auto-set stage to 'assigned' when admin assigns a lead that's at 'new' stage
     if p.assigned_to and old_lead.get("stage") == "new":

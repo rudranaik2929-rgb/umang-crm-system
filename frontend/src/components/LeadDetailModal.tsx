@@ -6,6 +6,14 @@ import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { StageBadge, Badge } from './Badge';
 import { STAGES, isAdmin } from '../lib/constants';
+import {
+  CALL_STATUS_OPTIONS,
+  callStatusLabel,
+  formatBudgetRangeLakhs,
+  formatBudgetStringLakhs,
+  formatHousingConfiguration,
+  formatHousingLeadDate,
+} from '../lib/leadFormat';
 
 interface Props {
   leadId: string | null;
@@ -253,9 +261,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.name, { color: colors.text }]}>{lead.name}</Text>
                   <Text style={[styles.sub, { color: colors.textMuted }]}>{lead.phone}{lead.email ? `  ·  ${lead.email}` : ''}</Text>
-                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 8 }}>
+                  <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                     <StageBadge stage={lead.stage} />
                     {lead.status === 'negative' ? <Badge text="NEGATIVE" color={colors.negative} /> : null}
+                    {lead.call_status ? (
+                      <Badge text={callStatusLabel(lead.call_status).toUpperCase()} color={colors.warning} />
+                    ) : null}
                   </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -459,33 +470,40 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8 }}>
                       Real lead data imported from Housing.com API (not demo).
                     </Text>
-                    <DetailRow label="Lead date" value={housingRaw.lead_date ? String(housingRaw.lead_date) : null} colors={colors} />
+                    <DetailRow
+                      label="Lead date"
+                      value={formatHousingLeadDate(housingRaw.lead_date, lead.created_at)}
+                      colors={colors}
+                    />
                     <DetailRow label="Project" value={preferredProperty || null} colors={colors} />
                     <DetailRow label="Locality" value={housingRaw.locality_name ? String(housingRaw.locality_name) : null} colors={colors} />
                     <DetailRow label="City" value={housingRaw.city_name ? String(housingRaw.city_name) : null} colors={colors} />
                     <DetailRow
                       label="Budget range"
-                      value={
-                        housingRaw.min_price || housingRaw.max_price
-                          ? [housingRaw.min_price, housingRaw.max_price].filter(Boolean).join(' – ')
-                          : null
-                      }
+                      value={formatBudgetRangeLakhs(housingRaw.min_price, housingRaw.max_price, lead.budget)}
                       colors={colors}
                     />
-                    <DetailRow label="Configuration" value={housingRaw.property_field ? String(housingRaw.property_field) : null} colors={colors} />
-                    <DetailRow label="Service" value={housingRaw.service_type ? String(housingRaw.service_type) : null} colors={colors} />
-                    {lead.external_lead_id ? (
-                      <DetailRow label="External ID" value={lead.external_lead_id} colors={colors} />
-                    ) : null}
+                    <DetailRow
+                      label="Configuration"
+                      value={formatHousingConfiguration(housingRaw) || (lead.property_type ? String(lead.property_type) : null)}
+                      colors={colors}
+                    />
                   </View>
                 ) : null}
 
                 {/* Details */}
                 <View style={[styles.block, { borderColor: colors.border }]}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>CUSTOMER DETAILS</Text>
-                  <DetailRow label="Budget" value={lead.budget} colors={colors} />
+                  <DetailRow label="Budget" value={formatBudgetStringLakhs(lead.budget) || lead.budget} colors={colors} />
                   <DetailRow label="Location" value={lead.location} colors={colors} />
-                  <DetailRow label="Property type" value={lead.property_type} colors={colors} />
+                  <DetailRow
+                    label="Configuration"
+                    value={
+                      (housingRaw ? formatHousingConfiguration(housingRaw) : null)
+                      || lead.property_type
+                    }
+                    colors={colors}
+                  />
                   {preferredProperty ? (
                     <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
                   ) : null}
@@ -518,6 +536,13 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       active={activeCategory === 'negative'} 
                       onPress={() => selectCategory('negative')}
                       color={colors.negative}
+                    />
+                    <CategoryBtn 
+                      label="Ringing" 
+                      icon="call-outline" 
+                      active={activeCategory === 'ringing'} 
+                      onPress={() => selectCategory('ringing')}
+                      color={colors.warning}
                     />
                   </View>
 
@@ -628,6 +653,24 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             busy={busy === 'need_loan'}
                             color="#7C3AED"
                           />
+                        </View>
+                      )}
+
+                      {activeCategory === 'ringing' && (
+                        <View style={styles.subGrid}>
+                          {CALL_STATUS_OPTIONS.map((opt) => (
+                            <SubActionBtn
+                              key={opt.key}
+                              label={opt.label}
+                              sub={lead.call_status === opt.key ? 'Currently selected' : undefined}
+                              onPress={async () => {
+                                await updateLead({ call_status: opt.key }, opt.key);
+                                setActiveCategory(null);
+                              }}
+                              busy={busy === opt.key}
+                              color={colors.warning}
+                            />
+                          ))}
                         </View>
                       )}
                     </Animated.View>
@@ -837,8 +880,8 @@ const styles = StyleSheet.create({
   block: { padding: 16, borderRadius: 10, borderWidth: 1 },
   blockTitle: { fontSize: 10, fontWeight: '700', letterSpacing: 1.4, marginBottom: 6 },
   actionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
-  categoryRow: { flexDirection: 'row', gap: 10, marginTop: 10 },
-  catBtn: { flex: 1, height: 70, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', gap: 6 },
+  categoryRow: { flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' },
+  catBtn: { flex: 1, minWidth: '22%' as any, height: 70, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', gap: 6 },
   catLabel: { fontSize: 11, fontWeight: '700' },
   subOptions: { marginTop: 0 },
   subDivider: { height: 1, marginVertical: 16 },

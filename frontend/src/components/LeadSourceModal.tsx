@@ -7,6 +7,12 @@ import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { LeadDetailModal } from './LeadDetailModal';
 import { StageBadge } from './Badge';
+import {
+  formatBudgetRangeLakhs,
+  formatBudgetStringLakhs,
+  formatHousingConfiguration,
+  formatHousingLeadDate,
+} from '../lib/leadFormat';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
@@ -407,11 +413,31 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                       {[project, lead.location].filter(Boolean).join(' · ')}
                     </Text>
                   ) : null}
-                  {lead.budget ? (
-                    <Text style={[st.leadMeta, { color: colors.textMuted }]}>Budget: {lead.budget}</Text>
-                  ) : null}
+                  {(() => {
+                    const raw = lead.raw_payload;
+                    const budgetLabel = isHousing && raw && typeof raw === 'object'
+                      ? formatBudgetRangeLakhs(raw.min_price, raw.max_price, lead.budget)
+                      : formatBudgetStringLakhs(lead.budget);
+                    const configLabel = isHousing && raw && typeof raw === 'object'
+                      ? formatHousingConfiguration(raw as Record<string, unknown>)
+                      : null;
+                    return (
+                      <>
+                        {configLabel ? (
+                          <Text style={[st.leadMeta, { color: colors.textMuted }]}>{configLabel}</Text>
+                        ) : null}
+                        {budgetLabel ? (
+                          <Text style={[st.leadMeta, { color: colors.textMuted }]}>Budget: {budgetLabel} L</Text>
+                        ) : null}
+                      </>
+                    );
+                  })()}
                   <View style={st.leadFoot}>
-                    <Text style={[st.leadDate, { color: colors.textMuted }]}>{formatDate(lead.created_at)}</Text>
+                    <Text style={[st.leadDate, { color: colors.textMuted }]}>
+                      {isHousing && lead.raw_payload && typeof lead.raw_payload === 'object'
+                        ? formatHousingLeadDate((lead.raw_payload as any).lead_date, lead.created_at)
+                        : formatDate(lead.created_at)}
+                    </Text>
                     {isHousing ? (
                       <Text style={[st.realBadgeSmall, { color: '#00BFA5' }]}>Housing.com · Original</Text>
                     ) : selectedPlatform?.platform === 'meta' ? (

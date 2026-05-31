@@ -91,6 +91,7 @@ create table if not exists leads (
   raw_payload jsonb,
   lead_type text not null default 'standard',
   brokerage_amount numeric,
+  call_status text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -284,6 +285,7 @@ alter table leads add column if not exists integration_uuid text;
 alter table leads add column if not exists raw_payload jsonb;
 alter table leads add column if not exists lead_type text not null default 'standard';
 alter table leads add column if not exists brokerage_amount numeric;
+alter table leads add column if not exists call_status text;
 alter table leads add column if not exists updated_at timestamptz not null default now();
 
 alter table bookings add column if not exists brokerage_amount numeric not null default 0;
