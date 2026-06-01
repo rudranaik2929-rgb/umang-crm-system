@@ -9,6 +9,8 @@
 
 -- users: login + permissions
 alter table users add column if not exists password_hash text;
+-- Legacy column (some older DBs only had "password"); backend writes both.
+alter table users add column if not exists password text;
 alter table users add column if not exists employee_id text;
 alter table users add column if not exists allowed_pages jsonb not null default '[]'::jsonb;
 alter table users add column if not exists dashboard_type text;
@@ -27,6 +29,10 @@ create unique index if not exists employees_email_lower_idx on employees (lower(
 -- Normalize existing emails to lowercase so login always matches
 update users set email = lower(trim(email)) where email <> lower(trim(email));
 update employees set email = lower(trim(email)) where email <> lower(trim(email));
+
+-- Keep legacy password column in sync with password_hash
+update users set password = password_hash
+where password_hash is not null and (password is null or password <> password_hash);
 
 -- Employees created before login support have user_id but no users row.
 -- After running this migration, open Employees → Edit → set a new password to

@@ -167,19 +167,30 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
   };
 
   const submit = async () => {
-    if (!name || !email || !password) return;
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+    if (!name.trim() || !trimmedEmail || trimmedPassword.length < 4) return;
     setBusy(true);
     setError(null);
     try {
       const dept = ROLES.find((r) => r.key === role)?.dept || 'General';
-      await api.post('/employees', { name, email, phone, password, role, department: dept, allowed_pages: pages });
+      await api.post('/employees', {
+        name: name.trim(),
+        email: trimmedEmail,
+        phone: phone.trim() || undefined,
+        password: trimmedPassword,
+        role,
+        department: dept,
+        allowed_pages: pages,
+      });
       onCreated(); reset();
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Could not add employee. Try a different email.');
+      const detail = e?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Could not add employee. Check email is unique and password is at least 4 characters.');
     } finally { setBusy(false); }
   };
 
-  const canSubmit = !!name && !!email && password.length >= 4;
+  const canSubmit = !!name.trim() && !!email.trim() && password.trim().length >= 4;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -192,7 +203,7 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
           <ScrollView style={{ marginTop: 4 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <Field label="FULL NAME" testID="emp-name" value={name} onChange={setName} colors={colors} />
             <Field label="LOGIN EMAIL" testID="emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
-            <Field label="LOGIN PASSWORD" testID="emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry />
+            <Field label="LOGIN PASSWORD (REQUIRED)" testID="emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required />
             <Field label="PHONE" testID="emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE (DASHBOARD TYPE)</Text>
             <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -265,18 +276,29 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
   };
 
   const submit = async () => {
-    if (!employee?.employee_id || !name || !email) return;
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+    if (!employee?.employee_id || !name.trim() || !trimmedEmail || trimmedPassword.length < 4) return;
     setBusy(true);
     setError(null);
     try {
-      const payload: any = { name, email, phone, role, active, allowed_pages: pages };
-      if (password.trim()) payload.password = password.trim();
-      await api.patch(`/employees/${employee.employee_id}`, payload);
+      await api.patch(`/employees/${employee.employee_id}`, {
+        name: name.trim(),
+        email: trimmedEmail,
+        phone: phone.trim() || undefined,
+        password: trimmedPassword,
+        role,
+        active,
+        allowed_pages: pages,
+      });
       onSaved();
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Could not update employee.');
+      const detail = e?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : 'Could not update employee. Enter password (min 4 characters).');
     } finally { setBusy(false); }
   };
+
+  const canSave = !!name.trim() && !!email.trim() && password.trim().length >= 4;
 
   if (!employee) return null;
 
@@ -286,12 +308,12 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
         <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '88%' }]} onPress={(e: any) => e?.stopPropagation?.()}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Employee</Text>
           <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
-            Update login email, reset password, role, and sidebar access. Leave password blank to keep the current one.
+            Enter the login password every time you save (required). Use the same password to keep it, or type a new one to reset.
           </Text>
           <ScrollView style={{ marginTop: 4 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <Field label="FULL NAME" testID="edit-emp-name" value={name} onChange={setName} colors={colors} />
             <Field label="LOGIN EMAIL" testID="edit-emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
-            <Field label="NEW PASSWORD (OPTIONAL)" testID="edit-emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry />
+            <Field label="LOGIN PASSWORD (REQUIRED)" testID="edit-emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required />
             <Field label="PHONE" testID="edit-emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE</Text>
             <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -328,8 +350,8 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
             </View>
           </ScrollView>
           {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
-          <Pressable testID="edit-emp-submit" onPress={submit} disabled={busy || !name || !email}
-            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 14, height: 42, justifyContent: 'center', opacity: name && email ? 1 : 0.5 }]}>
+          <Pressable testID="edit-emp-submit" onPress={submit} disabled={busy || !canSave}
+            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 14, height: 42, justifyContent: 'center', opacity: canSave ? 1 : 0.5 }]}>
             {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Changes</Text>}
           </Pressable>
         </Pressable>
@@ -338,10 +360,12 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
   );
 }
 
-function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry }: any) {
+function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry, required }: any) {
   return (
     <View>
-      <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>{label}</Text>
+      <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>
+        {label}{required ? ' *' : ''}
+      </Text>
       <TextInput testID={testID} value={value} onChangeText={onChange} keyboardType={keyboardType} secureTextEntry={secureTextEntry}
         autoCapitalize="none"
         placeholderTextColor={colors.textMuted}

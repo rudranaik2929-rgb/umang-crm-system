@@ -28,8 +28,47 @@ def verify_password(plain_password, hashed_password):
     # Fallback to plain text for legacy users
     return plain_password == hashed_password
 
-def get_password_hash(password):
-    return pwd_context.hash(password)
+def get_password_hash(password: str) -> str:
+    return pwd_context.hash((password or "").strip())
+
+
+def _password_db_fields(plain_password: str) -> Dict[str, str]:
+    """Write both password_hash and legacy password column when present in Supabase."""
+    hashed = get_password_hash(plain_password)
+    return {"password_hash": hashed, "password": hashed}
+
+
+def _verify_login_password_saved(user_id: str, plain_password: str) -> None:
+    """Confirm the password was persisted and verifies — catches missing DB columns."""
+    rows = sb_select(
+        "users",
+        {"user_id": f"eq.{user_id}", "select": "password_hash,password", "limit": "1"},
+    )
+    if not rows:
+        raise HTTPException(status_code=500, detail="Login record missing after save.")
+    stored = rows[0].get("password_hash") or rows[0].get("password")
+    if not stored or not verify_password(plain_password.strip(), stored):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "Password was not saved correctly. Run supabase/employee_login_migration.sql "
+                "in the Supabase SQL Editor, then create the employee again."
+            ),
+        )
+
+
+def _resolve_user_id_for_employee(employee: Dict[str, Any], email: str) -> Optional[str]:
+    """Find users row by employee.user_id or by login email (fixes orphaned links)."""
+    uid = employee.get("user_id")
+    if uid:
+        found = sb_select("users", {"user_id": f"eq.{uid}", "select": "user_id", "limit": "1"})
+        if found:
+            return uid
+    norm = normalize_email(email)
+    if not norm:
+        return None
+    by_email = sb_select("users", {"email": f"eq.{norm}", "select": "user_id", "limit": "1"})
+    return by_email[0]["user_id"] if by_email else None
 
 def normalize_email(email: Optional[str]) -> str:
     return (email or "").strip().lower()
@@ -510,7 +549,7 @@ class LoanUpdate(BaseModel):
     amount: Optional[float]=None; starred: Optional[bool]=None
 class EmployeeCreate(BaseModel):
     name: str; email: str; phone: Optional[str]=None; role: str; department: Optional[str]=None
-    password: Optional[str]=None
+    password: str
     allowed_pages: Optional[List[str]]=None
 class EmployeeUpdate(BaseModel):
     name: Optional[str]=None; email: Optional[str]=None; phone: Optional[str]=None; role: Optional[str]=None; active: Optional[bool]=None
@@ -3275,10 +3314,10 @@ def _default_pages_for_role(role: str) -> List[str]:
 
 
 def _build_login_row(name: str, email: str, password: str, role: str, employee_id: str, allowed_pages: List[str]) -> Dict[str, Any]:
-    return {
+    plain = password.strip()
+    row = {
         "user_id": gen_id("user"),
         "email": normalize_email(email),
-        "password_hash": get_password_hash(password),
         "name": name,
         "role": role,
         "employee_id": employee_id,
@@ -3287,10 +3326,16 @@ def _build_login_row(name: str, email: str, password: str, role: str, employee_i
         "created_at": now_utc().isoformat(),
         "updated_at": now_utc().isoformat(),
     }
+    row.update(_password_db_fields(plain))
+    return row
 
 
-def _insert_login_or_raise(user_row: Dict[str, Any]) -> Dict[str, Any]:
-    inserted = sb_insert("users", user_row)
+def _insert_login_or_raise(user_row: Dict[str, Any], plain_password: str) -> Dict[str, Any]:
+    row = dict(user_row)
+    inserted = sb_insert("users", row)
+    # Older Supabase projects may lack the legacy `password` column.
+    if not inserted and row.pop("password", None) is not None:
+        inserted = sb_insert("users", row)
     if not inserted:
         raise HTTPException(
             status_code=500,
@@ -3299,7 +3344,17 @@ def _insert_login_or_raise(user_row: Dict[str, Any]) -> Dict[str, Any]:
                 "Run supabase/employee_login_migration.sql in the Supabase SQL Editor, then try again."
             ),
         )
+    user_id = inserted.get("user_id") or user_row.get("user_id")
+    _verify_login_password_saved(user_id, plain_password)
     return inserted
+
+
+def _update_user_login(user_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    updated = sb_update("users", "user_id", user_id, patch)
+    if not updated and "password" in patch:
+        slim = {k: v for k, v in patch.items() if k != "password"}
+        updated = sb_update("users", "user_id", user_id, slim)
+    return updated
 
 
 @api_router.post("/employees")
@@ -3326,9 +3381,10 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
     if existing_emp:
         raise HTTPException(status_code=400, detail="An employee with this email already exists.")
 
-    user_row = _build_login_row(p.name, email, p.password.strip(), p.role, eid, allowed_pages)
+    plain_password = p.password.strip()
+    user_row = _build_login_row(p.name, email, plain_password, p.role, eid, allowed_pages)
     user_id = user_row["user_id"]
-    _insert_login_or_raise(user_row)
+    _insert_login_or_raise(user_row, plain_password)
 
     e = {
         "employee_id": eid, "name": p.name, "email": email, "phone": p.phone,
@@ -3351,79 +3407,73 @@ async def list_employees(cu: User=Depends(get_current_user)):
 @api_router.patch("/employees/{eid}")
 async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager"])
-    data = {k: v for k, v in p.model_dump().items() if v is not None}
+    raw = p.model_dump()
+    data = {k: v for k, v in raw.items() if v is not None}
     if data.get("role") and data["role"] not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
     if "email" in data:
         data["email"] = normalize_email(data["email"])
         if not data["email"]:
             raise HTTPException(status_code=400, detail="Valid login email is required.")
-    if "password" in data:
-        pwd = (data["password"] or "").strip()
-        if pwd and len(pwd) < 4:
-            raise HTTPException(status_code=400, detail="Password must be at least 4 characters.")
-        if not pwd:
-            data.pop("password", None)
 
     rows = sb_select("employees", {"employee_id": f"eq.{eid}", "select": "*", "limit": "1"})
     employee = rows[0] if rows else None
     if not employee:
         raise HTTPException(404, "Employee not found")
 
+    # Active-only toggle from the list does not need a password.
+    patch_keys = {k for k in raw if raw[k] is not None}
+    login_fields_changed = bool(patch_keys - {"active"})
+
+    plain_password = (raw.get("password") or "").strip()
+    data.pop("password", None)
+
+    if login_fields_changed:
+        if len(plain_password) < 4:
+            raise HTTPException(status_code=400, detail="Password is required (minimum 4 characters).")
+
     if data.get("email") and data["email"] != employee.get("email"):
         clash = sb_select("users", {"email": f"eq.{data['email']}", "select": "user_id", "limit": "1"})
-        if clash and clash[0].get("user_id") != employee.get("user_id"):
+        resolved_uid = _resolve_user_id_for_employee(employee, employee.get("email") or "")
+        if clash and clash[0].get("user_id") != resolved_uid:
             raise HTTPException(status_code=400, detail="Another login already uses this email.")
         clash_emp = sb_select("employees", {"email": f"eq.{data['email']}", "select": "employee_id", "limit": "1"})
         if clash_emp and clash_emp[0].get("employee_id") != eid:
             raise HTTPException(status_code=400, detail="Another employee already uses this email.")
 
-    password = data.pop("password", None)
-    linked_user_id = employee.get("user_id")
     allowed_pages = data.get("allowed_pages") or employee.get("allowed_pages") or _default_pages_for_role(employee.get("role") or "telecaller")
     role = data.get("role") or employee.get("role")
     name = data.get("name") or employee.get("name")
     email = data.get("email") or employee.get("email")
 
-    # Create missing login for employees added before login support or failed inserts.
-    if not linked_user_id and password:
-        user_row = _build_login_row(name, email, password, role, eid, allowed_pages)
-        inserted = _insert_login_or_raise(user_row)
-        linked_user_id = inserted["user_id"]
-        data["user_id"] = linked_user_id
-
-    if linked_user_id:
-        user_patch: Dict[str, Any] = {}
-        user_exists = sb_select("users", {"user_id": f"eq.{linked_user_id}", "select": "user_id", "limit": "1"})
-        if not user_exists:
-            if not password:
-                raise HTTPException(
-                    status_code=400,
-                    detail="This employee has no working login yet. Enter a new password and save to create one.",
-                )
-            user_row = _build_login_row(name, email, password, role, eid, allowed_pages)
-            inserted = _insert_login_or_raise(user_row)
+    if login_fields_changed:
+        linked_user_id = _resolve_user_id_for_employee(employee, email)
+        if not linked_user_id:
+            user_row = _build_login_row(name, email, plain_password, role, eid, allowed_pages)
+            inserted = _insert_login_or_raise(user_row, plain_password)
             linked_user_id = inserted["user_id"]
             data["user_id"] = linked_user_id
-            password = None  # already applied on insert
-        if "allowed_pages" in data:
-            user_patch["allowed_pages"] = data["allowed_pages"]
-        if "role" in data:
-            user_patch["role"] = data["role"]
-            user_patch["dashboard_type"] = data["role"]
-        if "name" in data:
-            user_patch["name"] = data["name"]
-        if "email" in data:
-            user_patch["email"] = data["email"]
-        if password:
-            user_patch["password_hash"] = get_password_hash(password)
-        if user_patch:
-            user_patch["updated_at"] = now_utc().isoformat()
-            updated_user = sb_update("users", "user_id", linked_user_id, user_patch)
+        else:
+            data["user_id"] = linked_user_id
+            user_patch: Dict[str, Any] = {
+                "employee_id": eid,
+                "updated_at": now_utc().isoformat(),
+            }
+            user_patch.update(_password_db_fields(plain_password))
+            if "allowed_pages" in data:
+                user_patch["allowed_pages"] = data["allowed_pages"]
+            if "role" in data:
+                user_patch["role"] = data["role"]
+                user_patch["dashboard_type"] = data["role"]
+            if "name" in data:
+                user_patch["name"] = data["name"]
+            if "email" in data:
+                user_patch["email"] = data["email"]
+            updated_user = _update_user_login(linked_user_id, user_patch)
             if not updated_user:
                 raise HTTPException(status_code=500, detail="Could not update employee login.")
-            if password:
-                invalidate_sessions_for_user(linked_user_id)
+            _verify_login_password_saved(linked_user_id, plain_password)
+            invalidate_sessions_for_user(linked_user_id)
 
     updated = sb_update("employees", "employee_id", eid, data) if data else employee
     if not updated:
