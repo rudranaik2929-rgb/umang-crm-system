@@ -9,6 +9,21 @@ import { ROLES, roleLabel, ALL_SERVICES } from '../../src/lib/constants';
 import { Ionicons } from '@expo/vector-icons';
 
 // Sensible default services pre-ticked per role (manager can adjust freely).
+/** Parse allowed_pages from API (array or JSON string from Supabase). */
+function parseAllowedPages(value: unknown): string[] | null {
+  if (value == null) return null;
+  if (Array.isArray(value)) return value.map(String).filter(Boolean);
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) return parsed.map(String).filter(Boolean);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 const ROLE_DEFAULT_SERVICES: Record<string, string[]> = {
   admin: ALL_SERVICES.map((s) => s.key),
   manager: ['pipeline', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
@@ -19,6 +34,12 @@ const ROLE_DEFAULT_SERVICES: Record<string, string[]> = {
   loan: ['loans', 'pipeline'],
   marketing: ['negative', 'pipeline', 'integrations'],
 };
+
+function pagesForEmployee(employee: { allowed_pages?: unknown; role?: string }) {
+  const saved = parseAllowedPages(employee.allowed_pages);
+  if (saved !== null) return saved;
+  return ROLE_DEFAULT_SERVICES[employee.role || 'telecaller'] || ['pipeline'];
+}
 
 export default function Employees() {
   const { colors } = useTheme();
@@ -136,6 +157,7 @@ export default function Employees() {
         employee={editEmployee}
         onClose={() => setEditEmployee(null)}
         onSaved={async () => { setEditEmployee(null); await load(); }}
+        onReload={load}
         colors={colors}
       />
     </View>
@@ -247,7 +269,7 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
   );
 }
 
-function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any) {
+function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colors }: any) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -257,6 +279,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
   const [active, setActive] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sidebarSaved, setSidebarSaved] = useState(false);
 
   useEffect(() => {
     if (!visible || !employee) return;
@@ -265,11 +288,10 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
     setPhone(employee.phone || '');
     setPassword('');
     setRole(employee.role || 'telecaller');
-    setPages(Array.isArray(employee.allowed_pages) && employee.allowed_pages.length
-      ? employee.allowed_pages
-      : ROLE_DEFAULT_SERVICES[employee.role] || ['pipeline']);
+    setPages(pagesForEmployee(employee));
     setActive(employee.active !== false);
     setError(null);
+    setSidebarSaved(false);
   }, [visible, employee]);
 
   const togglePage = (key: string) => {
@@ -280,9 +302,13 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
     if (!employee?.employee_id) return;
     setBusy(true);
     setError(null);
+    setSidebarSaved(false);
     try {
-      await api.patch(`/employees/${employee.employee_id}`, { allowed_pages: pages });
-      onSaved();
+      const res = await api.patch(`/employees/${employee.employee_id}`, { allowed_pages: pages });
+      const saved = parseAllowedPages(res.data?.allowed_pages);
+      if (saved !== null) setPages(saved);
+      setSidebarSaved(true);
+      await onReload?.();
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Could not update sidebar access.');
     } finally { setBusy(false); }
@@ -291,27 +317,32 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
   const submit = async () => {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedPassword = password.trim();
-    if (!employee?.employee_id || !name.trim() || !trimmedEmail || trimmedPassword.length < 4) return;
+    if (!employee?.employee_id || !name.trim() || !trimmedEmail) return;
+    if (trimmedPassword.length > 0 && trimmedPassword.length < 4) {
+      setError('Password must be at least 4 characters when changing it.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
-      await api.patch(`/employees/${employee.employee_id}`, {
+      const payload: Record<string, unknown> = {
         name: name.trim(),
         email: trimmedEmail,
         phone: phone.trim() || undefined,
-        password: trimmedPassword,
         role,
         active,
         allowed_pages: pages,
-      });
+      };
+      if (trimmedPassword.length >= 4) payload.password = trimmedPassword;
+      await api.patch(`/employees/${employee.employee_id}`, payload);
       onSaved();
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Could not update employee. Enter password (min 4 characters).');
+      setError(typeof detail === 'string' ? detail : 'Could not update employee.');
     } finally { setBusy(false); }
   };
 
-  const canSave = !!name.trim() && !!email.trim() && password.trim().length >= 4;
+  const canSave = !!name.trim() && !!email.trim();
 
   if (!employee) return null;
 
@@ -321,12 +352,21 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
         <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '88%' }]} onPress={(e: any) => e?.stopPropagation?.()}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Employee</Text>
           <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
-            Password is required when saving name, email, or role. Sidebar checkboxes can be saved separately without password.
+            Use &quot;Save Sidebar Access Only&quot; for checkboxes — no password needed. Profile save: leave password blank to keep the current login password.
           </Text>
           <ScrollView style={{ marginTop: 4 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <Field label="FULL NAME" testID="edit-emp-name" value={name} onChange={setName} colors={colors} />
             <Field label="LOGIN EMAIL" testID="edit-emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
-            <Field label="LOGIN PASSWORD (REQUIRED FOR PROFILE SAVE)" testID="edit-emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required showPasswordToggle />
+            <Field
+              label="NEW PASSWORD (OPTIONAL — LEAVE BLANK TO KEEP CURRENT)"
+              testID="edit-emp-password"
+              value={password}
+              onChange={setPassword}
+              colors={colors}
+              secureTextEntry
+              showPasswordToggle
+              autoComplete="new-password"
+            />
             <Field label="PHONE" testID="edit-emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE</Text>
             <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -363,9 +403,14 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
             </View>
           </ScrollView>
           {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
+          {sidebarSaved ? (
+            <Text style={{ color: colors.positive, fontSize: 12, marginTop: 10 }}>Sidebar access saved.</Text>
+          ) : null}
           <Pressable testID="edit-emp-save-sidebar" onPress={saveSidebarOnly} disabled={busy}
             style={[styles.outlineBtn, { borderColor: colors.primary, marginTop: 14, height: 40, justifyContent: 'center' }]}>
-            <Text style={{ color: colors.primary, fontWeight: '600', fontSize: 12 }}>Save Sidebar Access Only</Text>
+            {busy ? <ActivityIndicator color={colors.primary} /> : (
+              <Text style={{ color: colors.primary, fontWeight: '600', fontSize: 12 }}>Save Sidebar Access Only</Text>
+            )}
           </Pressable>
           <Pressable testID="edit-emp-submit" onPress={submit} disabled={busy || !canSave}
             style={[styles.primary, { backgroundColor: colors.primary, marginTop: 10, height: 42, justifyContent: 'center', opacity: canSave ? 1 : 0.5 }]}>
@@ -377,7 +422,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
   );
 }
 
-function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry, required, showPasswordToggle }: any) {
+function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry, required, showPasswordToggle, autoComplete }: any) {
   const [show, setShow] = React.useState(false);
   return (
     <View>
@@ -392,6 +437,7 @@ function Field({ label, value, onChange, colors, testID, keyboardType, secureTex
           keyboardType={keyboardType}
           secureTextEntry={secureTextEntry && !show}
           autoCapitalize="none"
+          autoComplete={autoComplete}
           placeholderTextColor={colors.textMuted}
           style={{
             flex: 1, height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8,

@@ -3425,6 +3425,30 @@ async def mark_notification_read(notification_id: str, cu: User=Depends(get_curr
     return updated or {"notification_id": notification_id, "is_read": True}
 
 # ---- Employees ----
+def _coerce_allowed_pages(value: Any) -> List[str]:
+    """Normalize jsonb / JSON string / list from Supabase into a string list."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed if x]
+        except (json.JSONDecodeError, TypeError):
+            return []
+        return []
+    if isinstance(value, list):
+        return [str(x) for x in value if x]
+    return []
+
+
+def _employee_allowed_pages(employee: Dict[str, Any]) -> List[str]:
+    """Pages stored on the employee row; fall back to role defaults only when unset."""
+    if employee.get("allowed_pages") is None:
+        return _default_pages_for_role(employee.get("role") or "telecaller")
+    return _coerce_allowed_pages(employee.get("allowed_pages"))
+
+
 def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
@@ -3529,13 +3553,21 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
 
 @api_router.get("/employees")
 async def list_employees(cu: User=Depends(get_current_user)):
-    return sb_select("employees", {"select": "*", "order": "created_at.desc"})
+    rows = sb_select("employees", {"select": "*", "order": "created_at.desc"})
+    for row in rows:
+        row["allowed_pages"] = _employee_allowed_pages(row)
+    return rows
 
 @api_router.patch("/employees/{eid}")
 async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager"])
-    raw = p.model_dump()
+    raw = p.model_dump(exclude_unset=True)
+    plain_password = (raw.pop("password", None) or "").strip()
     data = {k: v for k, v in raw.items() if v is not None}
+    if "allowed_pages" in raw:
+        # Empty list is a valid save (manager cleared all boxes).
+        data["allowed_pages"] = _coerce_allowed_pages(raw["allowed_pages"])
+
     if data.get("role") and data["role"] not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
     if "email" in data:
@@ -3548,16 +3580,12 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
     if not employee:
         raise HTTPException(404, "Employee not found")
 
-    # Sidebar access / active toggle alone — no password required.
-    patch_keys = {k for k in raw if raw[k] is not None}
+    patch_keys = set(data.keys())
     access_only = patch_keys <= {"allowed_pages"} or patch_keys <= {"active", "allowed_pages"} or patch_keys == {"active"}
     login_fields_changed = bool(patch_keys) and not access_only
 
-    plain_password = (raw.get("password") or "").strip()
-    data.pop("password", None)
-
-    if login_fields_changed and len(plain_password) < 4:
-        raise HTTPException(status_code=400, detail="Password is required when changing name, email, role, or phone (minimum 4 characters).")
+    if login_fields_changed and plain_password and len(plain_password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters when provided.")
 
     if data.get("email") and data["email"] != employee.get("email"):
         clash = sb_select("users", {"email": f"eq.{data['email']}", "select": "user_id", "limit": "1"})
@@ -3568,14 +3596,20 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
         if clash_emp and clash_emp[0].get("employee_id") != eid:
             raise HTTPException(status_code=400, detail="Another employee already uses this email.")
 
-    allowed_pages = data.get("allowed_pages") or employee.get("allowed_pages") or _default_pages_for_role(employee.get("role") or "telecaller")
+    if "allowed_pages" in data:
+        allowed_pages = data["allowed_pages"]
+    else:
+        allowed_pages = _employee_allowed_pages(employee)
     role = data.get("role") or employee.get("role")
     name = data.get("name") or employee.get("name")
     email = data.get("email") or employee.get("email")
 
     linked_user_id = _resolve_user_id_for_employee(employee, email)
+    if linked_user_id and not employee.get("user_id"):
+        data["user_id"] = linked_user_id
 
-    if access_only and linked_user_id and "allowed_pages" in data:
+    # Sidebar / active-only: sync login row so employee sees new menu on next load.
+    if "allowed_pages" in data and linked_user_id:
         _update_user_login(linked_user_id, {
             "allowed_pages": data["allowed_pages"],
             "updated_at": now_utc().isoformat(),
@@ -3583,6 +3617,11 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
 
     if login_fields_changed:
         if not linked_user_id:
+            if len(plain_password) < 4:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Password is required to create login for this employee (minimum 4 characters).",
+                )
             user_row = _build_login_row(name, email, plain_password, role, eid, allowed_pages)
             inserted = _insert_login_or_raise(user_row, plain_password)
             linked_user_id = inserted["user_id"]
@@ -3593,7 +3632,8 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
                 "employee_id": eid,
                 "updated_at": now_utc().isoformat(),
             }
-            user_patch.update(_password_db_fields(plain_password))
+            if plain_password:
+                user_patch.update(_password_db_fields(plain_password))
             if "allowed_pages" in data:
                 user_patch["allowed_pages"] = data["allowed_pages"]
             if "role" in data:
@@ -3606,12 +3646,17 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
             updated_user = _update_user_login(linked_user_id, user_patch)
             if not updated_user:
                 raise HTTPException(status_code=500, detail="Could not update employee login.")
-            _verify_login_password_saved(linked_user_id, plain_password)
-            invalidate_sessions_for_user(linked_user_id)
+            if plain_password:
+                _verify_login_password_saved(linked_user_id, plain_password)
+                invalidate_sessions_for_user(linked_user_id)
+
+    if data:
+        data["updated_at"] = now_utc().isoformat()
 
     updated = sb_update("employees", "employee_id", eid, data) if data else employee
     if not updated:
         raise HTTPException(500, "Could not update employee.")
+    updated["allowed_pages"] = _employee_allowed_pages(updated)
     return updated
 
 @api_router.delete("/employees/{eid}")
