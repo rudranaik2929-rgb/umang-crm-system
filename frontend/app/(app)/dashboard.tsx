@@ -43,6 +43,7 @@ export default function Dashboard() {
   const [graphData, setGraphData] = useState<any>(cached?.graphData ?? null);
   const [leads, setLeads] = useState<any[]>(cached?.leads ?? []);
   const [employees, setEmployees] = useState<any[]>(cached?.employees ?? []);
+  const [buckets, setBuckets] = useState<any>(cached?.buckets ?? null);
   const [loading, setLoading] = useState(!cached);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [leadsBucket, setLeadsBucket] = useState<string | null>(null);
@@ -52,21 +53,24 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [s, g, l, e] = await Promise.all([
+      const [s, g, l, e, b] = await Promise.all([
         api.get('/stats/dashboard'),
         api.get('/stats/dashboard/graph'),
         api.get('/leads'),
         api.get('/stats/employees'),
+        api.get('/stats/lead-buckets'),
       ]);
       const nextStats = s.data || {};
       const nextGraph = g.data || {};
       const nextLeads = Array.isArray(l.data) ? l.data : [];
       const nextEmployees = Array.isArray(e.data) ? e.data : [];
+      const nextBuckets = b.data || {};
       setStats(nextStats);
       setGraphData(nextGraph);
       setLeads(nextLeads);
       setEmployees(nextEmployees);
-      setSnapshot('dashboard', { stats: nextStats, graphData: nextGraph, leads: nextLeads, employees: nextEmployees });
+      setBuckets(nextBuckets);
+      setSnapshot('dashboard', { stats: nextStats, graphData: nextGraph, leads: nextLeads, employees: nextEmployees, buckets: nextBuckets });
     } catch (err: any) {
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail;
@@ -103,8 +107,9 @@ export default function Dashboard() {
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
     const activeLeads = leads.filter((l) => l.status !== 'negative');
-    const totalLeads = Number(stats?.total_leads ?? 0);
-    const todayStr = new Date().toISOString().slice(0, 10);
+    // Bucket counts share the exact filter+dedupe used by the opened lists,
+    // so each metric box number equals the list it opens.
+    const totalLeads = Number(buckets?.all ?? stats?.total_leads ?? 0);
 
     const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
     const cold = activeLeads.filter((l) => COLD_STAGES.includes(l.stage)).length || Number(sd.new || 0);
@@ -116,14 +121,14 @@ export default function Dashboard() {
       hot,
       cold,
       conversionScore,
-      newToday: leads.filter((l) => l.created_at?.slice(0, 10) === todayStr).length,
-      positiveLeads: Number(stats?.positive_leads || hot || 0),
-      negativeLeads: Number(stats?.negative_leads || 0),
-      visits: Number(stats?.site_visits || 0),
-      completedVisits: Number(stats?.completed_visits || 0),
+      newToday: Number(buckets?.new_today ?? 0),
+      positiveLeads: Number(buckets?.positive ?? stats?.positive_leads ?? 0),
+      negativeLeads: Number(buckets?.not_interested ?? stats?.negative_leads ?? 0),
+      registrationLeads: Number(buckets?.registration ?? stats?.registration_leads ?? 0),
+      bookingLeads: Number(buckets?.booking ?? 0),
       bookings: Number(stats?.bookings || 0),
       confirmedBookings: Number(stats?.confirmed_bookings || 0),
-      followUps: Number(stats?.follow_ups || 0),
+      followUps: Number(buckets?.follow_up ?? stats?.follow_ups ?? 0),
       pendingFollowUps: Number(stats?.pending_follow_ups || 0),
       loans: Number(stats?.loans || 0),
       disbursedLoans: Number(stats?.disbursed_loans || 0),
@@ -131,7 +136,7 @@ export default function Dashboard() {
       campaigns: Number(stats?.campaigns || 0),
       revenue: Number(stats?.revenue_pipeline || 0),
     };
-  }, [leads, stats]);
+  }, [leads, stats, buckets]);
 
   if (loading) {
     return (
@@ -204,8 +209,8 @@ export default function Dashboard() {
           <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Tap for full list" onPress={() => setLeadsBucket('new_today')} />
           <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Tap for full list" onPress={() => setLeadsBucket('positive')} />
           <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Tap for full list" onPress={() => setLeadsBucket('not_interested')} />
-          <MetricCard icon="ribbon-outline" label="Registration" value={Number(stats?.registration_leads || 0)} accent="#0891B2" helper="Tap for full list" onPress={() => setLeadsBucket('registration')} />
-          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper="Tap for full list" onPress={() => setLeadsBucket('booking')} />
+          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Tap for full list" onPress={() => setLeadsBucket('registration')} />
+          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Tap for full list" onPress={() => setLeadsBucket('booking')} />
           <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} />
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} onPress={() => router.push('/(app)/loans' as any)} />
           <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} onPress={() => router.push('/(app)/employees' as any)} />

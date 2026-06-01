@@ -44,6 +44,18 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
         : '/(app)/telecaller?tab=followups';
     router.push(route as any);
   };
+  // Mark the lead, store a real follow-up record, then jump to the Follow Ups tab.
+  const moveToFollowUp = async (payload: any, action: string) => {
+    if (!leadId) return;
+    setBusy(action);
+    try {
+      await api.patch(`/leads/${leadId}`, payload);
+      await api.post(`/leads/${leadId}/follow-up`, {}).catch(() => {});
+      goFollowUps();
+    } finally {
+      setBusy(null);
+    }
+  };
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
@@ -526,8 +538,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       color={colors.positive}
                     />
                     <CategoryBtn 
-                      label="Follow Up" 
-                      icon="calendar-outline" 
+                      label="Visited" 
+                      icon="location-outline" 
                       active={activeCategory === 'visited'} 
                       onPress={() => selectCategory('visited')}
                       color={colors.info}
@@ -560,10 +572,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                           <SubActionBtn 
                             label="Cold Lead → Follow Up" 
                             sub="Mark positive and open Follow Ups"
-                            onPress={async () => {
-                              await updateLead({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold');
-                              goFollowUps();
-                            }}
+                            onPress={() => moveToFollowUp({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold')}
                             busy={busy === 'cold'}
                             color={colors.positive}
                           />
@@ -626,12 +635,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       {activeCategory === 'visited' && (
                         <View style={styles.subGrid}>
                           <SubActionBtn 
-                            label="Schedule Follow Up" 
-                            sub="Open follow-ups workspace"
-                            onPress={async () => {
-                              await updateLead({ stage: 'positive', status: 'active' }, 'follow_up');
-                              goFollowUps();
-                            }}
+                            label="Visited → Schedule Follow Up" 
+                            sub="Mark visited and open Follow Ups"
+                            onPress={() => moveToFollowUp({ stage: 'positive', status: 'active' }, 'follow_up')}
                             busy={busy === 'follow_up'}
                             color={colors.info}
                           />

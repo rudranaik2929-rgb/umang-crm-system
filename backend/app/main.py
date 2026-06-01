@@ -521,6 +521,9 @@ class SiteVisitUpdate(BaseModel):
 class SiteVisitFollowUpCreate(BaseModel):
     visit_id: str; follow_up_date: str; follow_up_time: str; follow_up_day: str
     notes: Optional[str]=None
+class LeadFollowUpCreate(BaseModel):
+    follow_up_date: Optional[str]=None; follow_up_time: Optional[str]=None
+    follow_up_day: Optional[str]=None; notes: Optional[str]=None
 class BookingCreate(BaseModel):
     lead_id: str; property_name: str; booking_amount: float=0; token_received: float=0
     unit_number: Optional[str]=None; tower: Optional[str]=None
@@ -2583,23 +2586,12 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
         create_notification(assigned_to, "Broker lead assigned", f"{lead.get('name')} is ready to work.", lead_id=lead_id)
     return updated
 
-@api_router.get("/leads/filtered")
-async def list_leads_filtered(
-    bucket: str = "all",
-    limit: int = 500,
-    cu: User = Depends(get_current_user),
-):
-    """Dashboard drill-down lists: all, new_today, positive, not_interested, registration, booking."""
-    bucket_key = (bucket or "all").strip().lower()
-    allowed = {"all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up"}
-    if bucket_key not in allowed:
-        raise HTTPException(400, detail=f"bucket must be one of: {', '.join(sorted(allowed))}")
+LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up"]
 
-    limit = min(max(limit, 1), 500)
-    today = now_utc().date().isoformat()
-    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
-    all_leads = merge_leads_with_cache(db_leads)
 
+def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: str) -> List[Dict[str, Any]]:
+    """Single source of truth for dashboard bucket lists + counts.
+    Always deduped so the metric box number == the opened list length."""
     if bucket_key == "new_today":
         filtered = [l for l in all_leads if (l.get("created_at") or "")[:10] == today]
     elif bucket_key == "not_interested":
@@ -2609,15 +2601,43 @@ async def list_leads_filtered(
     elif bucket_key == "registration":
         filtered = [l for l in all_leads if l.get("stage") == "registration"]
     elif bucket_key == "booking":
-        filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"]]
+        filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"] and l.get("status") != "negative"]
     elif bucket_key == "follow_up":
         filtered = [l for l in all_leads if l.get("follow_up_at")]
     else:
         filtered = list(all_leads)
-
     filtered = dedupe_leads(filtered)
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return filtered
+
+
+@api_router.get("/leads/filtered")
+async def list_leads_filtered(
+    bucket: str = "all",
+    limit: int = 500,
+    cu: User = Depends(get_current_user),
+):
+    """Dashboard drill-down lists: all, new_today, positive, not_interested, registration, booking, follow_up."""
+    bucket_key = (bucket or "all").strip().lower()
+    if bucket_key not in set(LEAD_BUCKET_KEYS):
+        raise HTTPException(400, detail=f"bucket must be one of: {', '.join(LEAD_BUCKET_KEYS)}")
+
+    limit = min(max(limit, 1), 500)
+    today = now_utc().date().isoformat()
+    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
+    all_leads = merge_leads_with_cache(db_leads)
+    filtered = filter_lead_bucket(all_leads, bucket_key, today)
     return {"bucket": bucket_key, "total": len(filtered), "leads": filtered[:limit]}
+
+
+@api_router.get("/stats/lead-buckets")
+async def stats_lead_buckets(cu: User = Depends(get_current_user)):
+    """Counts for every dashboard metric box, computed with the EXACT same
+    filter+dedupe as /leads/filtered so each box number matches its opened list."""
+    today = now_utc().date().isoformat()
+    db_leads = sb_select("leads", {"select": "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,follow_up_at,created_at"})
+    all_leads = merge_leads_with_cache(db_leads)
+    return {key: len(filter_lead_bucket(all_leads, key, today)) for key in LEAD_BUCKET_KEYS}
 
 
 @api_router.get("/leads/by-platform/{platform}")
@@ -3006,6 +3026,54 @@ async def update_visit(visit_id: str, p: SiteVisitUpdate, cu: User=Depends(get_c
         else:
             sync_lead_stage(lead_id, "site_visit", force=True)
     return updated
+
+@api_router.post("/leads/{lead_id}/follow-up")
+async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = Depends(get_current_user)):
+    """Schedule a follow-up straight from a lead (cold / visited) — no site visit needed.
+    Stores a visit_followups row, sets lead.follow_up_at, and logs the activity so it
+    shows in the Follow Ups tab and dashboard counts."""
+    rows = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
+    lead = rows[0] if rows else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+
+    if p.follow_up_date and p.follow_up_time:
+        follow_up_at = parse_follow_up_at(p.follow_up_date, p.follow_up_time)
+    else:
+        # Default: tomorrow 11:00 so the lead immediately appears in the queue.
+        follow_up_at = (now_utc() + timedelta(days=1)).replace(hour=11, minute=0, second=0, microsecond=0)
+    parts = follow_up_display_parts(follow_up_at.isoformat())
+
+    followup = {
+        "followup_id": gen_id("fup"),
+        "visit_id": gen_id("fuv"),  # synthetic id keeps NOT NULL happy on older DBs
+        "lead_id": lead_id,
+        "lead_name": lead.get("name", "Lead"),
+        "follow_up_date": p.follow_up_date or parts["follow_up_date"],
+        "follow_up_time": p.follow_up_time or parts["follow_up_time"],
+        "follow_up_day": p.follow_up_day or parts["follow_up_day"],
+        "follow_up_at": follow_up_at.isoformat(),
+        "status": "scheduled",
+        "notes": p.notes,
+        "created_by": cu.acting_as_employee_id or cu.user_id,
+        "created_at": now_utc().isoformat(),
+    }
+    result = sb_insert("visit_followups", followup)
+    followup_record = result or followup
+    SESSION_CACHE["followups"].insert(0, followup_record)
+
+    lead_update = {"follow_up_at": follow_up_at.isoformat(), "updated_at": now_utc().isoformat()}
+    sb_update("leads", "lead_id", lead_id, lead_update)
+    update_cached_lead(lead_id, lead_update)
+    activity = log_activity(
+        cu,
+        "lead_followup",
+        f"Follow-up scheduled for {parts['follow_up_day']} {parts['follow_up_date']} at {parts['follow_up_time']}.",
+        lead_id=lead_id,
+    )
+    SESSION_CACHE["activities"].insert(0, activity)
+    return followup_record
+
 
 @api_router.post("/visit-followups")
 async def create_visit_followup(p: SiteVisitFollowUpCreate, cu: User=Depends(get_current_user)):
