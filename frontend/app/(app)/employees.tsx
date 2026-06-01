@@ -13,7 +13,8 @@ const ROLE_DEFAULT_SERVICES: Record<string, string[]> = {
   admin: ALL_SERVICES.map((s) => s.key),
   manager: ['pipeline', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
   telecaller: ['telecaller', 'pipeline', 'negative'],
-  site_visit: ['visits', 'pipeline'],
+  site_visit: ['sales-executive', 'telecaller', 'pipeline', 'follow-ups'],
+  sales_executive: ['sales-executive', 'telecaller', 'pipeline', 'follow-ups'],
   booking: ['bookings', 'pipeline'],
   loan: ['loans', 'pipeline'],
   marketing: ['negative', 'pipeline', 'integrations'],
@@ -203,7 +204,7 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
           <ScrollView style={{ marginTop: 4 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <Field label="FULL NAME" testID="emp-name" value={name} onChange={setName} colors={colors} />
             <Field label="LOGIN EMAIL" testID="emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
-            <Field label="LOGIN PASSWORD (REQUIRED)" testID="emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required />
+            <Field label="LOGIN PASSWORD (REQUIRED)" testID="emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required showPasswordToggle />
             <Field label="PHONE" testID="emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE (DASHBOARD TYPE)</Text>
             <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -275,6 +276,18 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
     setPages((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]));
   };
 
+  const saveSidebarOnly = async () => {
+    if (!employee?.employee_id) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.patch(`/employees/${employee.employee_id}`, { allowed_pages: pages });
+      onSaved();
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Could not update sidebar access.');
+    } finally { setBusy(false); }
+  };
+
   const submit = async () => {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedPassword = password.trim();
@@ -308,12 +321,12 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
         <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '88%' }]} onPress={(e: any) => e?.stopPropagation?.()}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Employee</Text>
           <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
-            Enter the login password every time you save (required). Use the same password to keep it, or type a new one to reset.
+            Password is required when saving name, email, or role. Sidebar checkboxes can be saved separately without password.
           </Text>
           <ScrollView style={{ marginTop: 4 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <Field label="FULL NAME" testID="edit-emp-name" value={name} onChange={setName} colors={colors} />
             <Field label="LOGIN EMAIL" testID="edit-emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
-            <Field label="LOGIN PASSWORD (REQUIRED)" testID="edit-emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required />
+            <Field label="LOGIN PASSWORD (REQUIRED FOR PROFILE SAVE)" testID="edit-emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required showPasswordToggle />
             <Field label="PHONE" testID="edit-emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE</Text>
             <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
@@ -350,9 +363,13 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
             </View>
           </ScrollView>
           {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
+          <Pressable testID="edit-emp-save-sidebar" onPress={saveSidebarOnly} disabled={busy}
+            style={[styles.outlineBtn, { borderColor: colors.primary, marginTop: 14, height: 40, justifyContent: 'center' }]}>
+            <Text style={{ color: colors.primary, fontWeight: '600', fontSize: 12 }}>Save Sidebar Access Only</Text>
+          </Pressable>
           <Pressable testID="edit-emp-submit" onPress={submit} disabled={busy || !canSave}
-            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 14, height: 42, justifyContent: 'center', opacity: canSave ? 1 : 0.5 }]}>
-            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Changes</Text>}
+            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 10, height: 42, justifyContent: 'center', opacity: canSave ? 1 : 0.5 }]}>
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Profile & Password</Text>}
           </Pressable>
         </Pressable>
       </Pressable>
@@ -360,16 +377,36 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, colors }: any)
   );
 }
 
-function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry, required }: any) {
+function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry, required, showPasswordToggle }: any) {
+  const [show, setShow] = React.useState(false);
   return (
     <View>
       <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>
         {label}{required ? ' *' : ''}
       </Text>
-      <TextInput testID={testID} value={value} onChangeText={onChange} keyboardType={keyboardType} secureTextEntry={secureTextEntry}
-        autoCapitalize="none"
-        placeholderTextColor={colors.textMuted}
-        style={{ height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt }} />
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <TextInput
+          testID={testID}
+          value={value}
+          onChangeText={onChange}
+          keyboardType={keyboardType}
+          secureTextEntry={secureTextEntry && !show}
+          autoCapitalize="none"
+          placeholderTextColor={colors.textMuted}
+          style={{
+            flex: 1, height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
+            padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt,
+          }}
+        />
+        {showPasswordToggle ? (
+          <Pressable
+            onPress={() => setShow((v) => !v)}
+            style={[styles.eyeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+          >
+            <Ionicons name={show ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.textSecondary} />
+          </Pressable>
+        ) : null}
+      </View>
     </View>
   );
 }
@@ -392,4 +429,6 @@ const styles = StyleSheet.create({
   chip: { paddingHorizontal: 12, height: 28, borderRadius: 999, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   checkRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 12, height: 42, borderRadius: 8, borderWidth: 1 },
   checkbox: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
+  eyeBtn: { width: 40, height: 40, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  outlineBtn: { alignItems: 'center', borderRadius: 8, borderWidth: 1 },
 });

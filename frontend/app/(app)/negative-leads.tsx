@@ -32,7 +32,7 @@ export default function NegativeLeads() {
 
   return (
     <View style={{ flex: 1 }}>
-      <TopBar title="Negative Leads" subtitle="Reservoir for future re-engagement campaigns" />
+      <TopBar title="Not Interested" subtitle="Leads marked not interested — re-engage when needed" />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
         {loading ? <ActivityIndicator color={colors.primary} /> :
           leads.length === 0 ? (

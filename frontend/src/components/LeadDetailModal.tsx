@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform } from 'react-native';
+import { useRouter } from 'expo-router';
 import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
@@ -26,6 +27,7 @@ interface Props {
 
 export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000 }: Props) {
   const { colors } = useTheme();
+  const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
@@ -134,22 +136,6 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     setBusy('advance');
     try {
       await api.post(`/leads/${leadId}/advance`);
-      await load(true);
-      onChanged?.();
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const scheduleVisit = async () => {
-    if (!leadId) return;
-    setBusy('site_visit');
-    try {
-      // Default: tomorrow at 11:00 AM local
-      const d = new Date();
-      d.setDate(d.getDate() + 1);
-      d.setHours(11, 0, 0, 0);
-      await api.post('/visits', { lead_id: leadId, scheduled_at: d.toISOString() });
       await load(true);
       onChanged?.();
     } finally {
@@ -524,8 +510,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       color={colors.positive}
                     />
                     <CategoryBtn 
-                      label="Visited" 
-                      icon="location-outline" 
+                      label="Follow Up" 
+                      icon="calendar-outline" 
                       active={activeCategory === 'visited'} 
                       onPress={() => selectCategory('visited')}
                       color={colors.info}
@@ -556,11 +542,13 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       {activeCategory === 'positive' && (
                         <View style={styles.subGrid}>
                           <SubActionBtn 
-                            label="Cold Lead" 
-                            sub="Interested but not urgent"
+                            label="Cold Lead → Follow Up" 
+                            sub="Mark positive and open Follow Ups"
                             onPress={async () => {
                               await updateLead({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold');
+                              onChanged?.();
                               onClose();
+                              router.push('/(app)/follow-ups' as any);
                             }}
                             busy={busy === 'cold'}
                             color={colors.positive}
@@ -624,13 +612,15 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       {activeCategory === 'visited' && (
                         <View style={styles.subGrid}>
                           <SubActionBtn 
-                            label="Site Visit Done" 
-                            sub="Move to positive for follow-up"
+                            label="Schedule Follow Up" 
+                            sub="Open follow-ups workspace"
                             onPress={async () => {
-                              await updateLead({ stage: 'positive' }, 'visit_done');
+                              await updateLead({ stage: 'positive', status: 'active' }, 'follow_up');
+                              onChanged?.();
                               onClose();
+                              router.push('/(app)/follow-ups' as any);
                             }}
-                            busy={busy === 'visit_done'}
+                            busy={busy === 'follow_up'}
                             color={colors.info}
                           />
                           <SubActionBtn 

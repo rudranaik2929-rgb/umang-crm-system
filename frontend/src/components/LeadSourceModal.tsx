@@ -107,6 +107,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
   const [leadsError, setLeadsError] = useState<string | null>(null);
   const [openLeadId, setOpenLeadId] = useState<string | null>(null);
   const [metaStatus, setMetaStatus] = useState<string | null>(null);
+  const [leadFilter, setLeadFilter] = useState<string>('all');
+  const [listTotal, setListTotal] = useState(0);
 
   const backdropAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(60)).current;
@@ -120,6 +122,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     setPlatformLeads([]);
     setLeadsError(null);
     setOpenLeadId(null);
+    setLeadFilter('all');
+    setListTotal(0);
   }, []);
 
   const canSyncIntegrations = ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
@@ -154,21 +158,25 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     }
   }, [canSyncIntegrations]);
 
-  const loadPlatformLeads = useCallback(async (platform: PlatformRow) => {
+  const loadPlatformLeads = useCallback(async (platform: PlatformRow, filter: string = leadFilter) => {
     setLeadsLoading(true);
     setLeadsError(null);
     setSelectedPlatform(platform);
     setView('leads');
     try {
-      const res = await api.get(`/leads/by-platform/${platform.platform}`, { params: { limit: 200 } });
+      const params: Record<string, any> = { limit: 500 };
+      if (filter && filter !== 'all') params.status_filter = filter;
+      const res = await api.get(`/leads/by-platform/${platform.platform}`, { params });
       setPlatformLeads(Array.isArray(res.data?.leads) ? res.data.leads : []);
+      setListTotal(Number(res.data?.total ?? 0));
     } catch (e: any) {
       setLeadsError(e?.response?.data?.detail || 'Could not load leads.');
       setPlatformLeads([]);
+      setListTotal(0);
     } finally {
       setLeadsLoading(false);
     }
-  }, []);
+  }, [leadFilter]);
 
   const handlePlatformPress = useCallback(async (platform: PlatformRow) => {
     // Open list immediately — do not wait for Housing/Meta sync (can take 30s+).
@@ -291,7 +299,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                 </Text>
                 <Text style={[st.headerSub, { color: colors.textMuted }]}>
                   {view === 'leads' && selectedPlatform
-                    ? `${platformLeads.length} real leads · tap to open details`
+                    ? `${listTotal || platformLeads.length} leads · tap to open details`
                     : data
                       ? `${data.total} classified leads · tap a platform`
                       : loading
@@ -349,7 +357,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                       <View style={[st.miniBarFill, { backgroundColor: meta.color, width: `${pct}%` }]} />
                     </View>
                     <Text style={[st.platformDetail, { color: colors.textMuted }]}>
-                      {platform.active} active · {platform.negative} negative
+                      {platform.active} active · {platform.negative} not interested
                     </Text>
                     {platform.platform === 'housing' && platform.count > 0 ? (
                       <Text style={[st.realBadge, { color: meta.color, borderColor: meta.color + '44', backgroundColor: meta.color + '12' }]}>
@@ -371,7 +379,32 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
               })}
             </View>
           )
-        ) : leadsLoading ? (
+        ) : (
+          <>
+          <View style={st.filterRow}>
+            {[
+              { key: 'all', label: 'All' },
+              { key: 'positive', label: 'Positive' },
+              { key: 'not_interested', label: 'Not Interested' },
+              { key: 'registration', label: 'Registration' },
+              { key: 'booking', label: 'Booking' },
+            ].map((f) => (
+              <Pressable
+                key={f.key}
+                onPress={() => {
+                  setLeadFilter(f.key);
+                  if (selectedPlatform) loadPlatformLeads(selectedPlatform, f.key);
+                }}
+                style={[st.filterChip, {
+                  borderColor: leadFilter === f.key ? colors.primary : colors.border,
+                  backgroundColor: leadFilter === f.key ? colors.primary + '18' : colors.surfaceAlt,
+                }]}
+              >
+                <Text style={{ color: leadFilter === f.key ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>{f.label}</Text>
+              </Pressable>
+            ))}
+          </View>
+        {leadsLoading ? (
           <View style={st.centerBox}>
             <ActivityIndicator color={colors.primary} />
             <Text style={{ color: colors.textMuted, marginTop: 12 }}>Loading {selectedPlatform?.label} leads…</Text>
@@ -451,6 +484,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
             })}
           </ScrollView>
         )}
+          </>
+        )}
 
         {view === 'platforms' ? (
           <View style={[st.footer, { borderTopColor: colors.border }]}>
@@ -463,7 +498,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
             <View style={st.footerItem}>
               <View style={[st.footerDot, { backgroundColor: colors.negative }]} />
               <Text style={[st.footerText, { color: colors.textSecondary }]}>
-                Negative: {data ? data.platforms.reduce((a, p) => a + p.negative, 0) : 0}
+                Not interested: {data ? data.platforms.reduce((a, p) => a + p.negative, 0) : 0}
               </Text>
             </View>
             <View style={st.footerItem}>
@@ -599,4 +634,6 @@ const st = StyleSheet.create({
   footerItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   footerDot: { width: 8, height: 8, borderRadius: 4 },
   footerText: { fontSize: 12, fontWeight: '600' },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  filterChip: { paddingHorizontal: 12, height: 30, borderRadius: 99, borderWidth: 1, justifyContent: 'center' },
 });

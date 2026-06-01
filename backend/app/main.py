@@ -138,7 +138,7 @@ app.add_middleware(
 api_router = APIRouter(prefix="/api")
 
 STAGES = ["new","assigned","positive","site_visit","booking","loan","registration","closed"]
-ROLES = ["admin","manager","telecaller","site_visit","booking","loan","marketing"]
+ROLES = ["admin","manager","telecaller","site_visit","sales_executive","booking","loan","marketing"]
 
 # ---- Integration Config (from .env) ----
 INTERAKT_API_KEY = os.environ.get("INTERAKT_API_KEY", "")
@@ -2583,11 +2583,49 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
         create_notification(assigned_to, "Broker lead assigned", f"{lead.get('name')} is ready to work.", lead_id=lead_id)
     return updated
 
+@api_router.get("/leads/filtered")
+async def list_leads_filtered(
+    bucket: str = "all",
+    limit: int = 500,
+    cu: User = Depends(get_current_user),
+):
+    """Dashboard drill-down lists: all, new_today, positive, not_interested, registration, booking."""
+    bucket_key = (bucket or "all").strip().lower()
+    allowed = {"all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up"}
+    if bucket_key not in allowed:
+        raise HTTPException(400, detail=f"bucket must be one of: {', '.join(sorted(allowed))}")
+
+    limit = min(max(limit, 1), 500)
+    today = now_utc().date().isoformat()
+    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
+    all_leads = merge_leads_with_cache(db_leads)
+
+    if bucket_key == "new_today":
+        filtered = [l for l in all_leads if (l.get("created_at") or "")[:10] == today]
+    elif bucket_key == "not_interested":
+        filtered = [l for l in all_leads if l.get("status") == "negative"]
+    elif bucket_key == "positive":
+        filtered = [l for l in all_leads if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration", "closed"] and l.get("status") != "negative"]
+    elif bucket_key == "registration":
+        filtered = [l for l in all_leads if l.get("stage") == "registration"]
+    elif bucket_key == "booking":
+        filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"]]
+    elif bucket_key == "follow_up":
+        filtered = [l for l in all_leads if l.get("follow_up_at")]
+    else:
+        filtered = list(all_leads)
+
+    filtered = dedupe_leads(filtered)
+    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return {"bucket": bucket_key, "total": len(filtered), "leads": filtered[:limit]}
+
+
 @api_router.get("/leads/by-platform/{platform}")
 async def list_leads_by_platform(
     platform: str,
     limit: int = 200,
     offset: int = 0,
+    status_filter: Optional[str] = None,
     cu: User = Depends(get_current_user),
 ):
     """List real CRM leads for a platform bucket: manual, housing, or meta."""
@@ -2605,6 +2643,15 @@ async def list_leads_by_platform(
     # plus duplicates from re-delivered events — show only real, unique leads.
     if platform_key == "meta":
         filtered = [l for l in filtered if is_real_meta_lead(l)]
+    sf = (status_filter or "").strip().lower()
+    if sf == "positive":
+        filtered = [l for l in filtered if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration", "closed"] and l.get("status") != "negative"]
+    elif sf in ("not_interested", "negative"):
+        filtered = [l for l in filtered if l.get("status") == "negative"]
+    elif sf == "registration":
+        filtered = [l for l in filtered if l.get("stage") == "registration"]
+    elif sf == "booking":
+        filtered = [l for l in filtered if l.get("stage") in ["booking", "loan"]]
     filtered = dedupe_leads(filtered)
     page = filtered[offset:offset + limit]
     return {
@@ -3047,6 +3094,17 @@ async def list_visit_followups(visit_id: Optional[str]=None, lead_id: Optional[s
         followups = [f for f in followups if f.get("visit_id") == visit_id]
     if lead_id:
         followups = [f for f in followups if f.get("lead_id") == lead_id]
+
+    employees = sb_select("employees", {"select": "employee_id,name"})
+    emp_names = {e.get("employee_id"): e.get("name") for e in employees if e.get("employee_id")}
+    lead_rows = sb_select("leads", {"select": "lead_id,assigned_to"})
+    lead_assign = {r.get("lead_id"): r.get("assigned_to") for r in lead_rows}
+    for f in followups:
+        lid = f.get("lead_id")
+        eid = lead_assign.get(lid)
+        if eid and emp_names.get(eid):
+            f["employee_name"] = emp_names[eid]
+
     return sorted(followups, key=lambda f: f.get("follow_up_at") or "", reverse=True)
 
 # ---- Bookings ----
@@ -3302,10 +3360,11 @@ async def mark_notification_read(notification_id: str, cu: User=Depends(get_curr
 def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
-        "admin": ["dashboard", "my-dashboard", "pipeline", "telecaller", "visits", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["my-dashboard", "pipeline", "bookings", "loans", "integrations", "broker", "employees"],
-        "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
-        "site_visit": ["my-dashboard", "visits", "pipeline"],
+        "admin": ["dashboard", "my-dashboard", "pipeline", "telecaller", "sales-executive", "follow-ups", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        "manager": ["my-dashboard", "pipeline", "bookings", "loans", "integrations", "broker", "employees", "follow-ups"],
+        "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative", "follow-ups"],
+        "site_visit": ["my-dashboard", "sales-executive", "pipeline", "follow-ups"],
+        "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline", "follow-ups"],
         "booking": ["my-dashboard", "bookings", "pipeline"],
         "loan": ["my-dashboard", "loans", "pipeline"],
         "marketing": ["my-dashboard", "negative", "pipeline", "integrations"],
@@ -3421,16 +3480,16 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
     if not employee:
         raise HTTPException(404, "Employee not found")
 
-    # Active-only toggle from the list does not need a password.
+    # Sidebar access / active toggle alone — no password required.
     patch_keys = {k for k in raw if raw[k] is not None}
-    login_fields_changed = bool(patch_keys - {"active"})
+    access_only = patch_keys <= {"allowed_pages"} or patch_keys <= {"active", "allowed_pages"} or patch_keys == {"active"}
+    login_fields_changed = bool(patch_keys) and not access_only
 
     plain_password = (raw.get("password") or "").strip()
     data.pop("password", None)
 
-    if login_fields_changed:
-        if len(plain_password) < 4:
-            raise HTTPException(status_code=400, detail="Password is required (minimum 4 characters).")
+    if login_fields_changed and len(plain_password) < 4:
+        raise HTTPException(status_code=400, detail="Password is required when changing name, email, role, or phone (minimum 4 characters).")
 
     if data.get("email") and data["email"] != employee.get("email"):
         clash = sb_select("users", {"email": f"eq.{data['email']}", "select": "user_id", "limit": "1"})
@@ -3446,8 +3505,15 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
     name = data.get("name") or employee.get("name")
     email = data.get("email") or employee.get("email")
 
+    linked_user_id = _resolve_user_id_for_employee(employee, email)
+
+    if access_only and linked_user_id and "allowed_pages" in data:
+        _update_user_login(linked_user_id, {
+            "allowed_pages": data["allowed_pages"],
+            "updated_at": now_utc().isoformat(),
+        })
+
     if login_fields_changed:
-        linked_user_id = _resolve_user_id_for_employee(employee, email)
         if not linked_user_id:
             user_row = _build_login_row(name, email, plain_password, role, eid, allowed_pages)
             inserted = _insert_login_or_raise(user_row, plain_password)
@@ -3633,6 +3699,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         "housing_leads": housing_count,
         "meta_leads": meta_count,
         "positive_leads": sum(1 for l in pipeline_leads if l.get("stage") in ["positive","site_visit","booking","loan","registration","closed"]),
+        "registration_leads": sum(1 for l in pipeline_leads if l.get("stage") == "registration"),
         "negative_leads": sum(1 for l in pipeline_leads if l.get("status") == "negative"),
         "new_leads": sum(1 for l in pipeline_leads if l.get("stage") == "new"),
         "site_visits": len(visits),
@@ -3777,21 +3844,26 @@ async def stats_me(cu: User=Depends(get_current_user)):
     leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
     # if not leads: leads = DEMO_LEADS
     
+    emp_id = cu.acting_as_employee_id or cu.employee_id
+    if cu.role != "admin" and emp_id:
+        leads = [l for l in leads if l.get("assigned_to") == emp_id]
+
     hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])
-    warm = sum(1 for l in leads if l.get("stage") == "assigned")
     cold = sum(1 for l in leads if l.get("stage") in ["new", "contacted"])
     negative = sum(1 for l in leads if l.get("status") == "negative")
     closed = sum(1 for l in leads if l.get("stage") == "closed")
+    leads_total = len(leads)
 
     return {
         "employee": None, "role": cu.role,
         "personal": {
-            "actions_total": len(activities), "positives": positives, "negatives": 0, "followups": followups,
+            "actions_total": len(activities), "leads_total": leads_total,
+            "positives": positives, "negatives": negative, "followups": followups,
             "visits": visits, "bookings_done": bookings_done, "loans_done": loans_done, "closed_deals": closed_deals,
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
             "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
         },
-        "leads": {"hot": hot, "warm": warm, "cold": cold, "negative": negative, "closed": closed},
+        "leads": {"hot": hot, "cold": cold, "negative": negative, "closed": closed},
         "recent_activities": activities[:15]
     }
 
@@ -3799,12 +3871,14 @@ async def stats_me(cu: User=Depends(get_current_user)):
 async def stats_employees(cu: User=Depends(get_current_user)):
     employees = sb_select("employees", {"select": "*"})
     activities = sb_select("activities", {"select": "user_id,created_at,type"})
+    all_leads = merge_leads_with_cache(sb_select("leads", {"select": "lead_id,assigned_to,status,stage"}))
     
     # Calculate stats per employee
     emp_stats = []
     for e in employees:
         eid = e["employee_id"]
         emp_acts = [a for a in activities if a.get("user_id") == eid]
+        emp_leads = [l for l in all_leads if l.get("assigned_to") == eid]
         
         last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
         actions_total = len(emp_acts)
@@ -3817,8 +3891,9 @@ async def stats_employees(cu: User=Depends(get_current_user)):
         emp_stats.append({
             "employee_id": eid, "name": e["name"], "email": e["email"],
             "role": e["role"], "department": e.get("department", ""),
-            "actions_total": actions_total, "last_activity": last_activity,
-            "positives": positives, "negatives": 0,
+            "actions_total": actions_total, "leads_total": len(emp_leads), "last_activity": last_activity,
+            "positives": positives,
+            "negatives": sum(1 for l in emp_leads if l.get("status") == "negative"),
             "followups": followups, "visits": visits,
             "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))), 
             "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),

@@ -11,7 +11,8 @@ const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin',
   manager: 'Manager',
   telecaller: 'Telecaller',
-  site_visit: 'Site Visit',
+  site_visit: 'Sales Executive',
+  sales_executive: 'Sales Executive',
   booking: 'Booking',
   loan: 'Loan Officer',
   marketing: 'Marketing',
@@ -107,8 +108,8 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{score}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>TOTAL ACTIONS</Text>
-                    <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.actions_total}</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>TOTAL LEADS</Text>
+                    <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.leads_total ?? employee.actions_total}</Text>
                   </View>
                 </View>
 
@@ -121,8 +122,8 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
 
                 <View style={styles.metricPills}>
                   <MetricPill icon="thumbs-up" label="Positive" value={employee.positives} color={colors.positive} />
-                  <MetricPill icon="thumbs-down" label="Negative" value={employee.negatives} color={colors.negative} />
-                  <MetricPill icon="location" label="Visits" value={employee.visits} color={colors.info} />
+                  <MetricPill icon="thumbs-down" label="Not Interested" value={employee.negatives} color={colors.negative} />
+                  <MetricPill icon="time" label="Follow-ups" value={employee.followups ?? 0} color={colors.warning} />
                   <MetricPill icon="document-text" label="Bookings" value={employee.bookings_done} color={colors.warning} />
                   <MetricPill icon="business" label="Loans" value={employee.loans_done} color="#7C3AED" />
                   <MetricPill icon="trophy" label="Closed" value={employee.closed_deals} color={colors.accent} />

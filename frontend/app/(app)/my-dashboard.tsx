@@ -15,6 +15,7 @@ const ROLE_ACCENT: Record<string, string> = {
   manager: '#14B8A6',
   telecaller: '#0284C7',
   site_visit: '#0EA5E9',
+  sales_executive: '#0EA5E9',
   booking: '#D97706',
   loan: '#7C3AED',
   marketing: '#EC4899',
@@ -32,10 +33,11 @@ const ROLE_HIGHLIGHT: Record<string, string[]> = {
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
   manager: { label: 'Review lead pipeline', route: '/(app)/pipeline' },
   telecaller: { label: 'Open my telecaller queue', route: '/(app)/telecaller' },
-  site_visit: { label: 'View my site visits', route: '/(app)/visits' },
+  site_visit: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
+  sales_executive: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
   booking: { label: 'Open bookings', route: '/(app)/bookings' },
   loan: { label: 'Open loan applications', route: '/(app)/loans' },
-  marketing: { label: 'Negative leads', route: '/(app)/negative-leads' },
+  marketing: { label: 'Not interested leads', route: '/(app)/negative-leads' },
   admin: { label: 'Open owner dashboard', route: '/(app)/dashboard' },
 };
 
@@ -110,14 +112,14 @@ export default function MyDashboard() {
                 : role === 'manager'
                 ? 'Monitor team movement, review department queues, and keep the pipeline moving.'
                 : role === 'telecaller'
-                ? 'Every new enquiry lands in your queue. Mark hot leads positive, schedule follow-ups, send the rest to site visits.'
-                : role === 'site_visit'
-                ? 'Schedule visits, capture feedback, and pass booking-ready customers to the booking team.'
+                ? 'Every new enquiry lands in your queue. Mark positive leads and schedule follow-ups from the Follow Ups section.'
+                : role === 'site_visit' || role === 'sales_executive'
+                ? 'Work the same lead queue as telecaller. Schedule follow-ups and pass booking-ready customers forward.'
                 : role === 'booking'
                 ? 'Confirm bookings, collect tokens, get agreements signed, and hand over to the loan department.'
                 : role === 'loan'
                 ? 'Process applications, track bank stages, and close the deal when documents are complete.'
-                : 'Analyze lead temperatures and re-engage negative leads.'}
+                : 'Re-engage not interested leads when needed.'}
             </Text>
             <Pressable
               testID="my-dashboard-cta"
@@ -145,58 +147,16 @@ export default function MyDashboard() {
           </View>
         </View>
 
-        {/* Lead temperature */}
-        <View>
-          <Text style={[styles.section, { color: colors.textMuted }]}>LEAD TEMPERATURE</Text>
-          <View style={styles.tempGrid}>
-            <TempCard testID="temp-hot" icon="flame" label="Hot Leads" value={leads.hot} color="#EF4444" desc="Positive · Visit · Booking · Loan" colors={colors} />
-            <TempCard testID="temp-warm" icon="sunny" label="Warm Leads" value={leads.warm} color="#F59E0B" desc="Contacted, awaiting follow-up" colors={colors} />
-            <TempCard testID="temp-cold" icon="snow" label="Cold Leads" value={leads.cold} color="#0EA5E9" desc="New enquiries in queue" colors={colors} />
-            <TempCard testID="temp-neg" icon="close-circle" label="Negative" value={leads.negative} color={colors.negative} desc="Reservoir for re-engagement" colors={colors} />
-            <TempCard testID="temp-closed" icon="trophy" label="Closed Won" value={leads.closed} color="#10B981" desc="Customers onboarded" colors={colors} />
-          </View>
-        </View>
-
-        {/* Analytics Charts */}
-        <View>
-          <Text style={[styles.section, { color: colors.textMuted }]}>ANALYTICS</Text>
-          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 16 }}>
-            {graphData?.leads_by_day && (
-              <LineChart
-                title="Leads Per Day"
-                subtitle="New leads acquired daily — last 30 days"
-                data={graphData.leads_by_day.map((d: any) => ({ label: d.date.slice(5), value: d.count }))}
-                color="#3B82F6"
-                unitLabel="leads"
-                defaultType="line"
-                testID="my-chart-leads"
-              />
-            )}
-            {graphData?.revenue_by_month && canSeeRevenue(user?.role, user?.email) && (
-              <LineChart
-                title="Total Brokerage"
-                subtitle="Monthly brokerage collected — last 12 months"
-                data={graphData.revenue_by_month.map((d: any) => ({ label: d.month.slice(5), value: d.revenue }))}
-                color="#10B981"
-                formatValue={(v: number) => `₹${(v / 100000).toFixed(1)}L`}
-                defaultType="bar"
-                testID="my-chart-revenue"
-              />
-            )}
-          </View>
-        </View>
-
         {/* Personal KPIs */}
         {role !== 'admin' && (
           <View>
             <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
             <View style={styles.kpiGrid}>
-              <KPI label="Total Actions" value={personal.actions_total} icon="pulse-outline" color={accent} colors={colors} />
+              <KPI label="Total Leads" value={personal.leads_total ?? personal.actions_total} icon="people-outline" color={accent} colors={colors} />
               <KPI label="Positive" value={personal.positives} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />
-              <KPI label="Negative" value={personal.negatives} icon="thumbs-down-outline" color={colors.negative} colors={colors} highlight={highlight.includes('negatives')} />
+              <KPI label="Not Interested" value={personal.negatives} icon="thumbs-down-outline" color={colors.negative} colors={colors} highlight={highlight.includes('negatives')} />
               <KPI label="Follow-ups" value={personal.followups} icon="time-outline" color={colors.warning} colors={colors} highlight={highlight.includes('followups')} />
               <KPI label="Call Notes" value={personal.call_notes} icon="document-text-outline" color={colors.info} colors={colors} highlight={highlight.includes('call_notes')} />
-              <KPI label="Visits" value={personal.visits} icon="location-outline" color={'#0EA5E9'} colors={colors} highlight={highlight.includes('visits')} />
               <KPI label="Bookings" value={personal.bookings_done} icon="document-text-outline" color={colors.warning} colors={colors} highlight={highlight.includes('bookings_done')} />
               <KPI label="Loans" value={personal.loans_done} icon="business-outline" color={'#7C3AED'} colors={colors} highlight={highlight.includes('loans_done')} />
               <KPI label="Closed Deals" value={personal.closed_deals} icon="trophy-outline" color={colors.accent} colors={colors} highlight={highlight.includes('closed_deals')} />

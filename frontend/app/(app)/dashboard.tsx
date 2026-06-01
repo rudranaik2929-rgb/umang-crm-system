@@ -7,6 +7,7 @@ import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
+import { DashboardLeadsModal } from '../../src/components/DashboardLeadsModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { LineChart } from '../../src/components/LineChart';
@@ -14,7 +15,6 @@ import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/constants';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
-const WARM_STAGES = ['assigned'];
 const COLD_STAGES = ['new'];
 
 function formatCurrency(value: number) {
@@ -85,6 +85,7 @@ export default function Dashboard() {
   const [employees, setEmployees] = useState<any[]>(cached?.employees ?? []);
   const [loading, setLoading] = useState(!cached);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
+  const [leadsBucket, setLeadsBucket] = useState<string | null>(null);
   const [followUpModalVisible, setFollowUpModalVisible] = useState(false);
   const [followUps, setFollowUps] = useState<any[]>([]);
   const [followUpsLoading, setFollowUpsLoading] = useState(false);
@@ -160,18 +161,14 @@ export default function Dashboard() {
     const todayStr = new Date().toISOString().slice(0, 10);
 
     const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
-    const warm = activeLeads.filter((l) => WARM_STAGES.includes(l.stage)).length || Number(sd.assigned || 0);
     const cold = activeLeads.filter((l) => COLD_STAGES.includes(l.stage)).length || Number(sd.new || 0);
-    const temperatureTotal = Math.max(1, hot + warm + cold);
     const conversionScore = totalLeads ? Math.min(100, Math.round((hot / totalLeads) * 100)) : 0;
 
     return {
       activeLeads,
       totalLeads,
       hot,
-      warm,
       cold,
-      temperatureTotal,
       conversionScore,
       newToday: leads.filter((l) => l.created_at?.slice(0, 10) === todayStr).length,
       positiveLeads: Number(stats?.positive_leads || hot || 0),
@@ -233,12 +230,7 @@ export default function Dashboard() {
       <TopBar title="Dashboard" subtitle="Pipeline, revenue and team performance snapshot" />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heroGrid}>
-          <ScorePanel
-            score={model.conversionScore}
-            hot={model.hot}
-            warm={model.warm}
-            cold={model.cold}
-          />
+          <ScorePanel score={model.conversionScore} hot={model.hot} cold={model.cold} />
 
           {canSeeRevenue(user?.role, user?.email) && (
             <RevenuePanel
@@ -248,13 +240,6 @@ export default function Dashboard() {
               disbursedLoans={model.disbursedLoans}
             />
           )}
-
-          <HealthPanel
-            hot={model.hot}
-            warm={model.warm}
-            cold={model.cold}
-            total={model.temperatureTotal}
-          />
         </View>
 
         <View style={styles.metricGrid}>
@@ -270,14 +255,14 @@ export default function Dashboard() {
                 : 'Tap for platform breakdown'
             }
           />
-          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Fresh enquiries" />
-          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Moved forward" />
-          <MetricCard icon="remove-circle-outline" label="Negative Leads" value={model.negativeLeads} accent={colors.negative} helper="Remarketing pool" />
-          <MetricCard icon="location-outline" label="Site Visits" value={model.visits} accent="#06B6D4" helper={`${model.completedVisits} completed`} />
-          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper={`${model.confirmedBookings} confirmed`} />
+          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Tap for full list" onPress={() => setLeadsBucket('new_today')} />
+          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Tap for full list" onPress={() => setLeadsBucket('positive')} />
+          <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Tap for full list" onPress={() => setLeadsBucket('not_interested')} />
+          <MetricCard icon="ribbon-outline" label="Registration" value={Number(stats?.registration_leads || 0)} accent="#0891B2" helper="Tap for full list" onPress={() => setLeadsBucket('registration')} />
+          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper="Tap for full list" onPress={() => setLeadsBucket('booking')} />
           <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} onPress={openFollowUps} />
-          <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} />
-          <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} />
+          <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} onPress={() => router.push('/(app)/loans' as any)} />
+          <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} onPress={() => router.push('/(app)/employees' as any)} />
         </View>
 
         <EmployeePerformance employees={employees} />
@@ -370,6 +355,13 @@ export default function Dashboard() {
         userRole={user?.role}
         onChanged={load}
       />
+      <DashboardLeadsModal
+        visible={leadsBucket !== null}
+        bucket={leadsBucket || 'all'}
+        onClose={() => setLeadsBucket(null)}
+        userRole={user?.role}
+        onChanged={load}
+      />
       <FollowUpsModal
         visible={followUpModalVisible}
         onClose={() => setFollowUpModalVisible(false)}
@@ -424,6 +416,9 @@ function FollowUpsModal({ visible, onClose, items, loading, colors }: any) {
                     <Text style={[styles.followLead, { color: colors.text }]} numberOfLines={1}>
                       {item.lead_name || 'Lead'}
                     </Text>
+                    {item.employee_name ? (
+                      <Text style={[styles.followMeta, { color: colors.primary, fontSize: 11 }]}>{item.employee_name}</Text>
+                    ) : null}
                     <Text style={[styles.followMeta, { color: colors.textMuted }]} numberOfLines={1}>
                       {item.follow_up_day || '-'} · {item.follow_up_date || '-'} · {formatFollowUpTime(item)}
                     </Text>
@@ -441,7 +436,7 @@ function FollowUpsModal({ visible, onClose, items, loading, colors }: any) {
   );
 }
 
-function ScorePanel({ score, hot, warm, cold }: { score: number; hot: number; warm: number; cold: number }) {
+function ScorePanel({ score, hot, cold }: { score: number; hot: number; cold: number }) {
   const { colors } = useTheme();
   return (
     <View style={[styles.panel, styles.heroPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -456,7 +451,6 @@ function ScorePanel({ score, hot, warm, cold }: { score: number; hot: number; wa
         <GaugeChart score={score} />
         <View style={styles.scoreLegend}>
           <LegendDot color="#EF4444" label={`${hot} Hot`} />
-          <LegendDot color="#F59E0B" label={`${warm} Warm`} />
           <LegendDot color="#3B82F6" label={`${cold} Cold`} />
         </View>
       </View>
@@ -482,31 +476,6 @@ function RevenuePanel({ revenue, bookings, confirmedBookings, disbursedLoans }: 
         <TinyStat label="Bookings" value={bookings} color={colors.warning} />
         <TinyStat label="Confirmed" value={confirmedBookings} color={colors.positive} />
         <TinyStat label="Disbursed Loans" value={disbursedLoans} color="#8B5CF6" />
-      </View>
-    </View>
-  );
-}
-
-function HealthPanel({ hot, warm, cold, total }: { hot: number; warm: number; cold: number; total: number }) {
-  const { colors } = useTheme();
-  return (
-    <View style={[styles.panel, styles.heroPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-      <View style={styles.panelHeader}>
-        <View>
-          <Text style={[styles.panelTitle, { color: colors.text }]}>Lead Temperature</Text>
-          <Text style={[styles.panelSub, { color: colors.textMuted }]}>Current quality split</Text>
-        </View>
-        <Ionicons name="thermometer-outline" size={20} color={colors.negative} />
-      </View>
-      <View style={[styles.tempTrack, { backgroundColor: colors.surfaceAlt }]}>
-        <View style={{ flex: hot / total, backgroundColor: '#EF4444' }} />
-        <View style={{ flex: warm / total, backgroundColor: '#F59E0B' }} />
-        <View style={{ flex: cold / total, backgroundColor: '#3B82F6' }} />
-      </View>
-      <View style={styles.tempGrid}>
-        <TinyStat label="Hot" value={hot} color="#EF4444" />
-        <TinyStat label="Warm" value={warm} color="#F59E0B" />
-        <TinyStat label="Cold" value={cold} color="#3B82F6" />
       </View>
     </View>
   );
