@@ -8,7 +8,9 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { api } from '../../src/lib/api';
 import { LineChart } from '../../src/components/LineChart';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
-import { roleLabel, canSeeRevenue } from '../../src/lib/constants';
+import { roleLabel } from '../../src/lib/constants';
+import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
+import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -48,6 +50,7 @@ export default function MyDashboard() {
   const [data, setData] = useState<any>(null);
   const [graphData, setGraphData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [openLead, setOpenLead] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -112,9 +115,9 @@ export default function MyDashboard() {
                 : role === 'manager'
                 ? 'Monitor team movement, review department queues, and keep the pipeline moving.'
                 : role === 'telecaller'
-                ? 'Every new enquiry lands in your queue. Mark positive leads and schedule follow-ups from the Follow Ups section.'
+                ? 'Use the Follow Ups tab inside Telecaller. Cold lead opens that tab automatically.'
                 : role === 'site_visit' || role === 'sales_executive'
-                ? 'Work the same lead queue as telecaller. Schedule follow-ups and pass booking-ready customers forward.'
+                ? 'Use Leads and Follow Ups tabs in Sales Executive. Cold lead jumps to Follow Ups.'
                 : role === 'booking'
                 ? 'Confirm bookings, collect tokens, get agreements signed, and hand over to the loan department.'
                 : role === 'loan'
@@ -163,6 +166,18 @@ export default function MyDashboard() {
             </View>
           </View>
         )}
+
+        {(role === 'telecaller' || role === 'site_visit' || role === 'sales_executive') && (
+          <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={[styles.section, { color: colors.textMuted, marginBottom: 0 }]}>MY FOLLOW UPS</Text>
+              <Pressable onPress={() => router.push((role === 'telecaller' ? '/(app)/telecaller?tab=followups' : '/(app)/sales-executive?tab=followups') as any)}>
+                <Text style={{ color: accent, fontSize: 12, fontWeight: '700' }}>Open all →</Text>
+              </Pressable>
+            </View>
+            <FollowUpsPanel compact maxItems={6} onOpenLead={setOpenLead} />
+          </View>
+        )}
         
         {/* Live Activity Feed */}
         <View style={{ marginTop: 32 }}>
@@ -195,6 +210,14 @@ export default function MyDashboard() {
           </View>
         </View>
       </ScrollView>
+      <LeadDetailModal
+        leadId={openLead}
+        visible={openLead !== null}
+        onClose={() => setOpenLead(null)}
+        onChanged={load}
+        userRole={role}
+        onGoFollowUps={() => router.push((role === 'telecaller' ? '/(app)/telecaller?tab=followups' : '/(app)/sales-executive?tab=followups') as any)}
+      />
     </View>
   );
 }

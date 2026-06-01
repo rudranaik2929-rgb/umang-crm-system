@@ -3360,11 +3360,11 @@ async def mark_notification_read(notification_id: str, cu: User=Depends(get_curr
 def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
-        "admin": ["dashboard", "my-dashboard", "pipeline", "telecaller", "sales-executive", "follow-ups", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["my-dashboard", "pipeline", "bookings", "loans", "integrations", "broker", "employees", "follow-ups"],
-        "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative", "follow-ups"],
-        "site_visit": ["my-dashboard", "sales-executive", "pipeline", "follow-ups"],
-        "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline", "follow-ups"],
+        "admin": ["dashboard", "my-dashboard", "pipeline", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        "manager": ["my-dashboard", "pipeline", "bookings", "loans", "integrations", "broker", "employees"],
+        "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
+        "site_visit": ["my-dashboard", "sales-executive", "pipeline"],
+        "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline"],
         "booking": ["my-dashboard", "bookings", "pipeline"],
         "loan": ["my-dashboard", "loans", "pipeline"],
         "marketing": ["my-dashboard", "negative", "pipeline", "integrations"],

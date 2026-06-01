@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform, Modal } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platform } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
@@ -12,6 +12,7 @@ import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { LineChart } from '../../src/components/LineChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
+import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/constants';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
@@ -31,47 +32,6 @@ function formatCompact(value: number) {
   return `${Math.round(value || 0)}`;
 }
 
-function getLocalTimeZoneLabel() {
-  try {
-    const parts = new Intl.DateTimeFormat('en-IN', { timeZoneName: 'short' }).formatToParts(new Date());
-    return parts.find((part) => part.type === 'timeZoneName')?.value || Intl.DateTimeFormat().resolvedOptions().timeZone || 'Local';
-  } catch {
-    return 'Local';
-  }
-}
-
-function formatClockTime(value?: string | null) {
-  if (!value) return '-';
-  const [rawHour, rawMinute = '0'] = String(value).split(':');
-  const hour = Number(rawHour);
-  const minute = Number(rawMinute);
-  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return String(value);
-
-  const suffix = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 || 12;
-  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
-}
-
-function formatFollowUpTime(item: any) {
-  if (item.follow_up_time) {
-    return `${formatClockTime(item.follow_up_time)} ${getLocalTimeZoneLabel()}`;
-  }
-
-  if (item.follow_up_at) {
-    const parsed = new Date(item.follow_up_at);
-    if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toLocaleTimeString('en-IN', {
-        hour: 'numeric',
-        minute: '2-digit',
-        hour12: true,
-        timeZoneName: 'short',
-      });
-    }
-  }
-
-  return '-';
-}
-
 export default function Dashboard() {
   const { colors } = useTheme();
   const router = useRouter();
@@ -86,9 +46,6 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(!cached);
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [leadsBucket, setLeadsBucket] = useState<string | null>(null);
-  const [followUpModalVisible, setFollowUpModalVisible] = useState(false);
-  const [followUps, setFollowUps] = useState<any[]>([]);
-  const [followUpsLoading, setFollowUpsLoading] = useState(false);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -142,17 +99,6 @@ export default function Dashboard() {
     }, pollMs);
     return () => clearInterval(interval);
   }, [load]);
-
-  const openFollowUps = useCallback(async () => {
-    setFollowUpModalVisible(true);
-    setFollowUpsLoading(true);
-    try {
-      const res = await api.get('/visit-followups');
-      setFollowUps(Array.isArray(res.data) ? res.data : []);
-    } finally {
-      setFollowUpsLoading(false);
-    }
-  }, []);
 
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
@@ -260,9 +206,22 @@ export default function Dashboard() {
           <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Tap for full list" onPress={() => setLeadsBucket('not_interested')} />
           <MetricCard icon="ribbon-outline" label="Registration" value={Number(stats?.registration_leads || 0)} accent="#0891B2" helper="Tap for full list" onPress={() => setLeadsBucket('registration')} />
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper="Tap for full list" onPress={() => setLeadsBucket('booking')} />
-          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} onPress={openFollowUps} />
+          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} />
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} onPress={() => router.push('/(app)/loans' as any)} />
           <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} onPress={() => router.push('/(app)/employees' as any)} />
+        </View>
+
+        <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.panelHeader}>
+            <View>
+              <Text style={[styles.panelTitle, { color: colors.text }]}>Follow Ups</Text>
+              <Text style={[styles.panelSub, { color: colors.textMuted }]}>
+                {model.pendingFollowUps} pending · {model.followUps} total
+              </Text>
+            </View>
+            <Ionicons name="calendar-outline" size={20} color="#F97316" />
+          </View>
+          <FollowUpsPanel compact maxItems={12} showEmployeeName onOpenLead={setOpenLead} />
         </View>
 
         <EmployeePerformance employees={employees} />
@@ -362,13 +321,6 @@ export default function Dashboard() {
         userRole={user?.role}
         onChanged={load}
       />
-      <FollowUpsModal
-        visible={followUpModalVisible}
-        onClose={() => setFollowUpModalVisible(false)}
-        items={followUps}
-        loading={followUpsLoading}
-        colors={colors}
-      />
       <LeadDetailModal
         leadId={openLead}
         visible={openLead !== null}
@@ -377,62 +329,6 @@ export default function Dashboard() {
         userRole={user?.role}
       />
     </View>
-  );
-}
-
-function FollowUpsModal({ visible, onClose, items, loading, colors }: any) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalBackdrop} onPress={onClose}>
-        <Pressable style={[styles.followModal, { backgroundColor: colors.surface, borderColor: colors.border }]} testID="dashboard-followups-modal">
-          <View style={styles.followModalHeader}>
-            <View>
-              <Text style={[styles.panelTitle, { color: colors.text }]}>Follow Ups</Text>
-              <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                {items.length.toLocaleString('en-IN')} scheduled
-              </Text>
-            </View>
-            <Pressable onPress={onClose} style={[styles.closeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
-              <Ionicons name="close" size={18} color={colors.textSecondary} />
-            </Pressable>
-          </View>
-
-          {loading ? (
-            <View style={styles.followLoading}>
-              <ActivityIndicator color={colors.primary} />
-            </View>
-          ) : items.length === 0 ? (
-            <View style={styles.followEmpty}>
-              <Text style={[styles.emptyText, { color: colors.textMuted }]}>No follow ups scheduled.</Text>
-            </View>
-          ) : (
-            <ScrollView style={styles.followList} contentContainerStyle={{ gap: 10 }}>
-              {items.map((item: any) => (
-                <View key={item.followup_id || `${item.visit_id}-${item.follow_up_at}`} style={[styles.followRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
-                  <View style={[styles.followIcon, { backgroundColor: '#F9731618' }]}>
-                    <Ionicons name="calendar-outline" size={16} color="#F97316" />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.followLead, { color: colors.text }]} numberOfLines={1}>
-                      {item.lead_name || 'Lead'}
-                    </Text>
-                    {item.employee_name ? (
-                      <Text style={[styles.followMeta, { color: colors.primary, fontSize: 11 }]}>{item.employee_name}</Text>
-                    ) : null}
-                    <Text style={[styles.followMeta, { color: colors.textMuted }]} numberOfLines={1}>
-                      {item.follow_up_day || '-'} · {item.follow_up_date || '-'} · {formatFollowUpTime(item)}
-                    </Text>
-                    {item.notes ? (
-                      <Text style={[styles.followNotes, { color: colors.textSecondary }]} numberOfLines={2}>{item.notes}</Text>
-                    ) : null}
-                  </View>
-                </View>
-              ))}
-            </ScrollView>
-          )}
-        </Pressable>
-      </Pressable>
-    </Modal>
   );
 }
 

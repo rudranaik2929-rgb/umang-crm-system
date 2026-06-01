@@ -49,7 +49,6 @@ export const NAV_ITEMS = [
   { key: 'pipeline', path: '/(app)/pipeline', label: 'Lead Pipeline', icon: 'pipeline' },
   { key: 'telecaller', path: '/(app)/telecaller', label: 'Telecaller', icon: 'phone' },
   { key: 'sales-executive', path: '/(app)/sales-executive', label: 'Sales Executive', icon: 'visit' },
-  { key: 'follow-ups', path: '/(app)/follow-ups', label: 'Follow Ups', icon: 'visit' },
   { key: 'bookings', path: '/(app)/bookings', label: 'Bookings', icon: 'booking' },
   { key: 'loans', path: '/(app)/loans', label: 'Loan Department', icon: 'bank' },
   { key: 'integrations', path: '/(app)/integrations', label: 'Integrations', icon: 'integrations' },
@@ -62,11 +61,11 @@ export const NAV_ITEMS = [
 
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
-  admin: ['dashboard', 'my-dashboard', 'pipeline', 'telecaller', 'sales-executive', 'follow-ups', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  manager: ['my-dashboard', 'pipeline', 'bookings', 'loans', 'integrations', 'broker', 'employees', 'follow-ups'],
-  telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative', 'follow-ups'],
-  site_visit: ['my-dashboard', 'sales-executive', 'pipeline', 'follow-ups'],
-  sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline', 'follow-ups'],
+  admin: ['dashboard', 'my-dashboard', 'pipeline', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
+  manager: ['my-dashboard', 'pipeline', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
+  telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
+  site_visit: ['my-dashboard', 'sales-executive', 'pipeline'],
+  sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline'],
   booking: ['my-dashboard', 'bookings', 'pipeline'],
   loan: ['my-dashboard', 'loans', 'pipeline'],
   marketing: ['my-dashboard', 'negative', 'pipeline', 'integrations'],
@@ -97,13 +96,15 @@ export const ALL_SERVICES = NAV_ITEMS.filter((n) => n.key !== 'my-dashboard');
 // Resolve the effective set of accessible page keys for a user. Per-employee
 // allowed_pages is the source of truth; owners always get everything; legacy
 // users with no explicit list fall back to role defaults.
+const DEPRECATED_PAGE_KEYS = ['follow-ups', 'visits'];
+
 export function effectivePages(role?: string | null, email?: string | null, allowedPages?: string[] | null): string[] {
-  if (isOwner(role, email)) return NAV_ITEMS.map((n) => n.key);
+  const strip = (keys: string[]) => keys.filter((k) => !DEPRECATED_PAGE_KEYS.includes(k));
+  if (isOwner(role, email)) return strip(NAV_ITEMS.map((n) => n.key));
   if (Array.isArray(allowedPages) && allowedPages.length > 0) {
-    // Everyone keeps a personal dashboard as a safe landing page.
-    return Array.from(new Set(['my-dashboard', ...allowedPages]));
+    return strip(Array.from(new Set(['my-dashboard', ...allowedPages])));
   }
-  return ROLE_ACCESS[role || 'admin'] || ROLE_ACCESS.admin;
+  return strip(ROLE_ACCESS[role || 'admin'] || ROLE_ACCESS.admin);
 }
 
 export function visibleNavFor(role?: string | null, email?: string | null, allowedPages?: string[] | null) {

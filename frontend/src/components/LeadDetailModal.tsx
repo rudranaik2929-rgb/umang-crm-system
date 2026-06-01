@@ -23,11 +23,27 @@ interface Props {
   onChanged?: () => void;
   userRole?: string | null;
   overlayZIndex?: number;
+  /** When set (e.g. on Telecaller page), switches to Follow Ups tab instead of navigating away. */
+  onGoFollowUps?: () => void;
 }
 
-export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000 }: Props) {
+export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000, onGoFollowUps }: Props) {
   const { colors } = useTheme();
   const router = useRouter();
+
+  const goFollowUps = () => {
+    onChanged?.();
+    onClose();
+    if (onGoFollowUps) {
+      onGoFollowUps();
+      return;
+    }
+    const route =
+      userRole === 'sales_executive' || userRole === 'site_visit'
+        ? '/(app)/sales-executive?tab=followups'
+        : '/(app)/telecaller?tab=followups';
+    router.push(route as any);
+  };
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
@@ -546,9 +562,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             sub="Mark positive and open Follow Ups"
                             onPress={async () => {
                               await updateLead({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold');
-                              onChanged?.();
-                              onClose();
-                              router.push('/(app)/follow-ups' as any);
+                              goFollowUps();
                             }}
                             busy={busy === 'cold'}
                             color={colors.positive}
@@ -616,9 +630,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             sub="Open follow-ups workspace"
                             onPress={async () => {
                               await updateLead({ stage: 'positive', status: 'active' }, 'follow_up');
-                              onChanged?.();
-                              onClose();
-                              router.push('/(app)/follow-ups' as any);
+                              goFollowUps();
                             }}
                             busy={busy === 'follow_up'}
                             color={colors.info}

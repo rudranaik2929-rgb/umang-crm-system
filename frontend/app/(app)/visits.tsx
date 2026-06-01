@@ -9,7 +9,7 @@ export default function VisitsRedirect() {
   const { colors } = useTheme();
 
   useEffect(() => {
-    router.replace('/(app)/follow-ups' as any);
+    router.replace('/(app)/telecaller?tab=followups' as any);
   }, [router]);
 
   return (
