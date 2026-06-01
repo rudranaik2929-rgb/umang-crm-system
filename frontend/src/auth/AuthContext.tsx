@@ -73,7 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setUser(null);
   }, []);
 
-  const exchangeSession = useCallback(async (credentials: any): Promise<User | null> => {
+  const exchangeSession = useCallback(async (credentials: { email: string; password: string }): Promise<User | null> => {
     try {
       const r = await api.post('/auth/session', credentials);
       if (r.data?.session_token) {
@@ -81,8 +81,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       setUser(r.data.user);
       return r.data.user as User;
-    } catch (e) {
-      console.warn('exchangeSession failed', e);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      console.warn('exchangeSession failed', detail || e);
       return null;
     }
   }, []);

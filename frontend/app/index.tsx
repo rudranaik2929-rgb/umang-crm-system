@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Image, ScrollView, Platform, Dimensions, TextInput, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -10,56 +10,58 @@ const HERO_IMG = 'https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82b
 
 export default function Index() {
   const router = useRouter();
-  const { user, exchangeSession } = useAuth();
+  const { user, loading, exchangeSession } = useAuth();
   const { colors, themeName, toggle } = useTheme();
   const { width } = Dimensions.get('window');
   const isWide = width >= 900;
-
-  // Remove auto-redirect to allow user to see the login screen
-  // useEffect(() => {
-  //   if (!loading && user) {
-  //     if (!user.role) router.replace('/select-role' as any);
-  //     else router.replace('/(app)/dashboard' as any);
-  //   }
-  // }, [user, loading, router]);
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  // Already signed in (valid session) → go to app; never show "Continue as …" bypass.
+  useEffect(() => {
+    if (loading || !user) return;
+    if (!user.role) router.replace('/select-role' as any);
+    else router.replace(defaultRouteFor(user.role, user.email, user.allowed_pages) as any);
+  }, [user, loading, router]);
+
   const onLogin = async () => {
-    if (!email || !password) {
-      alert('Please enter both email and password');
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+    if (!trimmedEmail || !trimmedPassword) {
+      alert('Please enter your email and password.');
       return;
     }
 
     setIsLoggingIn(true);
     try {
       const loggedInUser = await exchangeSession({
-        email: email.trim(),
-        password: password.trim()
+        email: trimmedEmail,
+        password: trimmedPassword,
       });
       if (loggedInUser) {
         if (!loggedInUser.role) router.replace('/select-role' as any);
         else router.replace(defaultRouteFor(loggedInUser.role, loggedInUser.email, loggedInUser.allowed_pages) as any);
       } else {
-        alert('Login failed. Please check your credentials.');
+        alert('Invalid email or password. Use the login created by your manager.');
       }
     } catch {
-      alert('An error occurred during login. Please try again.');
+      alert('Invalid email or password. Use the login created by your manager.');
     } finally {
       setIsLoggingIn(false);
     }
   };
 
-  const onContinue = () => {
-    if (user) {
-      if (!user.role) router.replace('/select-role' as any);
-      else router.replace(defaultRouteFor(user.role, user.email, user.allowed_pages) as any);
-    }
-  };
-
   const onEnquiry = () => router.push('/enquire' as any);
+
+  if (loading || user) {
+    return (
+      <View style={[styles.container, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator color={colors.primary} size="large" />
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -119,10 +121,10 @@ export default function Index() {
 
           <View style={{ flex: 1, minHeight: 40 }} />
 
-          <Text style={[styles.kicker, { color: colors.textMuted }]}>WELCOME BACK</Text>
-          <Text style={[styles.headline, { color: colors.text }]}>Sign in to your CRM</Text>
+          <Text style={[styles.kicker, { color: colors.textMuted }]}>UMANG HOMETECH</Text>
+          <Text style={[styles.headline, { color: colors.text }]}>Log in to Umang</Text>
           <Text style={[styles.subhead, { color: colors.textSecondary, marginBottom: 20 }]}>
-            Real estate operations, refined. Manage leads, site visits, bookings, loans and outbound campaigns from one trusted workspace.
+            Enter the email and password provided by your manager. Each employee has a separate login.
           </Text>
 
           <View style={{ width: '100%', gap: 12, marginBottom: 12 }}>
@@ -145,29 +147,18 @@ export default function Index() {
             />
           </View>
 
-          {user ? (
-            <Pressable
-              onPress={onContinue}
-              disabled={isLoggingIn}
-              testID="continue-btn"
-              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
-            >
-              <Text style={[styles.primaryText, { color: '#fff' }]}>Continue as {user.name}</Text>
-            </Pressable>
-          ) : (
-            <Pressable
-              onPress={onLogin}
-              disabled={isLoggingIn}
-              testID="login-btn"
-              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
-            >
-              {isLoggingIn ? (
-                <ActivityIndicator color="#fff" size="small" />
-              ) : (
-                <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to CRM</Text>
-              )}
-            </Pressable>
-          )}
+          <Pressable
+            onPress={onLogin}
+            disabled={isLoggingIn}
+            testID="login-btn"
+            style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
+          >
+            {isLoggingIn ? (
+              <ActivityIndicator color="#fff" size="small" />
+            ) : (
+              <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to Umang</Text>
+            )}
+          </Pressable>
 
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
