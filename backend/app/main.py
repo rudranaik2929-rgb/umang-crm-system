@@ -84,6 +84,29 @@ WEBHOOK_RATE_LIMIT_MAX_REQUESTS = int(os.environ.get("WEBHOOK_RATE_LIMIT_MAX_REQ
 RATE_LIMIT_ENABLED = os.environ.get("RATE_LIMIT_ENABLED", "true").lower() not in {"0", "false", "no"}
 _RATE_LIMIT_BUCKETS: Dict[str, List[float]] = {}
 
+# ---- Env config (must load before CORS middleware) ----
+JWT_SECRET = os.environ.get("JWT_SECRET") or os.environ.get("SUPABASE_JWT_SECRET") or "change-me-in-production"
+SESSION_TTL_DAYS = int(os.environ.get("SESSION_TTL_DAYS", "7"))
+COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() not in {"0", "false", "no"}
+_DEFAULT_CORS_ORIGINS = [
+    "https://umanghometechllp.in",
+    "https://www.umanghometechllp.in",
+    "https://umang-home-tech.vercel.app",
+    "http://localhost:8081",
+    "http://localhost:19006",
+    "http://localhost:3000",
+]
+_cors_env = (os.environ.get("CORS_ORIGINS") or "").strip()
+CORS_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else _DEFAULT_CORS_ORIGINS
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://umanghometechllp.in").rstrip("/")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
+SUPABASE_KEY = (
+    os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
+    or os.environ.get("SUPABASE_KEY")
+    or os.environ.get("SUPABASE_ANON_KEY")
+    or ""
+)
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
     if not RATE_LIMIT_ENABLED:
@@ -120,17 +143,16 @@ async def root_health():
 async def debug_config():
     return {
         "url_configured": bool(os.environ.get("SUPABASE_URL")),
-        "key_configured": bool(os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY") or os.environ.get("SUPABASE_ANON_KEY")),
+        "service_role_configured": bool(os.environ.get("SUPABASE_SERVICE_ROLE_KEY")),
+        "key_configured": bool(SUPABASE_KEY),
+        "jwt_secret_ok": bool(JWT_SECRET) and JWT_SECRET not in ("change-me-in-production", "YOUR_RANDOM_SECRET"),
+        "cors_origins": CORS_ORIGINS,
+        "frontend_url": FRONTEND_URL,
     }
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://umang-home-tech.vercel.app",
-        "http://localhost:8081",
-        "http://localhost:19006",
-        "http://localhost:3000",
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -154,18 +176,6 @@ HOUSING_ENCRYPTION_KEY = os.environ.get("HOUSING_ENCRYPTION_KEY", "")
 HOUSING_INTEGRATION_UUID = os.environ.get("HOUSING_INTEGRATION_UUID", "")
 HOUSING_API_URL = os.environ.get("HOUSING_API_URL", "https://leads.housing.com/api/v0/get-builder-leads")
 HOUSING_WEBHOOK_SECRET = os.environ.get("HOUSING_WEBHOOK_SECRET", HOUSING_INTEGRATION_UUID)
-JWT_SECRET = os.environ.get("JWT_SECRET") or os.environ.get("SUPABASE_JWT_SECRET") or "change-me-in-production"
-SESSION_TTL_DAYS = int(os.environ.get("SESSION_TTL_DAYS", "7"))
-COOKIE_SECURE = os.environ.get("COOKIE_SECURE", "true").lower() not in {"0", "false", "no"}
-
-# ---- Supabase Config ----
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
-SUPABASE_KEY = (
-    os.environ.get("SUPABASE_SERVICE_ROLE_KEY")
-    or os.environ.get("SUPABASE_KEY")
-    or os.environ.get("SUPABASE_ANON_KEY")
-    or ""
-)
 
 def sb_headers():
     return {

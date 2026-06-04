@@ -46,8 +46,8 @@ export default function Index() {
       } else {
         alert('Invalid email or password. Use the login created by your manager.');
       }
-    } catch {
-      alert('Invalid email or password. Use the login created by your manager.');
+    } catch (e: any) {
+      alert(e?.message || 'Invalid email or password. Use the login created by your manager.');
     } finally {
       setIsLoggingIn(false);
     }

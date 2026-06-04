@@ -37,7 +37,7 @@ Set session_token cookie before navigating:
 await page.context.add_cookies([{
     "name": "session_token",
     "value": "YOUR_SESSION_TOKEN",
-    "domain": "umang-home-tech.vercel.app",
+    "domain": "umanghometechllp.in",
     "path": "/",
     "httpOnly": True,
     "secure": True,

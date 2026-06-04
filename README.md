@@ -38,7 +38,7 @@ Open the Expo web URL shown in the terminal.
 Use this endpoint in Housing.com when configuring real-time lead delivery:
 
 ```text
-POST https://your-backend-domain.com/api/housing/webhook
+POST https://api.umanghometechllp.in/api/housing/webhook
 ```
 
 Required backend environment:
@@ -72,7 +72,7 @@ Set `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env` for production webhook/sync wr
 Configure Meta Webhooks with:
 
 ```text
-GET/POST https://your-backend-domain.com/api/facebook/webhook
+GET/POST https://api.umanghometechllp.in/api/facebook/webhook
 Verify token: UMANGCRM123
 ```
 
@@ -93,17 +93,80 @@ Debug recent events: `GET /api/integrations/facebook/events` (admin/manager/mark
 
 ## Deployment
 
-- Backend: `backend/Dockerfile` is ready for Render/Railway. `render.yaml` includes the Render service blueprint.
-- Frontend: deploy `frontend/` on Vercel with `EXPO_PUBLIC_BACKEND_URL=https://your-backend-domain.com`.
-- Database: run `supabase/schema.sql` in Supabase SQL Editor before first production traffic.
+Production domains:
+
+| Service | URL |
+|--------|-----|
+| CRM web app (frontend) | [https://umanghometechllp.in](https://umanghometechllp.in) |
+| API (backend) | `https://api.umanghometechllp.in` |
+
+- Backend: `backend/Dockerfile` → Render (`render.yaml` blueprint). Add custom domain **`api.umanghometechllp.in`** in Render → Settings → Custom Domains.
+- Frontend: deploy `frontend/` on Vercel. Add **`umanghometechllp.in`** and **`www.umanghometechllp.in`** in Vercel → Project → Settings → Domains.
+- Database: run `supabase/final_schema.sql` (or `supabase/schema.sql`) in Supabase SQL Editor before first production traffic.
 - Local stack: `docker compose up --build`.
 
-See [`UNDERSTAND.md`](./UNDERSTAND.md) for the current folder structure and code ownership guide.
+### Where you update the domain (your side)
 
-<!-- Rebuild trigger: 2026-05-14T22:35:00Z -->
-<!-- current client's project of crm system
+**1. Domain registrar (where you bought umanghometechllp.in)**
 
-umang-home-tech.vercel.app 
+Add DNS records (exact values come from Vercel / Render after you add each custom domain):
 
-Credentials: htshpatil13@gmail.com 
-Umang@admin -->
+| Host | Type | Points to |
+|------|------|-----------|
+| `@` | A or CNAME | Vercel (for `https://umanghometechllp.in`) |
+| `www` | CNAME | Vercel (for `https://www.umanghometechllp.in`) |
+| `api` | CNAME | Render (for `https://api.umanghometechllp.in`) |
+
+**2. Vercel (frontend CRM)**
+
+- Project → **Settings → Environment Variables**  
+  `EXPO_PUBLIC_BACKEND_URL` = `https://api.umanghometechllp.in`
+- Project → **Settings → Domains** → add `umanghometechllp.in` and `www.umanghometechllp.in`
+- Redeploy after changing env vars.
+
+**3. Render (backend API)**
+
+- Service → **Environment**  
+  `CORS_ORIGINS` = `https://umanghometechllp.in,https://www.umanghometechllp.in`  
+  `FRONTEND_URL` = `https://umanghometechllp.in`  
+  `COOKIE_SECURE` = `true`
+- Service → **Settings → Custom Domains** → add `api.umanghometechllp.in`
+- Redeploy after env changes.
+
+**4. Housing.com webhook**
+
+```text
+POST https://api.umanghometechllp.in/api/housing/webhook
+```
+
+**5. Meta (Facebook) Lead Ads webhook**
+
+```text
+GET/POST https://api.umanghometechllp.in/api/facebook/webhook
+Verify token: UMANGCRM123
+```
+
+Update the callback URL in [Meta for Developers](https://developers.facebook.com/) → your app → Webhooks.
+
+**6. Local dev (`frontend/.env`)**
+
+```text
+EXPO_PUBLIC_BACKEND_URL=http://localhost:8001
+```
+
+Until `api.umanghometechllp.in` DNS is live, set **Vercel** `EXPO_PUBLIC_BACKEND_URL` to:
+
+```text
+https://umang-crm-systemumang-home-tech.onrender.com
+```
+
+### Login not working — checklist
+
+1. **Vercel** `EXPO_PUBLIC_BACKEND_URL` must point to a working API (Render URL until `api.umanghometechllp.in` DNS exists).
+2. **Render** redeploy after changing `CORS_ORIGINS` — live server must allow `https://umanghometechllp.in` and `https://www.umanghometechllp.in`. Check: open `https://umang-crm-systemumang-home-tech.onrender.com/debug-config` and confirm those domains appear under `cors_origins`.
+3. **Render** add `SUPABASE_SERVICE_ROLE_KEY` (from Supabase → Settings → API → `service_role` secret). Anon key alone may block employee logins.
+4. **Render** set `JWT_SECRET` to a long random string (not `YOUR_RANDOM_SECRET`).
+5. Admin test login: email `htshpatil13@gmail.com`, password `umang@admin` (all lowercase).
+6. Employee logins use the password the manager set when creating the employee.
+
+See [`UNDERSTAND.md`](./UNDERSTAND.md) for the folder structure and code ownership guide.

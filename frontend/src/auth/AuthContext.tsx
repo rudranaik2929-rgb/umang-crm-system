@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { api, setToken, setActAsId, warmUpBackend, clearSnapshots } from '../lib/api';
+import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots } from '../lib/api';
 
 export interface User {
   user_id: string;
@@ -83,6 +83,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return r.data.user as User;
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
+      const msg = e?.message || '';
+      if (!e?.response && (msg.includes('Network Error') || e?.code === 'ERR_NETWORK')) {
+        console.warn('exchangeSession failed: cannot reach API', BACKEND, e);
+        throw new Error(
+          'Cannot reach the CRM server. Check Vercel env EXPO_PUBLIC_BACKEND_URL and that the backend is running on Render.',
+        );
+      }
       console.warn('exchangeSession failed', detail || e);
       return null;
     }

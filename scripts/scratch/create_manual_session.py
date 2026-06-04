@@ -32,6 +32,6 @@ r = httpx.post(url, headers=headers, json=data)
 if r.status_code < 300:
     print("SUCCESS!")
     print(f"Session Token: {session_token}")
-    print("Instructions: Set the 'session_token' cookie in your browser for 'umang-home-tech.vercel.app' or 'umang-crm-systemumang-home-tech.onrender.com'")
+    print("Instructions: Set the 'session_token' cookie in your browser for 'umanghometechllp.in' (or api.umanghometechllp.in for API-only tests)")
 else:
     print(f"FAILED: {r.status_code} {r.text}")

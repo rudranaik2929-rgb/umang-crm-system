@@ -14,6 +14,10 @@ services:
         generateValue: true
       - key: COOKIE_SECURE
         value: "true"
+      - key: CORS_ORIGINS
+        value: "https://umanghometechllp.in,https://www.umanghometechllp.in"
+      - key: FRONTEND_URL
+        value: "https://umanghometechllp.in"
       - key: FACEBOOK_VERIFY_TOKEN
         value: UMANGCRM123
       - key: FACEBOOK_PAGE_ACCESS_TOKEN
