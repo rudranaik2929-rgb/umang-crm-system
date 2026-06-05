@@ -10,6 +10,7 @@ import { LineChart } from '../../src/components/LineChart';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { roleLabel } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
+import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 
 const ROLE_ACCENT: Record<string, string> = {
@@ -33,7 +34,7 @@ const ROLE_HIGHLIGHT: Record<string, string[]> = {
 };
 
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
-  manager: { label: 'Review lead pipeline', route: '/(app)/pipeline' },
+  manager: { label: 'Assign leads to team', route: '/(app)/assign-leads' },
   telecaller: { label: 'Open my telecaller queue', route: '/(app)/telecaller' },
   site_visit: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
   sales_executive: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
@@ -156,6 +157,8 @@ export default function MyDashboard() {
             <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
             <View style={styles.kpiGrid}>
               <KPI label="Total Leads" value={personal.leads_total ?? personal.actions_total} icon="people-outline" color={accent} colors={colors} />
+              <KPI label="Assigned Active" value={personal.assigned_active ?? personal.leads_total} icon="briefcase-outline" color={colors.info} colors={colors} />
+              <KPI label="Completed" value={personal.assigned_completed ?? personal.closed_deals} icon="checkmark-circle-outline" color={colors.positive} colors={colors} />
               <KPI label="Positive" value={personal.positives} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />
               <KPI label="Not Interested" value={personal.negatives} icon="thumbs-down-outline" color={colors.negative} colors={colors} highlight={highlight.includes('negatives')} />
               <KPI label="Follow-ups" value={personal.followups} icon="time-outline" color={colors.warning} colors={colors} highlight={highlight.includes('followups')} />
@@ -164,6 +167,13 @@ export default function MyDashboard() {
               <KPI label="Loans" value={personal.loans_done} icon="business-outline" color={'#7C3AED'} colors={colors} highlight={highlight.includes('loans_done')} />
               <KPI label="Closed Deals" value={personal.closed_deals} icon="trophy-outline" color={colors.accent} colors={colors} highlight={highlight.includes('closed_deals')} />
             </View>
+          </View>
+        )}
+
+        {(role === 'manager' || role === 'admin') && (
+          <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16, marginTop: 8 }]}>
+            <Text style={[styles.section, { color: colors.textMuted, marginBottom: 10 }]}>TEAM ASSIGNMENTS</Text>
+            <AssignLeadsPanel compact />
           </View>
         )}
 

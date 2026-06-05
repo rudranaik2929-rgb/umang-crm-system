@@ -86,8 +86,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const msg = e?.message || '';
       if (!e?.response && (msg.includes('Network Error') || e?.code === 'ERR_NETWORK')) {
         console.warn('exchangeSession failed: cannot reach API', BACKEND, e);
+        const host = typeof window !== 'undefined' ? window.location.hostname : '';
+        const wwwHint = host.startsWith('www.')
+          ? ' Your site uses www — on Render set CORS_ORIGINS to include both https://umanghometechllp.in and https://www.umanghometechllp.in, then redeploy the backend.'
+          : '';
         throw new Error(
-          'Cannot reach the CRM server. Check Vercel env EXPO_PUBLIC_BACKEND_URL and that the backend is running on Render.',
+          `Cannot reach the CRM server (${BACKEND}). On Vercel set EXPO_PUBLIC_BACKEND_URL to your Render URL and redeploy.${wwwHint}`,
         );
       }
       console.warn('exchangeSession failed', detail || e);

@@ -98,6 +98,22 @@ _DEFAULT_CORS_ORIGINS = [
 ]
 _cors_env = (os.environ.get("CORS_ORIGINS") or "").strip()
 CORS_ORIGINS = [o.strip() for o in _cors_env.split(",") if o.strip()] if _cors_env else _DEFAULT_CORS_ORIGINS
+
+
+def _ensure_www_cors_pair(origins: List[str]) -> List[str]:
+    """Vercel often serves www.umanghometechllp.in while env only lists the apex — allow both."""
+    out = list(origins)
+    pairs = [
+        ("https://umanghometechllp.in", "https://www.umanghometechllp.in"),
+        ("https://www.umanghometechllp.in", "https://umanghometechllp.in"),
+    ]
+    for a, b in pairs:
+        if a in out and b not in out:
+            out.append(b)
+    return out
+
+
+CORS_ORIGINS = _ensure_www_cors_pair(CORS_ORIGINS)
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://umanghometechllp.in").rstrip("/")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
 SUPABASE_KEY = (
@@ -431,12 +447,37 @@ def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any
     cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
     return SESSION_CACHE["leads"] + [l for l in db_leads if l.get("lead_id") not in cache_ids]
 
+PLATFORM_LABELS = {
+    "manual": "Database",
+    "housing": "Housing.com",
+    "meta": "Meta (Facebook)",
+    "other": "Other Sources",
+    "brokerage": "Broker Pool",
+}
+
+
+def sb_select_all(table: str, params: Optional[dict] = None, page_size: int = 1000) -> List[Dict[str, Any]]:
+    """Paginate through PostgREST default row cap so counts match opened lists."""
+    base = dict(params or {})
+    out: List[Dict[str, Any]] = []
+    offset = 0
+    while True:
+        batch = sb_select(table, {**base, "limit": str(page_size), "offset": str(offset)})
+        if not batch:
+            break
+        out.extend(batch)
+        if len(batch) < page_size:
+            break
+        offset += page_size
+    return out
+
+
 def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Shared manual / housing / meta / other / broker counts for dashboard + modal."""
+    """Shared Database / housing / meta / other / broker counts for dashboard + modal."""
     platform_defs = [
-        ("manual", "Manual Entry"),
-        ("housing", "Housing.com"),
-        ("meta", "Meta (Facebook)"),
+        ("manual", PLATFORM_LABELS["manual"]),
+        ("housing", PLATFORM_LABELS["housing"]),
+        ("meta", PLATFORM_LABELS["meta"]),
     ]
     buckets = {
         key: {"platform": key, "label": label, "count": 0, "active": 0, "negative": 0, "sources": []}
@@ -2634,7 +2675,7 @@ async def list_leads_filtered(
 
     limit = min(max(limit, 1), 500)
     today = now_utc().date().isoformat()
-    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
+    db_leads = sb_select_all("leads", {"select": "*", "order": "created_at.desc"})
     all_leads = merge_leads_with_cache(db_leads)
     filtered = filter_lead_bucket(all_leads, bucket_key, today)
     return {"bucket": bucket_key, "total": len(filtered), "leads": filtered[:limit]}
@@ -2645,9 +2686,62 @@ async def stats_lead_buckets(cu: User = Depends(get_current_user)):
     """Counts for every dashboard metric box, computed with the EXACT same
     filter+dedupe as /leads/filtered so each box number matches its opened list."""
     today = now_utc().date().isoformat()
-    db_leads = sb_select("leads", {"select": "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,follow_up_at,created_at"})
+    db_leads = sb_select_all("leads", {"select": "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,follow_up_at,created_at", "order": "created_at.desc"})
     all_leads = merge_leads_with_cache(db_leads)
     return {key: len(filter_lead_bucket(all_leads, key, today)) for key in LEAD_BUCKET_KEYS}
+
+
+@api_router.get("/leads/assign-queue")
+async def list_assign_queue(cu: User = Depends(get_current_user)):
+    """Unassigned pipeline leads for manager assign workspace."""
+    ensure_roles(cu, ["admin", "manager"])
+    db_leads = sb_select_all("leads", {"select": "*", "order": "created_at.desc"})
+    all_leads = merge_leads_with_cache(db_leads)
+    queue = [
+        l for l in all_leads
+        if is_pipeline_lead(l)
+        and l.get("status") != "negative"
+        and not l.get("assigned_to")
+        and l.get("stage") in {"new", "assigned"}
+    ]
+    queue = dedupe_leads(queue)
+    queue.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "active": "eq.true", "order": "name.asc"})
+    return {"total": len(queue), "leads": queue, "employees": employees}
+
+
+@api_router.get("/stats/assignment")
+async def stats_assignment(cu: User = Depends(get_current_user)):
+    """Per-employee assigned / active / completed lead counts for manager dashboards."""
+    ensure_roles(cu, ["admin", "manager"])
+    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "order": "name.asc"})
+    all_leads = dedupe_leads(merge_leads_with_cache(sb_select_all("leads", {"select": "lead_id,assigned_to,status,stage,created_at,updated_at"})))
+    rows = []
+    for e in employees:
+        eid = e.get("employee_id")
+        emp_leads = [l for l in all_leads if l.get("assigned_to") == eid]
+        rows.append({
+            "employee_id": eid,
+            "name": e.get("name"),
+            "email": e.get("email"),
+            "role": e.get("role"),
+            "department": e.get("department"),
+            "active": e.get("active", True),
+            "assigned_total": len(emp_leads),
+            "assigned_active": sum(1 for l in emp_leads if l.get("status") != "negative" and l.get("stage") != "closed"),
+            "assigned_completed": sum(1 for l in emp_leads if l.get("stage") == "closed"),
+            "assigned_positive": sum(1 for l in emp_leads if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]),
+            "assigned_not_interested": sum(1 for l in emp_leads if l.get("status") == "negative"),
+            "assigned_new": sum(1 for l in emp_leads if l.get("stage") in ["new", "assigned"] and l.get("status") != "negative"),
+        })
+    unassigned = dedupe_leads([
+        l for l in all_leads
+        if is_pipeline_lead(l) and l.get("status") != "negative" and not l.get("assigned_to") and l.get("stage") in {"new", "assigned"}
+    ])
+    return {
+        "unassigned_count": len(unassigned),
+        "employees": rows,
+    }
 
 
 @api_router.get("/leads/by-platform/{platform}")
@@ -2665,7 +2759,7 @@ async def list_leads_by_platform(
 
     limit = min(max(limit, 1), 500)
     offset = max(offset, 0)
-    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
+    db_leads = sb_select_all("leads", {"select": "*", "order": "created_at.desc"})
     all_leads = merge_leads_with_cache(db_leads)
     filtered = [l for l in all_leads if lead_matches_platform(l, platform_key)]
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
@@ -2686,7 +2780,7 @@ async def list_leads_by_platform(
     page = filtered[offset:offset + limit]
     return {
         "platform": platform_key,
-        "label": {"manual": "Manual Entry", "housing": "Housing.com", "meta": "Meta (Facebook)", "other": "Other Sources"}[platform_key],
+        "label": PLATFORM_LABELS.get(platform_key, "Other Sources"),
         "total": len(filtered),
         "leads": page,
     }
@@ -2696,10 +2790,8 @@ async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user
     """Most recent real leads with their platform + arrival time. Powers the
     manager/admin 'new lead arrived' popup. Meta test/fake leads are excluded."""
     limit = min(max(limit, 1), 100)
-    platform_labels = {
-        "manual": "Manual Entry", "housing": "Housing.com",
-        "meta": "Meta (Facebook)", "other": "Other", "brokerage": "Broker Pool",
-    }
+    platform_labels = PLATFORM_LABELS.copy()
+    platform_labels["other"] = PLATFORM_LABELS["other"]
     db_leads = sb_select("leads", {
         "select": "lead_id,name,phone,email,source,stage,status,external_lead_id,created_at",
         "order": "created_at.desc",
@@ -2833,6 +2925,8 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         emp_name = p.assigned_to
         emps = sb_select("employees", {"employee_id": f"eq.{p.assigned_to}", "select": "name"})
         if emps: emp_name = emps[0]["name"]
+        data["assigned_at"] = now_utc().isoformat()
+        data["assigned_by"] = cu.acting_as_employee_id or cu.user_id
         log_activity(cu, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
         create_notification(p.assigned_to, "Lead assigned", f"{old_lead.get('name', 'Lead')} has been assigned to you.", lead_id=lead_id)
     
@@ -3462,8 +3556,8 @@ def _employee_allowed_pages(employee: Dict[str, Any]) -> List[str]:
 def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
-        "admin": ["dashboard", "my-dashboard", "pipeline", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["my-dashboard", "pipeline", "bookings", "loans", "integrations", "broker", "employees"],
+        "admin": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        "manager": ["my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "employees"],
         "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
         "site_visit": ["my-dashboard", "sales-executive", "pipeline"],
         "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline"],
@@ -3816,6 +3910,10 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         if followups else max(activity_followups, follow_up_visits)
     )
 
+    today = now_utc().date().isoformat()
+    bucket_leads = merge_leads_with_cache(leads)
+    lead_buckets = {key: len(filter_lead_bucket(bucket_leads, key, today)) for key in LEAD_BUCKET_KEYS}
+
     return {
         "total_leads": platform_stats["total"],
         "broker_pool_leads": len(broker_pool),
@@ -3838,6 +3936,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         "campaigns": len(campaigns) or 2,
         "revenue_pipeline": rev,
         "stage_distribution": stage_dist,
+        "lead_buckets": lead_buckets,
     }
 
 @api_router.get("/stats/leads-by-source")
@@ -3976,11 +4075,14 @@ async def stats_me(cu: User=Depends(get_current_user)):
     negative = sum(1 for l in leads if l.get("status") == "negative")
     closed = sum(1 for l in leads if l.get("stage") == "closed")
     leads_total = len(leads)
+    assigned_active = sum(1 for l in leads if l.get("status") != "negative" and l.get("stage") != "closed")
+    assigned_completed = closed
 
     return {
         "employee": None, "role": cu.role,
         "personal": {
             "actions_total": len(activities), "leads_total": leads_total,
+            "assigned_active": assigned_active, "assigned_completed": assigned_completed,
             "positives": positives, "negatives": negative, "followups": followups,
             "visits": visits, "bookings_done": bookings_done, "loans_done": loans_done, "closed_deals": closed_deals,
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
@@ -4015,6 +4117,9 @@ async def stats_employees(cu: User=Depends(get_current_user)):
             "employee_id": eid, "name": e["name"], "email": e["email"],
             "role": e["role"], "department": e.get("department", ""),
             "actions_total": actions_total, "leads_total": len(emp_leads), "last_activity": last_activity,
+            "assigned_total": len(emp_leads),
+            "assigned_active": sum(1 for l in emp_leads if l.get("status") != "negative" and l.get("stage") != "closed"),
+            "assigned_completed": sum(1 for l in emp_leads if l.get("stage") == "closed"),
             "positives": positives,
             "negatives": sum(1 for l in emp_leads if l.get("status") == "negative"),
             "followups": followups, "visits": visits,

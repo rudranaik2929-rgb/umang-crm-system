@@ -166,7 +166,9 @@ https://umang-crm-systemumang-home-tech.onrender.com
 2. **Render** redeploy after changing `CORS_ORIGINS` — live server must allow `https://umanghometechllp.in` and `https://www.umanghometechllp.in`. Check: open `https://umang-crm-systemumang-home-tech.onrender.com/debug-config` and confirm those domains appear under `cors_origins`.
 3. **Render** add `SUPABASE_SERVICE_ROLE_KEY` (from Supabase → Settings → API → `service_role` secret). Anon key alone may block employee logins.
 4. **Render** set `JWT_SECRET` to a long random string (not `YOUR_RANDOM_SECRET`).
-5. Admin test login: email `htshpatil13@gmail.com`, password `umang@admin` (all lowercase).
-6. Employee logins use the password the manager set when creating the employee.
+5. **www vs non-www:** If users open `https://www.umanghometechllp.in`, Render **must** allow that origin in CORS (not only the apex domain). Use:
+   `CORS_ORIGINS=https://umanghometechllp.in,https://www.umanghometechllp.in`
+6. Admin test login: email `htshpatil13@gmail.com`, password `umang@admin` (all lowercase).
+7. Employee logins use the password the manager set when creating the employee.
 
 See [`UNDERSTAND.md`](./UNDERSTAND.md) for the folder structure and code ownership guide.

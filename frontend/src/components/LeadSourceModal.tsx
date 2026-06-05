@@ -13,6 +13,7 @@ import {
   formatHousingConfiguration,
   formatHousingLeadDate,
 } from '../lib/leadFormat';
+import { platformLabel } from '../lib/constants';
 
 const { height: SCREEN_H } = Dimensions.get('window');
 
@@ -258,7 +259,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     const found = mainPlatforms.find((p) => p.platform === key);
     return found || {
       platform: key,
-      label: key === 'manual' ? 'Manual Entry' : key === 'housing' ? 'Housing.com' : key === 'meta' ? 'Meta (Facebook)' : 'Other Sources',
+      label: platformLabel(key),
       count: 0, active: 0, negative: 0, sources: [],
     };
   });
@@ -304,7 +305,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                       ? `${data.total} classified leads · tap a platform`
                       : loading
                         ? 'Loading…'
-                        : 'Manual · Housing · Meta'}
+                        : 'Database · Housing · Meta'}
                 </Text>
               </View>
             </View>

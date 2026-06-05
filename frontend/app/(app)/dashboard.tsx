@@ -13,10 +13,25 @@ import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { LineChart } from '../../src/components/LineChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
+import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
 import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/constants';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
 const COLD_STAGES = ['new'];
+
+function fallbackBucketCounts(leads: any[]) {
+  const today = new Date().toISOString().slice(0, 10);
+  const active = leads.filter((l) => l.status !== 'negative');
+  return {
+    all: leads.length,
+    new_today: leads.filter((l) => l.created_at?.slice(0, 10) === today).length,
+    positive: active.filter((l) => HOT_STAGES.includes(l.stage)).length,
+    not_interested: leads.filter((l) => l.status === 'negative').length,
+    registration: active.filter((l) => l.stage === 'registration').length,
+    booking: active.filter((l) => ['booking', 'loan'].includes(l.stage)).length,
+    follow_up: leads.filter((l) => l.follow_up_at).length,
+  };
+}
 
 function formatCurrency(value: number) {
   if (!value) return '₹0';
@@ -53,18 +68,20 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [s, g, l, e, b] = await Promise.all([
+      const [s, g, l, e, b] = await Promise.allSettled([
         api.get('/stats/dashboard'),
         api.get('/stats/dashboard/graph'),
         api.get('/leads'),
         api.get('/stats/employees'),
         api.get('/stats/lead-buckets'),
       ]);
-      const nextStats = s.data || {};
-      const nextGraph = g.data || {};
-      const nextLeads = Array.isArray(l.data) ? l.data : [];
-      const nextEmployees = Array.isArray(e.data) ? e.data : [];
-      const nextBuckets = b.data || {};
+      const nextStats = s.status === 'fulfilled' ? (s.value.data || {}) : {};
+      const nextGraph = g.status === 'fulfilled' ? (g.value.data || {}) : {};
+      const nextLeads = l.status === 'fulfilled' && Array.isArray(l.value.data) ? l.value.data : [];
+      const nextEmployees = e.status === 'fulfilled' && Array.isArray(e.value.data) ? e.value.data : [];
+      const nextBuckets = b.status === 'fulfilled'
+        ? (b.value.data || {})
+        : (nextStats.lead_buckets || {});
       setStats(nextStats);
       setGraphData(nextGraph);
       setLeads(nextLeads);
@@ -107,9 +124,8 @@ export default function Dashboard() {
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
     const activeLeads = leads.filter((l) => l.status !== 'negative');
-    // Bucket counts share the exact filter+dedupe used by the opened lists,
-    // so each metric box number equals the list it opens.
-    const totalLeads = Number(buckets?.all ?? stats?.total_leads ?? 0);
+    const bucketSource = buckets && Object.keys(buckets).length ? buckets : (stats?.lead_buckets || fallbackBucketCounts(leads));
+    const totalLeads = Number(bucketSource?.all ?? stats?.total_leads ?? leads.length ?? 0);
 
     const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
     const cold = activeLeads.filter((l) => COLD_STAGES.includes(l.stage)).length || Number(sd.new || 0);
@@ -121,14 +137,14 @@ export default function Dashboard() {
       hot,
       cold,
       conversionScore,
-      newToday: Number(buckets?.new_today ?? 0),
-      positiveLeads: Number(buckets?.positive ?? stats?.positive_leads ?? 0),
-      negativeLeads: Number(buckets?.not_interested ?? stats?.negative_leads ?? 0),
-      registrationLeads: Number(buckets?.registration ?? stats?.registration_leads ?? 0),
-      bookingLeads: Number(buckets?.booking ?? 0),
+      newToday: Number(bucketSource?.new_today ?? 0),
+      positiveLeads: Number(bucketSource?.positive ?? stats?.positive_leads ?? 0),
+      negativeLeads: Number(bucketSource?.not_interested ?? stats?.negative_leads ?? 0),
+      registrationLeads: Number(bucketSource?.registration ?? stats?.registration_leads ?? 0),
+      bookingLeads: Number(bucketSource?.booking ?? 0),
       bookings: Number(stats?.bookings || 0),
       confirmedBookings: Number(stats?.confirmed_bookings || 0),
-      followUps: Number(buckets?.follow_up ?? stats?.follow_ups ?? 0),
+      followUps: Number(bucketSource?.follow_up ?? stats?.follow_ups ?? 0),
       pendingFollowUps: Number(stats?.pending_follow_ups || 0),
       loans: Number(stats?.loans || 0),
       disbursedLoans: Number(stats?.disbursed_loans || 0),
@@ -230,6 +246,19 @@ export default function Dashboard() {
         </View>
 
         <EmployeePerformance employees={employees} />
+
+        {(user?.role === 'admin' || user?.role === 'manager') && (
+          <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+            <View style={styles.panelHeader}>
+              <View>
+                <Text style={[styles.panelTitle, { color: colors.text }]}>Assign Leads</Text>
+                <Text style={[styles.panelSub, { color: colors.textMuted }]}>Team assignment snapshot · open full workspace</Text>
+              </View>
+              <Ionicons name="person-add-outline" size={20} color={colors.primary} />
+            </View>
+            <AssignLeadsPanel compact />
+          </View>
+        )}
 
         <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={styles.panelHeader}>

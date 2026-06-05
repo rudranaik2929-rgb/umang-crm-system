@@ -26,7 +26,7 @@ function parseAllowedPages(value: unknown): string[] | null {
 
 const ROLE_DEFAULT_SERVICES: Record<string, string[]> = {
   admin: ALL_SERVICES.map((s) => s.key),
-  manager: ['pipeline', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
+  manager: ['pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
   telecaller: ['telecaller', 'pipeline', 'negative'],
   site_visit: ['sales-executive', 'telecaller', 'pipeline'],
   sales_executive: ['sales-executive', 'telecaller', 'pipeline'],

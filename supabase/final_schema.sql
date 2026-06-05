@@ -100,6 +100,8 @@ create table if not exists leads (
   property_type text,
   source text not null default 'website',
   assigned_to text,
+  assigned_at timestamptz,
+  assigned_by text,
   stage text not null default 'new',
   status text not null default 'active',
   priority text,
@@ -311,6 +313,8 @@ alter table employees add column if not exists updated_at timestamptz not null d
 
 alter table leads add column if not exists source text not null default 'website';
 alter table leads add column if not exists assigned_to text;
+alter table leads add column if not exists assigned_at timestamptz;
+alter table leads add column if not exists assigned_by text;
 alter table leads add column if not exists stage text not null default 'new';
 alter table leads add column if not exists status text not null default 'active';
 alter table leads add column if not exists priority text;
@@ -399,6 +403,8 @@ create index if not exists idx_sessions_user on sessions(user_id);
 create index if not exists idx_employees_role_active on employees(role, active);
 create index if not exists idx_leads_stage_status on leads(stage, status);
 create index if not exists idx_leads_assigned_to on leads(assigned_to);
+create index if not exists idx_leads_assigned_at on leads(assigned_at desc) where assigned_at is not null;
+create index if not exists idx_leads_unassigned on leads(stage, status) where assigned_to is null;
 create index if not exists idx_leads_source on leads(source);
 create index if not exists idx_leads_external_lead_id on leads(external_lead_id);
 create index if not exists idx_leads_phone_source on leads(phone, source);

@@ -47,6 +47,7 @@ export const NAV_ITEMS = [
   { key: 'dashboard', path: '/(app)/dashboard', label: 'Dashboard', icon: 'dashboard' },
   { key: 'my-dashboard', path: '/(app)/my-dashboard', label: 'My Dashboard', icon: 'person' },
   { key: 'pipeline', path: '/(app)/pipeline', label: 'Lead Pipeline', icon: 'pipeline' },
+  { key: 'assign-leads', path: '/(app)/assign-leads', label: 'Assign Leads', icon: 'assign' },
   { key: 'telecaller', path: '/(app)/telecaller', label: 'Telecaller', icon: 'phone' },
   { key: 'sales-executive', path: '/(app)/sales-executive', label: 'Sales Executive', icon: 'visit' },
   { key: 'bookings', path: '/(app)/bookings', label: 'Bookings', icon: 'booking' },
@@ -61,8 +62,8 @@ export const NAV_ITEMS = [
 
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
-  admin: ['dashboard', 'my-dashboard', 'pipeline', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  manager: ['my-dashboard', 'pipeline', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
+  admin: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
+  manager: ['my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
   telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
   site_visit: ['my-dashboard', 'sales-executive', 'pipeline'],
   sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline'],
@@ -109,6 +110,19 @@ export function effectivePages(role?: string | null, email?: string | null, allo
 
 export function visibleNavFor(role?: string | null, email?: string | null, allowedPages?: string[] | null) {
   return NAV_ITEMS.filter((n) => canAccess(role, n.key, email, allowedPages));
+}
+
+export const PLATFORM_LABELS: Record<string, string> = {
+  manual: 'Database',
+  housing: 'Housing.com',
+  meta: 'Meta (Facebook)',
+  other: 'Other Sources',
+  brokerage: 'Broker Pool',
+};
+
+export function platformLabel(key?: string | null): string {
+  if (!key) return 'Other Sources';
+  return PLATFORM_LABELS[key] || key;
 }
 
 export function isAdmin(role?: string | null) {

@@ -121,6 +121,8 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
                 </View>
 
                 <View style={styles.metricPills}>
+                  <MetricPill icon="briefcase" label="Assigned" value={employee.assigned_total ?? employee.leads_total ?? 0} color={colors.info} />
+                  <MetricPill icon="checkmark-circle" label="Completed" value={employee.assigned_completed ?? employee.closed_deals ?? 0} color={colors.positive} />
                   <MetricPill icon="thumbs-up" label="Positive" value={employee.positives} color={colors.positive} />
                   <MetricPill icon="thumbs-down" label="Not Interested" value={employee.negatives} color={colors.negative} />
                   <MetricPill icon="time" label="Follow-ups" value={employee.followups ?? 0} color={colors.warning} />

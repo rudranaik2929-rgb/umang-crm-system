@@ -11,6 +11,7 @@ const ICON_MAP: Record<string, any> = {
   person: 'person-circle-outline',
   admin: 'shield-checkmark-outline',
   pipeline: 'git-branch-outline',
+  assign: 'person-add-outline',
   phone: 'call-outline',
   visit: 'location-outline',
   booking: 'document-text-outline',
