@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable, TextInput, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Modal, Pressable, TextInput, ScrollView, ActivityIndicator, Platform } from 'react-native';
+import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -24,6 +25,7 @@ type Props = {
   visible: boolean;
   leadName?: string;
   title?: string;
+  overlayZIndex?: number;
   onClose: () => void;
   onSubmit: (data: FormData) => Promise<void>;
 };
@@ -40,7 +42,14 @@ function dayName(dateStr: string) {
   return d.toLocaleDateString('en-IN', { weekday: 'long' });
 }
 
-export function ScheduleFollowUpModal({ visible, leadName, title = 'Schedule Follow Up', onClose, onSubmit }: Props) {
+export function ScheduleFollowUpModal({
+  visible,
+  leadName,
+  title = 'Schedule Follow Up',
+  overlayZIndex = 12000,
+  onClose,
+  onSubmit,
+}: Props) {
   const { colors } = useTheme();
   const [form, setForm] = useState<FormData>({
     follow_up_date: defaultDate(),
@@ -91,109 +100,122 @@ export function ScheduleFollowUpModal({ visible, leadName, title = 'Schedule Fol
     }
   };
 
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable
-          style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
-          onPress={(e: any) => e?.stopPropagation?.()}
-        >
-          <View style={styles.header}>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
-              {leadName ? (
-                <Text style={[styles.sub, { color: colors.textMuted }]} numberOfLines={1}>
-                  {leadName}
-                </Text>
-              ) : null}
-            </View>
-            <Pressable onPress={onClose} style={[styles.close, { borderColor: colors.border }]}>
-              <Ionicons name="close" size={18} color={colors.textSecondary} />
-            </Pressable>
-          </View>
+  if (!visible) return null;
 
-          <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
-            <Field label="Follow-up date" colors={colors}>
-              <TextInput
-                value={form.follow_up_date}
-                onChangeText={(v) => setForm((f) => ({ ...f, follow_up_date: v, follow_up_day: dayName(v) }))}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor={colors.textMuted}
-                style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
-              />
-            </Field>
-
-            <Field label="Follow-up time (24h)" colors={colors}>
-              <TextInput
-                value={form.follow_up_time}
-                onChangeText={(v) => setForm((f) => ({ ...f, follow_up_time: v }))}
-                placeholder="11:00"
-                placeholderTextColor={colors.textMuted}
-                style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
-              />
-            </Field>
-
-            {form.follow_up_day ? (
-              <Text style={[styles.dayHint, { color: colors.primary }]}>{form.follow_up_day}</Text>
+  const sheet = (
+    <Pressable style={styles.backdrop} onPress={onClose}>
+      <Pressable
+        style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        onPress={(e: any) => e?.stopPropagation?.()}
+      >
+        <View style={styles.header}>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+            {leadName ? (
+              <Text style={[styles.sub, { color: colors.textMuted }]} numberOfLines={1}>
+                {leadName}
+              </Text>
             ) : null}
-
-            <Field label="Reason" colors={colors}>
-              <View style={styles.reasonGrid}>
-                {REASON_OPTIONS.map((reason) => {
-                  const active = form.reason === reason;
-                  return (
-                    <Pressable
-                      key={reason}
-                      onPress={() => setForm((f) => ({ ...f, reason }))}
-                      style={[
-                        styles.reasonChip,
-                        {
-                          borderColor: active ? '#F97316' : colors.border,
-                          backgroundColor: active ? '#F9731618' : colors.surfaceAlt,
-                        },
-                      ]}
-                    >
-                      <Text style={{ color: active ? '#F97316' : colors.textSecondary, fontSize: 11, fontWeight: '600' }}>
-                        {reason}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </Field>
-
-            <Field label="Notes (optional)" colors={colors}>
-              <TextInput
-                value={form.notes}
-                onChangeText={(v) => setForm((f) => ({ ...f, notes: v }))}
-                placeholder="Add call notes or context for the follow-up"
-                placeholderTextColor={colors.textMuted}
-                multiline
-                style={[
-                  styles.input,
-                  styles.notes,
-                  { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceAlt },
-                ]}
-              />
-            </Field>
-
-            {error ? <Text style={styles.error}>{error}</Text> : null}
-          </ScrollView>
-
-          <View style={styles.actions}>
-            <Pressable onPress={onClose} style={[styles.btn, { borderColor: colors.border }]}>
-              <Text style={{ color: colors.textSecondary, fontWeight: '700' }}>Cancel</Text>
-            </Pressable>
-            <Pressable
-              onPress={handleSubmit}
-              disabled={busy || !canSubmit}
-              style={[styles.btn, styles.primaryBtn, { backgroundColor: busy ? colors.muted : '#F97316', opacity: canSubmit ? 1 : 0.6 }]}
-            >
-              {busy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.primaryText}>Save & Open Follow Ups</Text>}
-            </Pressable>
           </View>
-        </Pressable>
+          <Pressable onPress={onClose} style={[styles.close, { borderColor: colors.border }]}>
+            <Ionicons name="close" size={18} color={colors.textSecondary} />
+          </Pressable>
+        </View>
+
+        <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+          <Field label="Follow-up date" colors={colors}>
+            <TextInput
+              value={form.follow_up_date}
+              onChangeText={(v) => setForm((f) => ({ ...f, follow_up_date: v, follow_up_day: dayName(v) }))}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+            />
+          </Field>
+
+          <Field label="Follow-up time (24h)" colors={colors}>
+            <TextInput
+              value={form.follow_up_time}
+              onChangeText={(v) => setForm((f) => ({ ...f, follow_up_time: v }))}
+              placeholder="11:00"
+              placeholderTextColor={colors.textMuted}
+              style={[styles.input, { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+            />
+          </Field>
+
+          {form.follow_up_day ? (
+            <Text style={[styles.dayHint, { color: colors.primary }]}>{form.follow_up_day}</Text>
+          ) : null}
+
+          <Field label="Reason" colors={colors}>
+            <View style={styles.reasonGrid}>
+              {REASON_OPTIONS.map((reason) => {
+                const active = form.reason === reason;
+                return (
+                  <Pressable
+                    key={reason}
+                    onPress={() => setForm((f) => ({ ...f, reason }))}
+                    style={[
+                      styles.reasonChip,
+                      {
+                        borderColor: active ? '#F97316' : colors.border,
+                        backgroundColor: active ? '#F9731618' : colors.surfaceAlt,
+                      },
+                    ]}
+                  >
+                    <Text style={{ color: active ? '#F97316' : colors.textSecondary, fontSize: 11, fontWeight: '600' }}>
+                      {reason}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          </Field>
+
+          <Field label="Notes (optional)" colors={colors}>
+            <TextInput
+              value={form.notes}
+              onChangeText={(v) => setForm((f) => ({ ...f, notes: v }))}
+              placeholder="Add call notes or context for the follow-up"
+              placeholderTextColor={colors.textMuted}
+              multiline
+              style={[
+                styles.input,
+                styles.notes,
+                { color: colors.text, borderColor: colors.border, backgroundColor: colors.surfaceAlt },
+              ]}
+            />
+          </Field>
+
+          {error ? <Text style={styles.error}>{error}</Text> : null}
+        </ScrollView>
+
+        <View style={styles.actions}>
+          <Pressable onPress={onClose} style={[styles.btn, { borderColor: colors.border }]}>
+            <Text style={{ color: colors.textSecondary, fontWeight: '700' }}>Cancel</Text>
+          </Pressable>
+          <Pressable
+            onPress={handleSubmit}
+            disabled={busy || !canSubmit}
+            style={[styles.btn, styles.primaryBtn, { backgroundColor: busy ? colors.muted : '#F97316', opacity: canSubmit ? 1 : 0.6 }]}
+          >
+            {busy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.primaryText}>Save & Open Follow Ups</Text>}
+          </Pressable>
+        </View>
       </Pressable>
+    </Pressable>
+  );
+
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    return createPortal(
+      <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>,
+      document.body,
+    );
+  }
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      {sheet}
     </Modal>
   );
 }
@@ -208,7 +230,24 @@ function Field({ label, colors, children }: { label: string; colors: any; childr
 }
 
 const styles = StyleSheet.create({
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 20 },
+  webOverlay: {
+    position: 'fixed' as any,
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+    ...Platform.select({
+      web: { minHeight: '100vh' as any },
+      default: {},
+    }),
+  },
   card: { width: '100%', maxWidth: 480, borderRadius: 12, borderWidth: 1, padding: 18 },
   header: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 14 },
   title: { fontSize: 18, fontWeight: '700' },

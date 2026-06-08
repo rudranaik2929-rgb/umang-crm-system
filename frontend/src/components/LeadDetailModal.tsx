@@ -119,6 +119,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setBrokerageAmount('');
       api.get('/employees').then(r => setEmployees((r.data || []).filter((e: any) => e.active))).catch(() => {});
     }
+    if (!visible) {
+      setFollowUpOpen(false);
+      setFollowUpPayload(null);
+      setFollowUpAction(null);
+      setActiveCategory(null);
+    }
   }, [visible, leadId, load]);
 
   useEffect(() => {
@@ -804,36 +810,51 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     </Pressable>
   );
 
-  const followUpModal = (
-    <ScheduleFollowUpModal
-      visible={followUpOpen}
-      leadName={data?.lead?.name}
-      onClose={() => {
-        setFollowUpOpen(false);
-        setFollowUpAction(null);
-      }}
-      onSubmit={submitFollowUp}
-    />
-  );
+  const followUpZIndex = overlayZIndex + 2000;
 
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
     return (
       <>
-        {createPortal(
-          <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>,
-          document.body,
-        )}
-        {followUpModal}
+        {visible
+          ? createPortal(
+              <View style={[styles.webOverlay, { zIndex: overlayZIndex, opacity: followUpOpen ? 0.35 : 1 }]}>{sheet}</View>,
+              document.body,
+            )
+          : null}
+        <ScheduleFollowUpModal
+          visible={followUpOpen}
+          leadName={data?.lead?.name}
+          overlayZIndex={followUpZIndex}
+          onClose={() => {
+            setFollowUpOpen(false);
+            setFollowUpAction(null);
+          }}
+          onSubmit={submitFollowUp}
+        />
       </>
     );
   }
 
   return (
     <>
-      <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <Modal
+        visible={visible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => (followUpOpen ? setFollowUpOpen(false) : onClose())}
+      >
         {sheet}
       </Modal>
-      {followUpModal}
+      <ScheduleFollowUpModal
+        visible={followUpOpen}
+        leadName={data?.lead?.name}
+        overlayZIndex={followUpZIndex}
+        onClose={() => {
+          setFollowUpOpen(false);
+          setFollowUpAction(null);
+        }}
+        onSubmit={submitFollowUp}
+      />
     </>
   );
 }
