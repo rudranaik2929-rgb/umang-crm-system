@@ -215,7 +215,14 @@ export default function Dashboard() {
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Tap for full list" onPress={() => setLeadsBucket('booking')} />
           <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · tap for list`} onPress={() => setLeadsBucket('follow_up')} />
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} onPress={() => router.push('/(app)/loans' as any)} />
-          <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} onPress={() => router.push('/(app)/employees' as any)} />
+          <MetricCard
+            icon="briefcase-outline"
+            label="Employees"
+            value={model.employees}
+            accent="#14B8A6"
+            helper={model.campaigns ? `${model.campaigns} campaigns` : 'Team members'}
+            onPress={() => router.push('/(app)/employees' as any)}
+          />
         </View>
 
         <Pressable

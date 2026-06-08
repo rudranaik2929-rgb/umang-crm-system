@@ -50,10 +50,8 @@ export function AssignLeadsPanel({ compact = false }: Props) {
             <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }} numberOfLines={1}>{emp.name}</Text>
             <Text style={{ color: colors.textMuted, fontSize: 9 }}>{roleLabel(emp.role)}</Text>
             <View style={styles.counts}>
-              <Text style={{ color: colors.info, fontSize: 10, fontWeight: '700' }}>{emp.assigned_total ?? 0} assigned</Text>
               <Text style={{ color: colors.primary, fontSize: 10, fontWeight: '700' }}>{emp.assigned_queue ?? 0} queue</Text>
               <Text style={{ color: '#F97316', fontSize: 10, fontWeight: '700' }}>{emp.assigned_follow_ups ?? 0} follow-up</Text>
-              <Text style={{ color: colors.positive, fontSize: 10, fontWeight: '700' }}>{emp.assigned_completed ?? 0} done</Text>
             </View>
           </View>
         ))}

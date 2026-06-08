@@ -56,32 +56,22 @@ export default function AssignLeads() {
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
           <View style={styles.summaryRow}>
-            <SummaryBox colors={colors} label="Waiting to assign" value={unassignedCount} accent="#6366F1" icon="time-outline" />
-            <SummaryBox colors={colors} label="Team members" value={employees.length} accent={colors.primary} icon="people-outline" />
-            <SummaryBox
-              colors={colors}
-              label="Total assigned"
-              value={assignmentStats.reduce((n, e) => n + Number(e.assigned_total || 0), 0)}
-              accent={colors.positive}
-              icon="checkmark-done-outline"
-            />
+            <SummaryBox colors={colors} label="Unassigned" value={unassignedCount} accent="#6366F1" icon="time-outline" />
+            <SummaryBox colors={colors} label="Team" value={employees.length} accent={colors.primary} icon="people-outline" />
           </View>
 
           <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-            <Text style={[styles.panelTitle, { color: colors.text }]}>Employee assignment overview</Text>
-            <Text style={[styles.panelSub, { color: colors.textMuted }]}>Assigned = all time · Queue = workspace tab count · Follow-ups = scheduled</Text>
+            <Text style={[styles.panelTitle, { color: colors.text }]}>Team snapshot</Text>
+            <Text style={[styles.panelSub, { color: colors.textMuted }]}>Queue = telecaller new enquiries · Follow-ups = scheduled calls</Text>
             <View style={styles.empGrid}>
               {assignmentStats.map((emp) => (
                 <View key={emp.employee_id} style={[styles.empCard, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
                   <Text style={[styles.empName, { color: colors.text }]} numberOfLines={1}>{emp.name}</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 10 }}>{roleLabel(emp.role)}</Text>
                   <View style={styles.empMetrics}>
-                    <MiniStat label="Assigned" value={emp.assigned_total} color={colors.info} />
                     <MiniStat label="Queue" value={emp.assigned_queue} color={colors.primary} />
                     <MiniStat label="Follow-ups" value={emp.assigned_follow_ups} color="#F97316" />
-                    <MiniStat label="In progress" value={emp.assigned_in_progress} color="#8B5CF6" />
-                    <MiniStat label="Completed" value={emp.assigned_completed} color={colors.positive} />
-                    <MiniStat label="Not Interested" value={emp.assigned_not_interested} color={colors.negative} />
+                    <MiniStat label="Done" value={emp.assigned_completed} color={colors.positive} />
                   </View>
                 </View>
               ))}
@@ -90,7 +80,7 @@ export default function AssignLeads() {
 
           <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.panelTitle, { color: colors.text }]}>Leads waiting for assignment</Text>
-            <Text style={[styles.panelSub, { color: colors.textMuted }]}>{queue.length} leads · tap Open or assign directly</Text>
+            <Text style={[styles.panelSub, { color: colors.textMuted }]}>{unassignedCount} leads · tap Open or assign directly</Text>
             {queue.length === 0 ? (
               <Text style={{ color: colors.textMuted, paddingVertical: 20, textAlign: 'center' }}>All caught up — no unassigned leads right now.</Text>
             ) : (

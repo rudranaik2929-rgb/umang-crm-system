@@ -519,6 +519,47 @@ def filter_employee_follow_up_leads(emp_leads: List[Dict[str, Any]]) -> List[Dic
     ])
 
 
+def _lead_priority(lead: Dict[str, Any]) -> str:
+    return str(lead.get("priority") or "").strip().lower()
+
+
+def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: str) -> List[Dict[str, Any]]:
+    """Single source of truth for employee performance boxes + drill-down lists."""
+    rows = dedupe_leads(emp_leads)
+    if metric_key == "active":
+        return [l for l in rows if l.get("status") != "negative" and l.get("stage") != "closed"]
+    if metric_key == "hot":
+        return [l for l in rows if _lead_priority(l) == "hot" and l.get("status") != "negative"]
+    if metric_key == "visited":
+        return [
+            l for l in rows
+            if l.get("status") != "negative"
+            and l.get("stage") in ["site_visit", "positive"]
+        ]
+    if metric_key == "not_interested":
+        return [l for l in rows if l.get("status") == "negative"]
+    if metric_key == "booking_done":
+        return [l for l in rows if l.get("stage") in ["booking", "loan", "registration"]]
+    if metric_key == "low_budget":
+        return [l for l in rows if _lead_priority(l) == "low_budget"]
+    if metric_key == "ringing":
+        return [l for l in rows if clean_text(l.get("call_status"))]
+    return rows
+
+
+def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str, int]:
+    """Dashboard employee performance boxes — counts match filter_employee_metric_leads."""
+    return {
+        "emp_active": len(filter_employee_metric_leads(emp_leads, "active")),
+        "emp_hot": len(filter_employee_metric_leads(emp_leads, "hot")),
+        "emp_visited": len(filter_employee_metric_leads(emp_leads, "visited")),
+        "emp_not_interested": len(filter_employee_metric_leads(emp_leads, "not_interested")),
+        "emp_booking_done": len(filter_employee_metric_leads(emp_leads, "booking_done")),
+        "emp_low_budget": len(filter_employee_metric_leads(emp_leads, "low_budget")),
+        "emp_ringing": len(filter_employee_metric_leads(emp_leads, "ringing")),
+    }
+
+
 def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Optional[str] = None) -> Dict[str, int]:
     """Per-employee assignment counts — dedupe within this employee's leads only."""
     rows = dedupe_leads(emp_leads)
@@ -530,20 +571,22 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
         and l.get("stage") not in workspace_queue_stages(role)
         and l.get("stage") != "closed"
     )
+    workflow = compute_employee_workflow_stats(rows)
     return {
         "assigned_total": len(rows),
         "assigned_queue": len(queue_rows),
         "assigned_in_progress": in_progress,
-        "assigned_active": sum(1 for l in rows if l.get("status") != "negative" and l.get("stage") != "closed"),
+        "assigned_active": workflow["emp_active"],
         "assigned_completed": sum(1 for l in rows if l.get("stage") == "closed"),
         "assigned_positive": sum(
             1 for l in rows
             if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]
             and l.get("status") != "negative"
         ),
-        "assigned_not_interested": sum(1 for l in rows if l.get("status") == "negative"),
+        "assigned_not_interested": workflow["emp_not_interested"],
         "assigned_new": sum(1 for l in rows if l.get("stage") in ["new", "assigned"] and l.get("status") != "negative"),
         "assigned_follow_ups": len(follow_rows),
+        **workflow,
     }
 
 
@@ -2570,10 +2613,78 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         "leads": imported_leads[:10]
     }
 
+def _admin_can_reset(cu: User) -> bool:
+    return cu.role == "admin" or cu.email == "htshpatil13@gmail.com"
+
+
+def _sb_bulk_patch(table: str, match_params: str, data: Dict[str, Any]) -> Optional[str]:
+    """PATCH rows matching PostgREST filter. Returns error text or None."""
+    h = {**sb_headers(), "Prefer": "return=minimal"}
+    r = _http.patch(f"{sb_url(table)}?{match_params}", headers=h, json=data)
+    if r.status_code >= 400:
+        return f"{table}: {r.status_code} {r.text[:200]}"
+    return None
+
+
+@api_router.post("/leads/reset-assignments")
+async def reset_all_assignments(cu: User = Depends(get_current_user)):
+    """Full clean: wipe loans/bookings/follow-ups, unassign all leads, zero employee stats."""
+    if not _admin_can_reset(cu):
+        raise HTTPException(status_code=403, detail="Only admins can reset assignments.")
+
+    errors: List[str] = []
+    reset_payload = {
+        "assigned_to": None,
+        "assigned_at": None,
+        "assigned_by": None,
+        "follow_up_at": None,
+        "stage": "new",
+        "status": "active",
+        "priority": None,
+        "call_status": None,
+        "updated_at": now_utc().isoformat(),
+    }
+    err = _sb_bulk_patch("leads", "stage=neq.broker", reset_payload)
+    if err:
+        errors.append(err)
+
+    for table in [
+        "notifications", "customers", "lead_notes",
+        "visit_followups", "visits", "bookings", "loans", "activities",
+    ]:
+        try:
+            r = _http.delete(f"{sb_url(table)}?created_at=not.is.null", headers=sb_headers())
+            if r.status_code >= 400 and r.status_code != 404:
+                errors.append(f"{table}: {r.status_code}")
+        except Exception as exc:
+            errors.append(f"{table}: {exc}")
+
+    employees = sb_select("employees", {"select": "employee_id"})
+    for e in employees:
+        eid = e.get("employee_id")
+        if eid:
+            sb_update("employees", "employee_id", eid, {
+                "leads_assigned": 0,
+                "leads_closed": 0,
+                "performance": 0,
+                "updated_at": now_utc().isoformat(),
+            })
+
+    for key in SESSION_CACHE:
+        SESSION_CACHE[key] = []
+
+    if errors:
+        raise HTTPException(status_code=500, detail="; ".join(errors))
+    return {
+        "status": "success",
+        "message": "Full clean done: loans, bookings, follow-ups and assignments cleared. All leads are unassigned and new.",
+    }
+
+
 @api_router.delete("/leads/clear-all")
 async def clear_all_leads(cu: User = Depends(get_current_user)):
     # Verify the user is admin
-    if cu.role != "admin" and cu.email != "htshpatil13@gmail.com":
+    if not _admin_can_reset(cu):
         raise HTTPException(status_code=403, detail="Only admins can delete all leads.")
         
     tables_to_wipe = ["notifications", "customers", "lead_notes", "visit_followups", "visits", "bookings", "loans", "activities", "leads"]
@@ -2857,7 +2968,9 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
     """Per-employee assigned / active / completed lead counts for manager dashboards."""
     ensure_roles(cu, ["admin", "manager"])
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "order": "name.asc"})
-    all_leads = fetch_all_leads_merged("lead_id,assigned_to,status,stage,created_at,updated_at,follow_up_at")
+    all_leads = fetch_all_leads_merged(
+        "lead_id,assigned_to,status,stage,priority,call_status,created_at,updated_at,follow_up_at"
+    )
     rows = []
     for e in employees:
         eid = e.get("employee_id")
@@ -4214,13 +4327,37 @@ async def stats_me(cu: User=Depends(get_current_user)):
         "recent_activities": activities[:15],
     }
 
+EMPLOYEE_METRIC_KEYS = ["active", "hot", "visited", "not_interested", "booking_done", "low_budget", "ringing"]
+
+
+@api_router.get("/leads/employee/{employee_id}/metric/{metric_key}")
+async def list_employee_metric_leads(
+    employee_id: str,
+    metric_key: str,
+    limit: int = 500,
+    cu: User = Depends(get_current_user),
+):
+    """Drill-down list for dashboard employee performance boxes."""
+    key = (metric_key or "").strip().lower()
+    if key not in EMPLOYEE_METRIC_KEYS:
+        raise HTTPException(400, detail=f"metric must be one of: {', '.join(EMPLOYEE_METRIC_KEYS)}")
+    limit = min(max(limit, 1), 500)
+    all_leads = fetch_all_leads_merged("lead_id,name,phone,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at")
+    emp_leads = [l for l in all_leads if l.get("assigned_to") == employee_id]
+    filtered = filter_employee_metric_leads(emp_leads, key)
+    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return {"employee_id": employee_id, "metric": key, "total": len(filtered), "leads": filtered[:limit]}
+
+
 @api_router.get("/stats/employees")
 async def stats_employees(cu: User=Depends(get_current_user)):
     employees = sb_select("employees", {"select": "*"})
     db_activities = sb_select_all("activities", {"select": "user_id,created_at,type"})
     cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
-    all_leads = fetch_all_leads_merged("lead_id,assigned_to,status,stage,follow_up_at")
+    all_leads = fetch_all_leads_merged(
+        "lead_id,assigned_to,status,stage,priority,call_status,follow_up_at"
+    )
 
     emp_stats = []
     for e in employees:
@@ -4244,8 +4381,8 @@ async def stats_employees(cu: User=Depends(get_current_user)):
             "positives": assignment["assigned_positive"],
             "negatives": assignment["assigned_not_interested"],
             "followups": assignment["assigned_follow_ups"],
-            "visits": sum(1 for a in emp_acts if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type"))),
-            "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))),
+            "visits": assignment["emp_visited"],
+            "bookings_done": assignment["emp_booking_done"],
             "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
             "closed_deals": assignment["assigned_completed"],
             "call_notes": sum(1 for a in emp_acts if "call" in str(a.get("type"))),

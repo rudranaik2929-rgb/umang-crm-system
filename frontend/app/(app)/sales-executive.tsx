@@ -47,7 +47,7 @@ export default function SalesExecutive() {
     <View style={{ flex: 1 }}>
       <TopBar
         title="Sales Executive"
-        subtitle={tab === 'queue' ? `${queueTotal} in queue · ${stats?.assigned_total ?? 0} assigned total` : `${followTotal} follow-ups`}
+        subtitle={tab === 'queue' ? `${queueTotal} in queue` : `${followTotal} follow-ups`}
         rightAction={
           <Pressable onPress={load} disabled={loading} style={[styles.iconBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
             <Ionicons name="refresh" size={18} color={colors.primary} />

@@ -18,6 +18,16 @@ const ROLE_LABELS: Record<string, string> = {
   marketing: 'Marketing',
 };
 
+const WORKFLOW_METRICS = [
+  { key: 'emp_active', label: 'Active', icon: 'flash' as const, colorKey: 'primary' },
+  { key: 'emp_hot', label: 'Hot', icon: 'flame' as const, colorKey: 'warning' },
+  { key: 'emp_visited', label: 'Visited', icon: 'location' as const, colorKey: 'info' },
+  { key: 'emp_not_interested', label: 'Not Interested', icon: 'close-circle' as const, colorKey: 'negative' },
+  { key: 'emp_booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },
+  { key: 'emp_low_budget', label: 'Low Budget', icon: 'wallet' as const, colorKey: 'accent' },
+  { key: 'emp_ringing', label: 'Ringing', icon: 'call' as const, colorKey: 'warning' },
+];
+
 export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
   const { colors } = useTheme();
 
@@ -26,7 +36,7 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
       <View style={styles.headerRow}>
         <View>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Employee Performance</Text>
-          <Text style={[styles.cardSub, { color: colors.textMuted }]}>Per-employee credit for every action taken</Text>
+          <Text style={[styles.cardSub, { color: colors.textMuted }]}>Assigned leads by workflow stage — per employee</Text>
         </View>
         <Text style={[styles.cardSub, { color: colors.textMuted }]}>
           {employees.length} {employees.length === 1 ? 'employee' : 'employees'}
@@ -38,7 +48,7 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
           <Ionicons name="people-outline" size={28} color={colors.textMuted} />
           <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600', marginTop: 8 }}>No employees yet</Text>
           <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 4, textAlign: 'center' }}>
-            Add employees on the Employees page, then use Act-as in the top bar to credit their work.
+            Add employees on the Employees page, then assign leads to see performance boxes.
           </Text>
         </View>
       ) : (
@@ -57,11 +67,11 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
               marketing: '#EC4899',
             };
             const roleColor = roleColorMap[employee.role] || colors.primary;
-            const score = employee.positives * 3
-              + employee.visits * 2
-              + employee.bookings_done * 5
-              + employee.loans_done * 4
-              + employee.closed_deals * 10;
+            const score = (employee.emp_hot ?? 0) * 3
+              + (employee.emp_visited ?? 0) * 2
+              + (employee.emp_booking_done ?? 0) * 5
+              + (employee.emp_active ?? 0)
+              - (employee.emp_not_interested ?? 0);
 
             return (
               <View
@@ -108,8 +118,8 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{score}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>TOTAL LEADS</Text>
-                    <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.leads_total ?? employee.actions_total}</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>ASSIGNED</Text>
+                    <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.assigned_total ?? employee.leads_total ?? 0}</Text>
                   </View>
                 </View>
 
@@ -121,15 +131,26 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
                 </View>
 
                 <View style={styles.metricPills}>
-                  <MetricPill icon="briefcase" label="Assigned" value={employee.assigned_total ?? employee.leads_total ?? 0} color={colors.info} />
-                  <MetricPill icon="list" label="Queue" value={employee.assigned_queue ?? 0} color={colors.primary} />
-                  <MetricPill icon="checkmark-circle" label="Completed" value={employee.assigned_completed ?? employee.closed_deals ?? 0} color={colors.positive} />
-                  <MetricPill icon="thumbs-up" label="Positive" value={employee.positives} color={colors.positive} />
-                  <MetricPill icon="thumbs-down" label="Not Interested" value={employee.negatives} color={colors.negative} />
-                  <MetricPill icon="time" label="Follow-ups" value={employee.assigned_follow_ups ?? employee.followups ?? 0} color={colors.warning} />
-                  <MetricPill icon="document-text" label="Bookings" value={employee.bookings_done} color={colors.warning} />
-                  <MetricPill icon="business" label="Loans" value={employee.loans_done} color="#7C3AED" />
-                  <MetricPill icon="trophy" label="Closed" value={employee.closed_deals} color={colors.accent} />
+                  {WORKFLOW_METRICS.map((metric) => {
+                    const colorMap: Record<string, string> = {
+                      primary: colors.primary,
+                      warning: colors.warning,
+                      info: colors.info,
+                      negative: colors.negative,
+                      positive: colors.positive,
+                      accent: colors.accent,
+                    };
+                    const pillColor = colorMap[metric.colorKey] || colors.primary;
+                    return (
+                      <MetricPill
+                        key={metric.key}
+                        icon={metric.icon}
+                        label={metric.label}
+                        value={employee[metric.key] ?? 0}
+                        color={pillColor}
+                      />
+                    );
+                  })}
                 </View>
               </View>
             );
@@ -143,9 +164,9 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
 function MetricPill({ icon, label, value, color }: { icon: any; label: string; value: number; color: string }) {
   return (
     <View style={[styles.metricPill, { backgroundColor: color + '10', borderColor: color + '30' }]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 5 }}>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
         <Ionicons name={icon} size={11} color={color} />
-        <Text style={{ color, fontSize: 9, fontWeight: '700', letterSpacing: 0.6 }}>{label.toUpperCase()}</Text>
+        <Text style={{ color, fontSize: 8, fontWeight: '700', letterSpacing: 0.4 }} numberOfLines={2}>{label.toUpperCase()}</Text>
       </View>
       <Text style={{ color, fontSize: 20, fontWeight: '700', letterSpacing: 0 }}>{value}</Text>
     </View>
@@ -159,7 +180,7 @@ const styles = StyleSheet.create({
   cardSub: { fontSize: 12, marginTop: 2 },
   empPlaceholder: { marginTop: 14, padding: 22, borderRadius: 10, borderWidth: 1, borderStyle: 'dashed', alignItems: 'center' },
   empGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16, marginTop: 16 },
-  empCard: { width: 340, padding: 18, borderRadius: 10 },
+  empCard: { width: 360, padding: 18, borderRadius: 10 },
   empCardHead: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 8 },
   empTitleWrap: { flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 },
   empCardAvatar: {
@@ -186,7 +207,7 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 },
   metricPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
   metricPill: {
-    width: 92, paddingVertical: 10, paddingHorizontal: 10,
+    width: 100, paddingVertical: 10, paddingHorizontal: 8,
     borderRadius: 8, borderWidth: 1, gap: 4,
   },
 });

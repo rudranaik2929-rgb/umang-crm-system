@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel } from '../lib/constants';
-import { api } from '../lib/api';
+import { api, clearSnapshots } from '../lib/api';
 import { useRouter } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
 import { ImportLeadsModal } from './ImportLeadsModal';
@@ -31,6 +31,22 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   
   const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
 
+  const resetAssignments = async () => {
+    if (typeof window === 'undefined') return;
+    const ok = window.confirm(
+      'Full clean all numbers?\n\nThis clears: loans, bookings, follow-ups, assignments, employee stats.\nAll leads go back to unassigned / new.\n\nHousing & Meta leads stay — you can assign them fresh.'
+    );
+    if (!ok) return;
+    try {
+      await api.post('/leads/reset-assignments', {});
+      clearSnapshots();
+      alert('Success: All assignments and follow-up counts cleared.');
+      window.location.reload();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || 'Failed to reset assignments.');
+    }
+  };
+
   const clearAllLeads = async () => {
     if (typeof window !== 'undefined') {
       const confirm = window.confirm(
@@ -40,6 +56,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
       
       try {
         await api.delete('/leads/clear-all');
+        clearSnapshots();
         alert("Success: Database cleared completely.");
         window.location.reload();
       } catch (e: any) {
@@ -99,13 +116,22 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         {rightAction}
 
         {isAdminOrOwner && (
-          <Pressable
-            onPress={clearAllLeads}
-            testID="topbar-clear-leads"
-            style={[styles.iconBtn, { borderColor: colors.negative, backgroundColor: colors.negative + '15' }]}
-          >
-            <Ionicons name="trash-outline" size={18} color={colors.negative} />
-          </Pressable>
+          <>
+            <Pressable
+              onPress={resetAssignments}
+              testID="topbar-reset-assignments"
+              style={[styles.iconBtn, { borderColor: colors.warning, backgroundColor: colors.warning + '15' }]}
+            >
+              <Ionicons name="refresh-circle-outline" size={18} color={colors.warning} />
+            </Pressable>
+            <Pressable
+              onPress={clearAllLeads}
+              testID="topbar-clear-leads"
+              style={[styles.iconBtn, { borderColor: colors.negative, backgroundColor: colors.negative + '15' }]}
+            >
+              <Ionicons name="trash-outline" size={18} color={colors.negative} />
+            </Pressable>
+          </>
         )}
 
         <Pressable

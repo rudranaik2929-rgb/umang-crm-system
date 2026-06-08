@@ -50,7 +50,7 @@ export default function Telecaller() {
     <View style={{ flex: 1 }}>
       <TopBar
         title="Telecaller Workspace"
-        subtitle={tab === 'queue' ? `${queueTotal} in queue · ${stats?.assigned_total ?? 0} assigned total` : `${followTotal} follow-ups`}
+        subtitle={tab === 'queue' ? `${queueTotal} new enquiries` : `${followTotal} follow-ups`}
         rightAction={
           <Pressable
             onPress={load}
@@ -87,7 +87,7 @@ export default function Telecaller() {
         {tab === 'queue' ? (
           <>
             <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 16 }}>
-              Queue shows new + assigned leads only. Assigned total ({stats?.assigned_total ?? 0}) includes positive, follow-up and completed leads.
+              New and assigned leads waiting for your call.
             </Text>
             {loading ? (
               <ActivityIndicator color={colors.primary} />
