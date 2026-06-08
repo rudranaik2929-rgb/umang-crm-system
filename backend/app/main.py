@@ -472,6 +472,102 @@ def sb_select_all(table: str, params: Optional[dict] = None, page_size: int = 10
     return out
 
 
+def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
+    """Full leads table + session cache — use for every dashboard count/list."""
+    db_leads = sb_select_all("leads", {"select": select, "order": "created_at.desc"})
+    return merge_leads_with_cache(db_leads)
+
+
+def clean_leads_for_platform_stats(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Same pre-processing as compute_platform_breakdown so totals match platform lists."""
+    cleaned: List[Dict[str, Any]] = []
+    for lead in leads:
+        if classify_lead_platform(lead.get("source")) == "meta" and not is_real_meta_lead(lead):
+            continue
+        if is_broker_pool_lead(lead) or classify_lead_platform(lead.get("source")) == "brokerage":
+            continue
+        cleaned.append(lead)
+    return dedupe_leads(cleaned)
+
+
+WORKSPACE_QUEUE_STAGES: Dict[str, List[str]] = {
+    "telecaller": ["new", "assigned"],
+    "sales_executive": ["new", "assigned", "positive"],
+    "site_visit": ["new", "assigned", "positive"],
+}
+
+
+def workspace_queue_stages(role: Optional[str]) -> List[str]:
+    key = (role or "telecaller").strip().lower()
+    return WORKSPACE_QUEUE_STAGES.get(key, WORKSPACE_QUEUE_STAGES["telecaller"])
+
+
+def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[str]) -> List[Dict[str, Any]]:
+    """Exact filter used by Telecaller / Sales Executive queue tabs."""
+    stages = workspace_queue_stages(role)
+    return dedupe_leads([
+        l for l in emp_leads
+        if l.get("status") == "active" and l.get("stage") in stages
+    ])
+
+
+def filter_employee_follow_up_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Exact filter used by Follow Ups tab + employee follow-up KPI."""
+    return dedupe_leads([
+        l for l in emp_leads
+        if l.get("follow_up_at") and l.get("status") != "negative"
+    ])
+
+
+def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Optional[str] = None) -> Dict[str, int]:
+    """Per-employee assignment counts — dedupe within this employee's leads only."""
+    rows = dedupe_leads(emp_leads)
+    queue_rows = filter_employee_queue_leads(rows, role)
+    follow_rows = filter_employee_follow_up_leads(rows)
+    in_progress = sum(
+        1 for l in rows
+        if l.get("status") == "active"
+        and l.get("stage") not in workspace_queue_stages(role)
+        and l.get("stage") != "closed"
+    )
+    return {
+        "assigned_total": len(rows),
+        "assigned_queue": len(queue_rows),
+        "assigned_in_progress": in_progress,
+        "assigned_active": sum(1 for l in rows if l.get("status") != "negative" and l.get("stage") != "closed"),
+        "assigned_completed": sum(1 for l in rows if l.get("stage") == "closed"),
+        "assigned_positive": sum(
+            1 for l in rows
+            if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]
+            and l.get("status") != "negative"
+        ),
+        "assigned_not_interested": sum(1 for l in rows if l.get("status") == "negative"),
+        "assigned_new": sum(1 for l in rows if l.get("stage") in ["new", "assigned"] and l.get("status") != "negative"),
+        "assigned_follow_ups": len(follow_rows),
+    }
+
+
+def compute_unassigned_queue(all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    queue = [
+        l for l in all_leads
+        if is_pipeline_lead(l)
+        and l.get("status") != "negative"
+        and not l.get("assigned_to")
+        and l.get("stage") in {"new", "assigned"}
+    ]
+    return dedupe_leads(queue)
+
+
+def actor_activity_keys(cu: User) -> set:
+    """Activity rows may store employee_id or legacy user_id — match both."""
+    keys = {cu.user_id}
+    if cu.acting_as_employee_id:
+        keys.add(cu.acting_as_employee_id)
+    if cu.employee_id:
+        keys.add(cu.employee_id)
+    return {k for k in keys if k}
+
+
 def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Shared Database / housing / meta / other / broker counts for dashboard + modal."""
     platform_defs = [
@@ -574,7 +670,7 @@ class SiteVisitFollowUpCreate(BaseModel):
     notes: Optional[str]=None
 class LeadFollowUpCreate(BaseModel):
     follow_up_date: Optional[str]=None; follow_up_time: Optional[str]=None
-    follow_up_day: Optional[str]=None; notes: Optional[str]=None
+    follow_up_day: Optional[str]=None; reason: Optional[str]=None; notes: Optional[str]=None
 class BookingCreate(BaseModel):
     lead_id: str; property_name: str; booking_amount: float=0; token_received: float=0
     unit_number: Optional[str]=None; tower: Optional[str]=None
@@ -982,7 +1078,7 @@ def log_activity(actor, type_, text, lead_id=None):
     actor_name = "System"
     
     if actor:
-        user_id_to_log = actor.acting_as_employee_id or actor.user_id
+        user_id_to_log = actor.acting_as_employee_id or actor.employee_id or actor.user_id
         actor_name = actor.name
 
     # Check if they are acting as an employee
@@ -2549,8 +2645,11 @@ async def list_leads(
     if status_: params["status"] = f"eq.{status_}"
     if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
     if source: params["source"] = f"ilike.*{source}*"
-    
-    leads = sb_select("leads", params)
+
+    if stage or status_ or assigned_to or source:
+        leads = sb_select("leads", params)
+    else:
+        leads = sb_select_all("leads", params)
     
     # Filter session cache to match the query parameters
     filtered_cache = []
@@ -2587,8 +2686,7 @@ async def list_leads(
 @api_router.get("/broker-leads")
 async def list_broker_leads(cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager", "marketing"])
-    db_leads = sb_select("leads", {"select": "*", "order": "created_at.desc"})
-    all_leads = merge_leads_with_cache(db_leads)
+    all_leads = fetch_all_leads_merged()
     broker_leads = [l for l in all_leads if is_broker_pool_lead(l)]
     return {"total": len(broker_leads), "leads": broker_leads}
 
@@ -2654,10 +2752,12 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
     elif bucket_key == "booking":
         filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"] and l.get("status") != "negative"]
     elif bucket_key == "follow_up":
-        filtered = [l for l in all_leads if l.get("follow_up_at")]
+        filtered = [l for l in all_leads if l.get("follow_up_at") and l.get("status") != "negative"]
     else:
-        filtered = list(all_leads)
-    filtered = dedupe_leads(filtered)
+        # Pipeline total — same scope as platform breakdown / Total Leads modal.
+        filtered = clean_leads_for_platform_stats(all_leads)
+    if bucket_key != "all":
+        filtered = dedupe_leads(filtered)
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     return filtered
 
@@ -2666,6 +2766,7 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
 async def list_leads_filtered(
     bucket: str = "all",
     limit: int = 500,
+    assigned_to: Optional[str] = None,
     cu: User = Depends(get_current_user),
 ):
     """Dashboard drill-down lists: all, new_today, positive, not_interested, registration, booking, follow_up."""
@@ -2675,10 +2776,58 @@ async def list_leads_filtered(
 
     limit = min(max(limit, 1), 500)
     today = now_utc().date().isoformat()
-    db_leads = sb_select_all("leads", {"select": "*", "order": "created_at.desc"})
-    all_leads = merge_leads_with_cache(db_leads)
+    all_leads = fetch_all_leads_merged()
     filtered = filter_lead_bucket(all_leads, bucket_key, today)
+    assignee = (assigned_to or "").strip()
+    if assignee:
+        filtered = [l for l in filtered if l.get("assigned_to") == assignee]
+    elif cu.role not in ["admin", "manager"]:
+        emp_id = cu.acting_as_employee_id or cu.employee_id
+        if emp_id and bucket_key == "follow_up":
+            filtered = [l for l in filtered if l.get("assigned_to") == emp_id]
+    if bucket_key == "follow_up" and filtered:
+        emps = sb_select("employees", {"select": "employee_id,name"})
+        emp_map = {e.get("employee_id"): e.get("name") for e in emps if e.get("employee_id")}
+        for lead in filtered:
+            eid = lead.get("assigned_to")
+            if eid and emp_map.get(eid):
+                lead["employee_name"] = emp_map[eid]
     return {"bucket": bucket_key, "total": len(filtered), "leads": filtered[:limit]}
+
+
+@api_router.get("/leads/workspace")
+async def workspace_leads(
+    limit: int = 500,
+    cu: User = Depends(get_current_user),
+):
+    """Telecaller / Sales Executive workspace — queue + follow-ups with counts that
+    match Assign Leads stats and My Dashboard KPIs."""
+    emp_id = cu.acting_as_employee_id or cu.employee_id
+    if not emp_id and cu.role not in ["admin", "manager"]:
+        raise HTTPException(403, detail="Employee profile required for workspace")
+
+    limit = min(max(limit, 1), 500)
+    all_leads = fetch_all_leads_merged()
+    if cu.role in ["admin", "manager"] and not cu.acting_as_employee_id:
+        emp_leads = all_leads
+        role = "telecaller"
+    else:
+        emp_leads = [l for l in all_leads if l.get("assigned_to") == emp_id]
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "role", "limit": "1"})
+        role = emps[0].get("role") if emps else cu.role
+
+    queue = filter_employee_queue_leads(emp_leads, role)
+    follow_ups = filter_employee_follow_up_leads(emp_leads)
+    stats = compute_employee_assignment_stats(emp_leads, role)
+    queue.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    follow_ups.sort(key=lambda l: l.get("follow_up_at") or "", reverse=True)
+    return {
+        "employee_id": emp_id,
+        "role": role,
+        "stats": stats,
+        "queue": {"total": len(queue), "leads": queue[:limit]},
+        "follow_ups": {"total": len(follow_ups), "leads": follow_ups[:limit]},
+    }
 
 
 @api_router.get("/stats/lead-buckets")
@@ -2686,8 +2835,9 @@ async def stats_lead_buckets(cu: User = Depends(get_current_user)):
     """Counts for every dashboard metric box, computed with the EXACT same
     filter+dedupe as /leads/filtered so each box number matches its opened list."""
     today = now_utc().date().isoformat()
-    db_leads = sb_select_all("leads", {"select": "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,follow_up_at,created_at", "order": "created_at.desc"})
-    all_leads = merge_leads_with_cache(db_leads)
+    all_leads = fetch_all_leads_merged(
+        "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,follow_up_at,created_at"
+    )
     return {key: len(filter_lead_bucket(all_leads, key, today)) for key in LEAD_BUCKET_KEYS}
 
 
@@ -2695,16 +2845,8 @@ async def stats_lead_buckets(cu: User = Depends(get_current_user)):
 async def list_assign_queue(cu: User = Depends(get_current_user)):
     """Unassigned pipeline leads for manager assign workspace."""
     ensure_roles(cu, ["admin", "manager"])
-    db_leads = sb_select_all("leads", {"select": "*", "order": "created_at.desc"})
-    all_leads = merge_leads_with_cache(db_leads)
-    queue = [
-        l for l in all_leads
-        if is_pipeline_lead(l)
-        and l.get("status") != "negative"
-        and not l.get("assigned_to")
-        and l.get("stage") in {"new", "assigned"}
-    ]
-    queue = dedupe_leads(queue)
+    all_leads = fetch_all_leads_merged()
+    queue = compute_unassigned_queue(all_leads)
     queue.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "active": "eq.true", "order": "name.asc"})
     return {"total": len(queue), "leads": queue, "employees": employees}
@@ -2715,7 +2857,7 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
     """Per-employee assigned / active / completed lead counts for manager dashboards."""
     ensure_roles(cu, ["admin", "manager"])
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "order": "name.asc"})
-    all_leads = dedupe_leads(merge_leads_with_cache(sb_select_all("leads", {"select": "lead_id,assigned_to,status,stage,created_at,updated_at"})))
+    all_leads = fetch_all_leads_merged("lead_id,assigned_to,status,stage,created_at,updated_at,follow_up_at")
     rows = []
     for e in employees:
         eid = e.get("employee_id")
@@ -2727,17 +2869,9 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
             "role": e.get("role"),
             "department": e.get("department"),
             "active": e.get("active", True),
-            "assigned_total": len(emp_leads),
-            "assigned_active": sum(1 for l in emp_leads if l.get("status") != "negative" and l.get("stage") != "closed"),
-            "assigned_completed": sum(1 for l in emp_leads if l.get("stage") == "closed"),
-            "assigned_positive": sum(1 for l in emp_leads if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]),
-            "assigned_not_interested": sum(1 for l in emp_leads if l.get("status") == "negative"),
-            "assigned_new": sum(1 for l in emp_leads if l.get("stage") in ["new", "assigned"] and l.get("status") != "negative"),
+            **compute_employee_assignment_stats(emp_leads, e.get("role")),
         })
-    unassigned = dedupe_leads([
-        l for l in all_leads
-        if is_pipeline_lead(l) and l.get("status") != "negative" and not l.get("assigned_to") and l.get("stage") in {"new", "assigned"}
-    ])
+    unassigned = compute_unassigned_queue(all_leads)
     return {
         "unassigned_count": len(unassigned),
         "employees": rows,
@@ -2759,14 +2893,9 @@ async def list_leads_by_platform(
 
     limit = min(max(limit, 1), 500)
     offset = max(offset, 0)
-    db_leads = sb_select_all("leads", {"select": "*", "order": "created_at.desc"})
-    all_leads = merge_leads_with_cache(db_leads)
-    filtered = [l for l in all_leads if lead_matches_platform(l, platform_key)]
-    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
-    # Meta leads are webhook-driven and can contain Meta's own test submissions
-    # plus duplicates from re-delivered events — show only real, unique leads.
-    if platform_key == "meta":
-        filtered = [l for l in filtered if is_real_meta_lead(l)]
+    all_leads = fetch_all_leads_merged()
+    cleaned = clean_leads_for_platform_stats(all_leads)
+    filtered = [l for l in cleaned if lead_matches_platform(l, platform_key)]
     sf = (status_filter or "").strip().lower()
     if sf == "positive":
         filtered = [l for l in filtered if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration", "closed"] and l.get("status") != "negative"]
@@ -2776,7 +2905,7 @@ async def list_leads_by_platform(
         filtered = [l for l in filtered if l.get("stage") == "registration"]
     elif sf == "booking":
         filtered = [l for l in filtered if l.get("stage") in ["booking", "loan"]]
-    filtered = dedupe_leads(filtered)
+    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     page = filtered[offset:offset + limit]
     return {
         "platform": platform_key,
@@ -3144,9 +3273,15 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
     if p.follow_up_date and p.follow_up_time:
         follow_up_at = parse_follow_up_at(p.follow_up_date, p.follow_up_time)
     else:
-        # Default: tomorrow 11:00 so the lead immediately appears in the queue.
-        follow_up_at = (now_utc() + timedelta(days=1)).replace(hour=11, minute=0, second=0, microsecond=0)
+        raise HTTPException(400, "Follow-up date and time are required")
+
     parts = follow_up_display_parts(follow_up_at.isoformat())
+    note_parts: List[str] = []
+    if clean_text(p.reason):
+        note_parts.append(f"Reason: {clean_text(p.reason)}")
+    if clean_text(p.notes):
+        note_parts.append(clean_text(p.notes))
+    combined_notes = "\n".join(note_parts) if note_parts else None
 
     followup = {
         "followup_id": gen_id("fup"),
@@ -3158,7 +3293,7 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
         "follow_up_day": p.follow_up_day or parts["follow_up_day"],
         "follow_up_at": follow_up_at.isoformat(),
         "status": "scheduled",
-        "notes": p.notes,
+        "notes": combined_notes,
         "created_by": cu.acting_as_employee_id or cu.user_id,
         "created_at": now_utc().isoformat(),
     }
@@ -3169,12 +3304,10 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
     lead_update = {"follow_up_at": follow_up_at.isoformat(), "updated_at": now_utc().isoformat()}
     sb_update("leads", "lead_id", lead_id, lead_update)
     update_cached_lead(lead_id, lead_update)
-    activity = log_activity(
-        cu,
-        "lead_followup",
-        f"Follow-up scheduled for {parts['follow_up_day']} {parts['follow_up_date']} at {parts['follow_up_time']}.",
-        lead_id=lead_id,
-    )
+    detail = f"Follow-up scheduled for {parts['follow_up_day']} {parts['follow_up_date']} at {parts['follow_up_time']}."
+    if clean_text(p.reason):
+        detail += f" Reason: {clean_text(p.reason)}."
+    activity = log_activity(cu, "lead_followup", detail, lead_id=lead_id)
     SESSION_CACHE["activities"].insert(0, activity)
     return followup_record
 
@@ -3233,7 +3366,7 @@ async def create_visit_followup(p: SiteVisitFollowUpCreate, cu: User=Depends(get
 
 @api_router.get("/visit-followups")
 async def list_visit_followups(visit_id: Optional[str]=None, lead_id: Optional[str]=None, cu: User=Depends(get_current_user)):
-    rows = sb_select("visit_followups", {"select": "*", "order": "follow_up_at.desc"})
+    rows = sb_select_all("visit_followups", {"select": "*", "order": "follow_up_at.desc"})
     cache_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
     followups = SESSION_CACHE["followups"] + [f for f in rows if f.get("followup_id") not in cache_ids]
 
@@ -3242,9 +3375,8 @@ async def list_visit_followups(visit_id: Optional[str]=None, lead_id: Optional[s
     follow_up_visits = [v for v in SESSION_CACHE["visits"] if v.get("status") == "follow_up"]
     follow_up_visits += [v for v in visits if v.get("visit_id") not in cache_visit_ids]
 
-    leads = sb_select("leads", {"select": "lead_id,name"})
-    lead_names = {l.get("lead_id"): l.get("name") for l in leads}
-    lead_names.update({l.get("lead_id"): l.get("name") for l in SESSION_CACHE["leads"]})
+    lead_rows = fetch_all_leads_merged("lead_id,name,assigned_to,follow_up_at")
+    lead_names = {l.get("lead_id"): l.get("name") for l in lead_rows}
 
     followup_visit_ids = {f.get("visit_id") for f in followups}
     for visit in follow_up_visits:
@@ -3269,7 +3401,6 @@ async def list_visit_followups(visit_id: Optional[str]=None, lead_id: Optional[s
 
     employees = sb_select("employees", {"select": "employee_id,name"})
     emp_names = {e.get("employee_id"): e.get("name") for e in employees if e.get("employee_id")}
-    lead_rows = sb_select("leads", {"select": "lead_id,assigned_to"})
     lead_assign = {r.get("lead_id"): r.get("assigned_to") for r in lead_rows}
     for f in followups:
         lid = f.get("lead_id")
@@ -3836,27 +3967,22 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     # Leads only needs classification/count columns here — skip the heavy
     # raw_payload JSON to keep the response small and fast.
     fetched = sb_select_parallel({
-        "leads": ("leads", {"select": "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,created_at"}),
         "bookings": ("bookings", {"select": "booking_amount,status"}),
         "visits": ("visits", {"select": "visit_id,status"}),
-        "followups": ("visit_followups", {"select": "followup_id,status"}),
         "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage"}),
         "customers": ("customers", {"select": "customer_id,lead_id"}),
         "activities": ("activities", {"select": "activity_id,type"}),
         "employees": ("employees", {"select": "employee_id"}),
         "campaigns": ("campaigns", {"select": "campaign_id"}),
     })
-    leads = fetched["leads"]
+    leads = fetch_all_leads_merged(
+        "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,follow_up_at,created_at"
+    )
     bookings = fetched["bookings"]
     visits = fetched["visits"]
-    followups = fetched["followups"]
     loans = fetched["loans"]
     customers = fetched["customers"]
     activities = fetched["activities"]
-    
-    # Deduplicate leads
-    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
-    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
     
     # Deduplicate bookings
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
@@ -3867,7 +3993,8 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     cache_vis_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
     visits = SESSION_CACHE["visits"] + [v for v in visits if v.get("visit_id") not in cache_vis_ids]
 
-    # Deduplicate follow-ups
+    # Full follow-up table for pending counts (parallel sb_select is capped at ~1000 rows).
+    followups = sb_select_all("visit_followups", {"select": "followup_id,status"})
     cache_followup_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
     followups = SESSION_CACHE["followups"] + [f for f in followups if f.get("followup_id") not in cache_followup_ids]
 
@@ -3902,26 +4029,22 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     employees = fetched["employees"]
     campaigns = fetched["campaigns"]
     rev = sum(booking_brokerage_amount(b) for b in bookings)
-    activity_followups = sum(1 for a in activities if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
-    follow_up_visits = sum(1 for v in visits if v.get("status") == "follow_up")
-    follow_up_total = max(len(followups), activity_followups, follow_up_visits)
-    pending_follow_up_total = (
-        sum(1 for f in followups if str(f.get("status", "scheduled")).lower() in ["scheduled", "pending", "open"])
-        if followups else max(activity_followups, follow_up_visits)
-    )
-
     today = now_utc().date().isoformat()
-    bucket_leads = merge_leads_with_cache(leads)
-    lead_buckets = {key: len(filter_lead_bucket(bucket_leads, key, today)) for key in LEAD_BUCKET_KEYS}
+    lead_buckets = {key: len(filter_lead_bucket(leads, key, today)) for key in LEAD_BUCKET_KEYS}
+    follow_up_total = lead_buckets.get("follow_up", 0)
+    pending_follow_up_total = sum(
+        1 for f in followups
+        if str(f.get("status", "scheduled")).lower() in ["scheduled", "pending", "open"]
+    )
 
     return {
         "total_leads": platform_stats["total"],
         "broker_pool_leads": len(broker_pool),
         "housing_leads": housing_count,
         "meta_leads": meta_count,
-        "positive_leads": sum(1 for l in pipeline_leads if l.get("stage") in ["positive","site_visit","booking","loan","registration","closed"]),
-        "registration_leads": sum(1 for l in pipeline_leads if l.get("stage") == "registration"),
-        "negative_leads": sum(1 for l in pipeline_leads if l.get("status") == "negative"),
+        "positive_leads": lead_buckets.get("positive", 0),
+        "registration_leads": lead_buckets.get("registration", 0),
+        "negative_leads": lead_buckets.get("not_interested", 0),
         "new_leads": sum(1 for l in pipeline_leads if l.get("stage") == "new"),
         "site_visits": len(visits),
         "completed_visits": sum(1 for v in visits if v.get("status") == "completed"),
@@ -3932,8 +4055,8 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         "loans": len(loans),
         "disbursed_loans": sum(1 for l in loans if l.get("application_status") == "disbursed"),
         "converted_customers": max(len(customers), sum(1 for l in leads if l.get("stage") == "closed")),
-        "employees": len(employees) or 5,
-        "campaigns": len(campaigns) or 2,
+        "employees": len(employees),
+        "campaigns": len(campaigns),
         "revenue_pipeline": rev,
         "stage_distribution": stage_dist,
         "lead_buckets": lead_buckets,
@@ -3941,8 +4064,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
 
 @api_router.get("/stats/leads-by-source")
 async def stats_leads_by_source(cu: User=Depends(get_current_user)):
-    leads = sb_select("leads", {"select": "lead_id,source,stage,status,created_at"})
-    leads = merge_leads_with_cache(leads)
+    leads = fetch_all_leads_merged("lead_id,source,stage,status,created_at")
     source_map: dict = {}
     for l in leads:
         src = (l.get("source") or "direct").strip().lower()
@@ -3959,8 +4081,7 @@ async def stats_leads_by_source(cu: User=Depends(get_current_user)):
 @api_router.get("/stats/leads-by-platform")
 async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
     """Dashboard breakdown: manual, housing (Housing.com), meta (Facebook/Instagram)."""
-    leads = sb_select("leads", {"select": "lead_id,phone,email,external_lead_id,source,stage,status,created_at"})
-    leads = merge_leads_with_cache(leads)
+    leads = fetch_all_leads_merged("lead_id,phone,email,external_lead_id,source,stage,status,created_at")
     breakdown = compute_platform_breakdown(leads)
     return {
         "total": breakdown["total"],
@@ -4036,96 +4157,97 @@ async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):
 
 @api_router.get("/stats/me")
 async def stats_me(cu: User=Depends(get_current_user)):
-    eid = cu.acting_as_employee_id or cu.user_id
-    
-    # Get stats (merge with cache)
+    activity_keys = actor_activity_keys(cu)
+    db_activities = sb_select_all("activities", {"select": "*", "order": "created_at.desc"})
+    cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+    all_activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
     if cu.role == "admin":
-        activities = sb_select("activities", {"select": "*", "order": "created_at.desc"})
-        cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
-        activities = SESSION_CACHE["activities"] + [a for a in activities if a.get("activity_id") not in cache_act_ids]
+        activities = all_activities
     else:
-        activities = sb_select("activities", {"user_id": f"eq.{eid}", "select": "*", "order": "created_at.desc"})
-        cache_acts = [a for a in SESSION_CACHE["activities"] if a.get("user_id") == eid]
-        activities = cache_acts + activities
-    
-    positives = sum(1 for a in activities if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
+        activities = [a for a in all_activities if a.get("user_id") in activity_keys]
+
+    emp_id = cu.acting_as_employee_id or cu.employee_id
+    all_leads = fetch_all_leads_merged("lead_id,stage,status,assigned_to,follow_up_at")
+    if cu.role != "admin" and emp_id:
+        leads = [l for l in all_leads if l.get("assigned_to") == emp_id]
+    else:
+        leads = all_leads
+
+    assignment = compute_employee_assignment_stats(leads, cu.role)
+    positives = assignment["assigned_positive"]
+    negative = assignment["assigned_not_interested"]
+    followups = assignment["assigned_follow_ups"]
     visits = sum(1 for a in activities if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
-    followups = sum(1 for a in activities if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
     bookings_done = sum(1 for a in activities if "booking" in str(a.get("type")))
     loans_done = sum(1 for a in activities if "loan" in str(a.get("type")))
-    closed_deals = sum(1 for a in activities if "closed" in str(a.get("type")))
-    
-    # Calculate performance score (max 10)
-    score = min(10, positives * 1 + followups * 0.5 + visits * 2 + bookings_done * 3 + loans_done * 2 + closed_deals * 4)
-    if not activities:
-        score = 0
-    
-    # Get all leads for pipeline counts (merge with cache correctly)
-    leads = sb_select("leads", {"select": "lead_id,stage,status"})
-    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
-    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
-    # if not leads: leads = DEMO_LEADS
-    
-    emp_id = cu.acting_as_employee_id or cu.employee_id
-    if cu.role != "admin" and emp_id:
-        leads = [l for l in leads if l.get("assigned_to") == emp_id]
+    closed_deals = assignment["assigned_completed"]
 
-    hot = sum(1 for l in leads if l.get("stage") in ["positive","site_visit","booking","loan","registration"])
-    cold = sum(1 for l in leads if l.get("stage") in ["new", "contacted"])
-    negative = sum(1 for l in leads if l.get("status") == "negative")
-    closed = sum(1 for l in leads if l.get("stage") == "closed")
-    leads_total = len(leads)
-    assigned_active = sum(1 for l in leads if l.get("status") != "negative" and l.get("stage") != "closed")
-    assigned_completed = closed
+    score = min(10, positives * 1 + followups * 0.5 + visits * 2 + bookings_done * 3 + loans_done * 2 + closed_deals * 4)
+    if not activities and not leads:
+        score = 0
+
+    hot = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"] and l.get("status") != "negative")
+    cold = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["new", "assigned", "contacted"] and l.get("status") != "negative")
 
     return {
         "employee": None, "role": cu.role,
         "personal": {
-            "actions_total": len(activities), "leads_total": leads_total,
-            "assigned_active": assigned_active, "assigned_completed": assigned_completed,
-            "positives": positives, "negatives": negative, "followups": followups,
-            "visits": visits, "bookings_done": bookings_done, "loans_done": loans_done, "closed_deals": closed_deals,
-            "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))), 
-            "score_10": score, "last_activity": activities[0]["created_at"] if activities else None
+            "actions_total": len(activities),
+            "leads_total": assignment["assigned_total"],
+            "assigned_active": assignment["assigned_active"],
+            "assigned_completed": assignment["assigned_completed"],
+            "assigned_queue": assignment["assigned_queue"],
+            "assigned_in_progress": assignment["assigned_in_progress"],
+            "assigned_follow_ups": assignment["assigned_follow_ups"],
+            "positives": positives,
+            "negatives": negative,
+            "followups": followups,
+            "visits": visits,
+            "bookings_done": bookings_done,
+            "loans_done": loans_done,
+            "closed_deals": closed_deals,
+            "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))),
+            "score_10": score,
+            "last_activity": activities[0]["created_at"] if activities else None,
         },
-        "leads": {"hot": hot, "cold": cold, "negative": negative, "closed": closed},
-        "recent_activities": activities[:15]
+        "leads": {"hot": hot, "cold": cold, "negative": negative, "closed": closed_deals},
+        "recent_activities": activities[:15],
     }
 
 @api_router.get("/stats/employees")
 async def stats_employees(cu: User=Depends(get_current_user)):
     employees = sb_select("employees", {"select": "*"})
-    activities = sb_select("activities", {"select": "user_id,created_at,type"})
-    all_leads = merge_leads_with_cache(sb_select("leads", {"select": "lead_id,assigned_to,status,stage"}))
-    
-    # Calculate stats per employee
+    db_activities = sb_select_all("activities", {"select": "user_id,created_at,type"})
+    cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+    activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
+    all_leads = fetch_all_leads_merged("lead_id,assigned_to,status,stage,follow_up_at")
+
     emp_stats = []
     for e in employees:
         eid = e["employee_id"]
-        emp_acts = [a for a in activities if a.get("user_id") == eid]
+        emp_acts = [a for a in activities if a.get("user_id") in {eid, e.get("user_id")}]
         emp_leads = [l for l in all_leads if l.get("assigned_to") == eid]
-        
+        assignment = compute_employee_assignment_stats(emp_leads, e.get("role"))
         last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
-        actions_total = len(emp_acts)
-        
-        # Simple counts based on activity types
-        positives = sum(1 for a in emp_acts if a.get("type") == "positive_response" or "positive" in str(a.get("type")))
-        visits = sum(1 for a in emp_acts if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type")))
-        followups = sum(1 for a in emp_acts if "followup" in str(a.get("type")) or "follow_up" in str(a.get("type")))
-        
+
         emp_stats.append({
-            "employee_id": eid, "name": e["name"], "email": e["email"],
-            "role": e["role"], "department": e.get("department", ""),
-            "actions_total": actions_total, "leads_total": len(emp_leads), "last_activity": last_activity,
-            "assigned_total": len(emp_leads),
-            "assigned_active": sum(1 for l in emp_leads if l.get("status") != "negative" and l.get("stage") != "closed"),
-            "assigned_completed": sum(1 for l in emp_leads if l.get("stage") == "closed"),
-            "positives": positives,
-            "negatives": sum(1 for l in emp_leads if l.get("status") == "negative"),
-            "followups": followups, "visits": visits,
-            "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))), 
+            "employee_id": eid,
+            "name": e["name"],
+            "email": e["email"],
+            "role": e["role"],
+            "department": e.get("department", ""),
+            "active": e.get("active", True),
+            "actions_total": len(emp_acts),
+            "leads_total": assignment["assigned_total"],
+            "last_activity": last_activity,
+            **assignment,
+            "positives": assignment["assigned_positive"],
+            "negatives": assignment["assigned_not_interested"],
+            "followups": assignment["assigned_follow_ups"],
+            "visits": sum(1 for a in emp_acts if a.get("type") == "site_visit_scheduled" or "visit" in str(a.get("type"))),
+            "bookings_done": sum(1 for a in emp_acts if "booking" in str(a.get("type"))),
             "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
-            "closed_deals": sum(1 for a in emp_acts if "closed" in str(a.get("type"))), 
+            "closed_deals": assignment["assigned_completed"],
             "call_notes": sum(1 for a in emp_acts if "call" in str(a.get("type"))),
         })
     return emp_stats

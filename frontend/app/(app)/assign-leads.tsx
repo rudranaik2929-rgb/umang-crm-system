@@ -69,7 +69,7 @@ export default function AssignLeads() {
 
           <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <Text style={[styles.panelTitle, { color: colors.text }]}>Employee assignment overview</Text>
-            <Text style={[styles.panelSub, { color: colors.textMuted }]}>Assigned · active · completed per team member</Text>
+            <Text style={[styles.panelSub, { color: colors.textMuted }]}>Assigned = all time · Queue = workspace tab count · Follow-ups = scheduled</Text>
             <View style={styles.empGrid}>
               {assignmentStats.map((emp) => (
                 <View key={emp.employee_id} style={[styles.empCard, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
@@ -77,7 +77,9 @@ export default function AssignLeads() {
                   <Text style={{ color: colors.textMuted, fontSize: 10 }}>{roleLabel(emp.role)}</Text>
                   <View style={styles.empMetrics}>
                     <MiniStat label="Assigned" value={emp.assigned_total} color={colors.info} />
-                    <MiniStat label="Active" value={emp.assigned_active} color={colors.primary} />
+                    <MiniStat label="Queue" value={emp.assigned_queue} color={colors.primary} />
+                    <MiniStat label="Follow-ups" value={emp.assigned_follow_ups} color="#F97316" />
+                    <MiniStat label="In progress" value={emp.assigned_in_progress} color="#8B5CF6" />
                     <MiniStat label="Completed" value={emp.assigned_completed} color={colors.positive} />
                     <MiniStat label="Not Interested" value={emp.assigned_not_interested} color={colors.negative} />
                   </View>

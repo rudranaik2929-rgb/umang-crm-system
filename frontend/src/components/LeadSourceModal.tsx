@@ -196,10 +196,11 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
       setData(normalized);
       const refreshed = normalized.platforms.find((p) => p.platform === platform.platform) || platform;
       await loadPlatformLeads(refreshed);
+      onChanged?.();
     } catch {
       // List already visible from first loadPlatformLeads call
     }
-  }, [canSyncIntegrations, loadPlatformLeads]);
+  }, [canSyncIntegrations, loadPlatformLeads, onChanged]);
 
   useEffect(() => {
     selectedPlatformRef.current = selectedPlatform;

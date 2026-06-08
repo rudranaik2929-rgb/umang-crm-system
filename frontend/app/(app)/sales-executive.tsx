@@ -11,7 +11,6 @@ import { LeadQueueTable } from '../../src/components/LeadQueueTable';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { Ionicons } from '@expo/vector-icons';
 
-const QUEUE_STAGES = ['new', 'assigned', 'positive'];
 type Tab = 'queue' | 'followups';
 
 export default function SalesExecutive() {
@@ -19,7 +18,8 @@ export default function SalesExecutive() {
   const { user } = useAuth();
   const params = useLocalSearchParams<{ tab?: string }>();
   const [tab, setTab] = useState<Tab>('queue');
-  const [leads, setLeads] = useState<any[]>([]);
+  const [queueLeads, setQueueLeads] = useState<any[]>([]);
+  const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
@@ -29,8 +29,10 @@ export default function SalesExecutive() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads');
-      setLeads(r.data);
+      const r = await api.get('/leads/workspace', { params: { limit: 500 } });
+      const data = r.data || {};
+      setStats(data.stats || {});
+      setQueueLeads(data.queue?.leads || []);
     } finally {
       setLoading(false);
     }
@@ -38,21 +40,14 @@ export default function SalesExecutive() {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = leads.filter((l) => {
-    if (l.status !== 'active') return false;
-    if (!QUEUE_STAGES.includes(l.stage)) return false;
-    if (user?.role !== 'admin' && user?.role !== 'manager') {
-      const myEmpId = (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
-      if (!myEmpId || l.assigned_to !== myEmpId) return false;
-    }
-    return true;
-  });
+  const queueTotal = Number(stats?.assigned_queue ?? queueLeads.length);
+  const followTotal = Number(stats?.assigned_follow_ups ?? 0);
 
   return (
     <View style={{ flex: 1 }}>
       <TopBar
         title="Sales Executive"
-        subtitle={tab === 'queue' ? 'Lead queue' : 'Follow ups'}
+        subtitle={tab === 'queue' ? `${queueTotal} in queue · ${stats?.assigned_total ?? 0} assigned total` : `${followTotal} follow-ups`}
         rightAction={
           <Pressable onPress={load} disabled={loading} style={[styles.iconBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
             <Ionicons name="refresh" size={18} color={colors.primary} />
@@ -61,18 +56,22 @@ export default function SalesExecutive() {
       />
       <View style={[styles.tabs, { borderBottomColor: colors.border, backgroundColor: colors.surface }]}>
         <Pressable onPress={() => setTab('queue')} style={[styles.tab, tab === 'queue' && { borderBottomColor: colors.primary }]}>
-          <Text style={{ color: tab === 'queue' ? colors.primary : colors.textMuted, fontWeight: '700', fontSize: 13 }}>Leads</Text>
+          <Text style={{ color: tab === 'queue' ? colors.primary : colors.textMuted, fontWeight: '700', fontSize: 13 }}>
+            Leads ({queueTotal})
+          </Text>
         </Pressable>
         <Pressable onPress={() => setTab('followups')} style={[styles.tab, tab === 'followups' && { borderBottomColor: '#F97316' }]}>
-          <Text style={{ color: tab === 'followups' ? '#F97316' : colors.textMuted, fontWeight: '700', fontSize: 13 }}>Follow Ups</Text>
+          <Text style={{ color: tab === 'followups' ? '#F97316' : colors.textMuted, fontWeight: '700', fontSize: 13 }}>
+            Follow Ups ({followTotal})
+          </Text>
         </Pressable>
       </View>
       <ScrollView contentContainerStyle={styles.content}>
         {tab === 'queue' ? (
-          loading ? <ActivityIndicator color={colors.primary} /> : filtered.length === 0 ? (
+          loading ? <ActivityIndicator color={colors.primary} /> : queueLeads.length === 0 ? (
             <EmptyState variant="leads" title="No leads in your queue" description="Leads appear when assigned to you." />
           ) : (
-            <LeadQueueTable leads={filtered} onOpen={setOpenLead} testIdPrefix="sales-exec" />
+            <LeadQueueTable leads={queueLeads} onOpen={setOpenLead} testIdPrefix="sales-exec" />
           )
         ) : (
           <FollowUpsPanel onOpenLead={setOpenLead} />

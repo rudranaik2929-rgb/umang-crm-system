@@ -73,6 +73,11 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 4 }}>
                     <StageBadge stage={l.stage} />
+                    {bucket === 'follow_up' && l.follow_up_at ? (
+                      <Text style={{ color: '#F97316', fontSize: 10, fontWeight: '600' }}>
+                        {new Date(l.follow_up_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                      </Text>
+                    ) : null}
                     {l.budget ? (
                       <Text style={{ color: colors.textMuted, fontSize: 10 }}>
                         {formatBudgetStringLakhs(l.budget) ? `${formatBudgetStringLakhs(l.budget)} L` : l.budget}

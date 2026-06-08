@@ -15,6 +15,7 @@ import {
   formatHousingConfiguration,
   formatHousingLeadDate,
 } from '../lib/leadFormat';
+import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
 
 interface Props {
   leadId: string | null;
@@ -44,16 +45,33 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
         : '/(app)/telecaller?tab=followups';
     router.push(route as any);
   };
-  // Mark the lead, store a real follow-up record, then jump to the Follow Ups tab.
-  const moveToFollowUp = async (payload: any, action: string) => {
-    if (!leadId) return;
-    setBusy(action);
+  const [followUpOpen, setFollowUpOpen] = useState(false);
+  const [followUpPayload, setFollowUpPayload] = useState<any>(null);
+  const [followUpAction, setFollowUpAction] = useState<string | null>(null);
+
+  const openFollowUpForm = (payload: any, action: string) => {
+    setFollowUpPayload(payload);
+    setFollowUpAction(action);
+    setFollowUpOpen(true);
+  };
+
+  const submitFollowUp = async (form: {
+    follow_up_date: string;
+    follow_up_time: string;
+    follow_up_day: string;
+    reason: string;
+    notes: string;
+  }) => {
+    if (!leadId || !followUpPayload) return;
+    setBusy(followUpAction);
     try {
-      await api.patch(`/leads/${leadId}`, payload);
-      await api.post(`/leads/${leadId}/follow-up`, {}).catch(() => {});
+      await api.patch(`/leads/${leadId}`, followUpPayload);
+      await api.post(`/leads/${leadId}/follow-up`, form);
+      setFollowUpOpen(false);
       goFollowUps();
     } finally {
       setBusy(null);
+      setFollowUpAction(null);
     }
   };
   const [data, setData] = useState<any>(null);
@@ -571,8 +589,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                         <View style={styles.subGrid}>
                           <SubActionBtn 
                             label="Cold Lead → Follow Up" 
-                            sub="Mark positive and open Follow Ups"
-                            onPress={() => moveToFollowUp({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold')}
+                            sub="Schedule date, time, reason and notes"
+                            onPress={() => openFollowUpForm({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold')}
                             busy={busy === 'cold'}
                             color={colors.positive}
                           />
@@ -636,8 +654,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                         <View style={styles.subGrid}>
                           <SubActionBtn 
                             label="Visited → Schedule Follow Up" 
-                            sub="Mark visited and open Follow Ups"
-                            onPress={() => moveToFollowUp({ stage: 'positive', status: 'active' }, 'follow_up')}
+                            sub="Pick date, time, reason and notes"
+                            onPress={() => openFollowUpForm({ stage: 'positive', status: 'active' }, 'follow_up')}
                             busy={busy === 'follow_up'}
                             color={colors.info}
                           />
@@ -786,17 +804,37 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     </Pressable>
   );
 
+  const followUpModal = (
+    <ScheduleFollowUpModal
+      visible={followUpOpen}
+      leadName={data?.lead?.name}
+      onClose={() => {
+        setFollowUpOpen(false);
+        setFollowUpAction(null);
+      }}
+      onSubmit={submitFollowUp}
+    />
+  );
+
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
-    return createPortal(
-      <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>,
-      document.body,
+    return (
+      <>
+        {createPortal(
+          <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>,
+          document.body,
+        )}
+        {followUpModal}
+      </>
     );
   }
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      {sheet}
-    </Modal>
+    <>
+      <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+        {sheet}
+      </Modal>
+      {followUpModal}
+    </>
   );
 }
 

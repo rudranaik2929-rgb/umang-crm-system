@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { api } from '../lib/api';
 import { isAdmin } from '../lib/constants';
+import { leadToFollowUpCard } from '../lib/leadFollowUp';
 
 function formatClockTime(value?: string | null) {
   if (!value) return '';
@@ -19,13 +20,15 @@ type Props = {
   compact?: boolean;
   maxItems?: number;
   showEmployeeName?: boolean;
+  assignedTo?: string | null;
   onOpenLead?: (leadId: string) => void;
 };
 
-export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, onOpenLead }: Props) {
+export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, assignedTo, onOpenLead }: Props) {
   const { colors } = useTheme();
   const { user } = useAuth();
   const [items, setItems] = useState<any[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
 
   const managerView = showEmployeeName ?? (isAdmin(user?.role) || user?.role === 'manager');
@@ -33,23 +36,19 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, on
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await api.get('/visit-followups');
-      let list = Array.isArray(res.data) ? res.data : [];
-      if (!managerView) {
-        const myId = (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
-        if (myId) {
-          const leadsRes = await api.get('/leads');
-          const mine = new Set(
-            (leadsRes.data || []).filter((l: any) => l.assigned_to === myId).map((l: any) => l.lead_id),
-          );
-          list = list.filter((f: any) => mine.has(f.lead_id));
-        }
+      const myId = assignedTo || (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
+      const params: Record<string, any> = { bucket: 'follow_up', limit: 500 };
+      if (!managerView && myId) {
+        params.assigned_to = myId;
       }
-      setItems(list);
+      const res = await api.get('/leads/filtered', { params });
+      const leads = Array.isArray(res.data?.leads) ? res.data.leads : [];
+      setTotal(Number(res.data?.total ?? leads.length));
+      setItems(leads.map(leadToFollowUpCard));
     } finally {
       setLoading(false);
     }
-  }, [managerView, user]);
+  }, [managerView, user, assignedTo]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -72,13 +71,15 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, on
       {!compact ? (
         <View style={styles.toolbar}>
           <Text style={{ color: colors.textSecondary, fontSize: 13, flex: 1 }}>
-            {managerView ? 'Team follow-ups' : 'Your scheduled follow-ups'}
+            {managerView ? `Team follow-ups (${total})` : `Your follow-ups (${total})`}
           </Text>
           <Pressable onPress={load} style={[styles.refresh, { borderColor: colors.border }]}>
             <Ionicons name="refresh" size={16} color={colors.primary} />
           </Pressable>
         </View>
-      ) : null}
+      ) : (
+        <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8 }}>{total} scheduled</Text>
+      )}
       <View style={styles.grid}>
         {shown.map((item) => (
           <Pressable

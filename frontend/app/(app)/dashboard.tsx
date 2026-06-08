@@ -19,20 +19,6 @@ import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/c
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
 const COLD_STAGES = ['new'];
 
-function fallbackBucketCounts(leads: any[]) {
-  const today = new Date().toISOString().slice(0, 10);
-  const active = leads.filter((l) => l.status !== 'negative');
-  return {
-    all: leads.length,
-    new_today: leads.filter((l) => l.created_at?.slice(0, 10) === today).length,
-    positive: active.filter((l) => HOT_STAGES.includes(l.stage)).length,
-    not_interested: leads.filter((l) => l.status === 'negative').length,
-    registration: active.filter((l) => l.stage === 'registration').length,
-    booking: active.filter((l) => ['booking', 'loan'].includes(l.stage)).length,
-    follow_up: leads.filter((l) => l.follow_up_at).length,
-  };
-}
-
 function formatCurrency(value: number) {
   if (!value) return '₹0';
   if (value >= 10000000) return `₹${(value / 10000000).toFixed(2)} Cr`;
@@ -71,7 +57,7 @@ export default function Dashboard() {
       const [s, g, l, e, b] = await Promise.allSettled([
         api.get('/stats/dashboard'),
         api.get('/stats/dashboard/graph'),
-        api.get('/leads'),
+        api.get('/leads', { params: { limit: 500 } }),
         api.get('/stats/employees'),
         api.get('/stats/lead-buckets'),
       ]);
@@ -124,8 +110,8 @@ export default function Dashboard() {
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
     const activeLeads = leads.filter((l) => l.status !== 'negative');
-    const bucketSource = buckets && Object.keys(buckets).length ? buckets : (stats?.lead_buckets || fallbackBucketCounts(leads));
-    const totalLeads = Number(bucketSource?.all ?? stats?.total_leads ?? leads.length ?? 0);
+    const bucketSource = buckets && Object.keys(buckets).length ? buckets : (stats?.lead_buckets || {});
+    const totalLeads = Number(stats?.total_leads ?? bucketSource?.all ?? 0);
 
     const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
     const cold = activeLeads.filter((l) => COLD_STAGES.includes(l.stage)).length || Number(sd.new || 0);
@@ -145,7 +131,7 @@ export default function Dashboard() {
       bookings: Number(stats?.bookings || 0),
       confirmedBookings: Number(stats?.confirmed_bookings || 0),
       followUps: Number(bucketSource?.follow_up ?? stats?.follow_ups ?? 0),
-      pendingFollowUps: Number(stats?.pending_follow_ups || 0),
+      pendingFollowUps: Number(stats?.pending_follow_ups ?? 0),
       loans: Number(stats?.loans || 0),
       disbursedLoans: Number(stats?.disbursed_loans || 0),
       employees: Number(stats?.employees || 0),
@@ -217,8 +203,8 @@ export default function Dashboard() {
             accent={colors.info}
             onPress={() => setSourceModalVisible(true)}
             helper={
-              stats?.housing_leads
-                ? `${stats.housing_leads} Housing · tap for breakdown`
+              stats?.housing_leads != null
+                ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · tap for breakdown`
                 : 'Tap for platform breakdown'
             }
           />
@@ -227,23 +213,26 @@ export default function Dashboard() {
           <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Tap for full list" onPress={() => setLeadsBucket('not_interested')} />
           <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Tap for full list" onPress={() => setLeadsBucket('registration')} />
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Tap for full list" onPress={() => setLeadsBucket('booking')} />
-          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending`} />
+          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · tap for list`} onPress={() => setLeadsBucket('follow_up')} />
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} onPress={() => router.push('/(app)/loans' as any)} />
           <MetricCard icon="briefcase-outline" label="Employees" value={model.employees} accent="#14B8A6" helper={`${model.campaigns} campaigns`} onPress={() => router.push('/(app)/employees' as any)} />
         </View>
 
-        <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+        <Pressable
+          onPress={() => setLeadsBucket('follow_up')}
+          style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        >
           <View style={styles.panelHeader}>
             <View>
               <Text style={[styles.panelTitle, { color: colors.text }]}>Follow Ups</Text>
               <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                {model.pendingFollowUps} pending · {model.followUps} total
+                {model.pendingFollowUps} pending · {model.followUps} scheduled · tap for full list
               </Text>
             </View>
             <Ionicons name="calendar-outline" size={20} color="#F97316" />
           </View>
           <FollowUpsPanel compact maxItems={12} showEmployeeName onOpenLead={setOpenLead} />
-        </View>
+        </Pressable>
 
         <EmployeePerformance employees={employees} />
 
@@ -277,12 +266,13 @@ export default function Dashboard() {
             <View style={styles.kanbanRow}>
               {STAGES.map((stage) => {
                 const stageLeads = model.activeLeads.filter((l) => l.stage === stage.key);
+                const stageCount = Number(stats?.stage_distribution?.[stage.key] ?? stageLeads.length);
                 return (
                   <View key={stage.key} style={[styles.kanbanCol, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
                     <View style={styles.kanbanHead}>
                       <View style={[styles.stageDot, { backgroundColor: STAGE_COLORS[stage.key] || colors.primary }]} />
                       <Text style={[styles.kanbanTitle, { color: colors.text }]} numberOfLines={1}>{stageLabel(stage.key)}</Text>
-                      <Text style={[styles.kanbanCount, { color: colors.textMuted }]}>{stageLeads.length}</Text>
+                      <Text style={[styles.kanbanCount, { color: colors.textMuted }]}>{stageCount}</Text>
                     </View>
                     {stageLeads.slice(0, 4).map((lead) => (
                       <Pressable

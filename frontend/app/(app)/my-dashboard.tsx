@@ -156,12 +156,13 @@ export default function MyDashboard() {
           <View>
             <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
             <View style={styles.kpiGrid}>
-              <KPI label="Total Leads" value={personal.leads_total ?? personal.actions_total} icon="people-outline" color={accent} colors={colors} />
-              <KPI label="Assigned Active" value={personal.assigned_active ?? personal.leads_total} icon="briefcase-outline" color={colors.info} colors={colors} />
-              <KPI label="Completed" value={personal.assigned_completed ?? personal.closed_deals} icon="checkmark-circle-outline" color={colors.positive} colors={colors} />
-              <KPI label="Positive" value={personal.positives} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />
-              <KPI label="Not Interested" value={personal.negatives} icon="thumbs-down-outline" color={colors.negative} colors={colors} highlight={highlight.includes('negatives')} />
-              <KPI label="Follow-ups" value={personal.followups} icon="time-outline" color={colors.warning} colors={colors} highlight={highlight.includes('followups')} />
+              <KPI label="Assigned Total" value={personal.leads_total ?? 0} icon="people-outline" color={accent} colors={colors} />
+              <KPI label="My Queue" value={personal.assigned_queue ?? 0} icon="list-outline" color={colors.primary} colors={colors} />
+              <KPI label="Assigned Active" value={personal.assigned_active ?? 0} icon="briefcase-outline" color={colors.info} colors={colors} />
+              <KPI label="Completed" value={personal.assigned_completed ?? 0} icon="checkmark-circle-outline" color={colors.positive} colors={colors} />
+              <KPI label="Positive" value={personal.positives ?? 0} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />
+              <KPI label="Not Interested" value={personal.negatives ?? 0} icon="thumbs-down-outline" color={colors.negative} colors={colors} highlight={highlight.includes('negatives')} />
+              <KPI label="Follow-ups" value={personal.assigned_follow_ups ?? personal.followups ?? 0} icon="time-outline" color={colors.warning} colors={colors} highlight={highlight.includes('followups')} />
               <KPI label="Call Notes" value={personal.call_notes} icon="document-text-outline" color={colors.info} colors={colors} highlight={highlight.includes('call_notes')} />
               <KPI label="Bookings" value={personal.bookings_done} icon="document-text-outline" color={colors.warning} colors={colors} highlight={highlight.includes('bookings_done')} />
               <KPI label="Loans" value={personal.loans_done} icon="business-outline" color={'#7C3AED'} colors={colors} highlight={highlight.includes('loans_done')} />

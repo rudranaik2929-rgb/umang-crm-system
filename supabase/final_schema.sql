@@ -405,6 +405,8 @@ create index if not exists idx_leads_stage_status on leads(stage, status);
 create index if not exists idx_leads_assigned_to on leads(assigned_to);
 create index if not exists idx_leads_assigned_at on leads(assigned_at desc) where assigned_at is not null;
 create index if not exists idx_leads_unassigned on leads(stage, status) where assigned_to is null;
+create index if not exists idx_leads_assigned_stage_status on leads(assigned_to, stage, status);
+create index if not exists idx_leads_assigned_follow_up on leads(assigned_to, follow_up_at desc) where follow_up_at is not null;
 create index if not exists idx_leads_source on leads(source);
 create index if not exists idx_leads_external_lead_id on leads(external_lead_id);
 create index if not exists idx_leads_phone_source on leads(phone, source);

@@ -10,8 +10,7 @@ import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LeadQueueTable } from '../../src/components/LeadQueueTable';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { Ionicons } from '@expo/vector-icons';
-
-const QUEUE_STAGES = ['new', 'assigned'];
+import { leadToFollowUpCard } from '../../src/lib/leadFollowUp';
 
 type Tab = 'queue' | 'followups';
 
@@ -20,7 +19,9 @@ export default function Telecaller() {
   const { user } = useAuth();
   const params = useLocalSearchParams<{ tab?: string }>();
   const [tab, setTab] = useState<Tab>('queue');
-  const [leads, setLeads] = useState<any[]>([]);
+  const [queueLeads, setQueueLeads] = useState<any[]>([]);
+  const [followUpLeads, setFollowUpLeads] = useState<any[]>([]);
+  const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
@@ -30,8 +31,11 @@ export default function Telecaller() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads');
-      setLeads(r.data);
+      const r = await api.get('/leads/workspace', { params: { limit: 500 } });
+      const data = r.data || {};
+      setStats(data.stats || {});
+      setQueueLeads(data.queue?.leads || []);
+      setFollowUpLeads((data.follow_ups?.leads || []).map(leadToFollowUpCard));
     } finally {
       setLoading(false);
     }
@@ -39,21 +43,14 @@ export default function Telecaller() {
 
   useEffect(() => { load(); }, [load]);
 
-  const filtered = leads.filter((l) => {
-    if (l.status !== 'active') return false;
-    if (!QUEUE_STAGES.includes(l.stage)) return false;
-    if (user?.role !== 'admin') {
-      const myEmpId = (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
-      if (!myEmpId || l.assigned_to !== myEmpId) return false;
-    }
-    return true;
-  });
+  const queueTotal = Number(stats?.assigned_queue ?? queueLeads.length);
+  const followTotal = Number(stats?.assigned_follow_ups ?? followUpLeads.length);
 
   return (
     <View style={{ flex: 1 }}>
       <TopBar
         title="Telecaller Workspace"
-        subtitle={tab === 'queue' ? 'New enquiries' : 'Scheduled follow-ups'}
+        subtitle={tab === 'queue' ? `${queueTotal} in queue · ${stats?.assigned_total ?? 0} assigned total` : `${followTotal} follow-ups`}
         rightAction={
           <Pressable
             onPress={load}
@@ -72,7 +69,7 @@ export default function Telecaller() {
           style={[styles.tab, tab === 'queue' && { borderBottomColor: colors.primary }]}
         >
           <Text style={{ color: tab === 'queue' ? colors.primary : colors.textMuted, fontWeight: '700', fontSize: 13 }}>
-            New Enquiries
+            New Enquiries ({queueTotal})
           </Text>
         </Pressable>
         <Pressable
@@ -81,7 +78,7 @@ export default function Telecaller() {
           style={[styles.tab, tab === 'followups' && { borderBottomColor: '#F97316' }]}
         >
           <Text style={{ color: tab === 'followups' ? '#F97316' : colors.textMuted, fontWeight: '700', fontSize: 13 }}>
-            Follow Ups
+            Follow Ups ({followTotal})
           </Text>
         </Pressable>
       </View>
@@ -90,14 +87,14 @@ export default function Telecaller() {
         {tab === 'queue' ? (
           <>
             <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 16 }}>
-              New enquiries only. Cold lead from a lead card opens the <Text style={{ fontWeight: '700', color: '#F97316' }}>Follow Ups</Text> tab.
+              Queue shows new + assigned leads only. Assigned total ({stats?.assigned_total ?? 0}) includes positive, follow-up and completed leads.
             </Text>
             {loading ? (
               <ActivityIndicator color={colors.primary} />
-            ) : filtered.length === 0 ? (
+            ) : queueLeads.length === 0 ? (
               <EmptyState variant="leads" title="No leads in your queue" description="New enquiries land here automatically." />
             ) : (
-              <LeadQueueTable leads={filtered} onOpen={setOpenLead} testIdPrefix="telecaller" />
+              <LeadQueueTable leads={queueLeads} onOpen={setOpenLead} testIdPrefix="telecaller" />
             )}
           </>
         ) : (
