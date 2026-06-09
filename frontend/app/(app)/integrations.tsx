@@ -44,8 +44,11 @@ type FacebookVerify = {
   token_valid: boolean;
   token_error?: string | null;
   db_meta_leads: number;
+  forms_count?: number;
+  page_id?: string | null;
   pending_webhook_events?: number;
   last_error?: string | null;
+  fix_steps?: string[];
 };
 
 type MetaLeadRow = {
@@ -92,7 +95,20 @@ export default function Integrations() {
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load().then(async () => {
+      try {
+        const v = await api.get('/integrations/facebook/verify');
+        const pending = Number(v.data?.pending_webhook_events || 0);
+        if (pending > 0 && v.data?.token_valid) {
+          await api.post('/integrations/facebook/resync', {});
+          await load();
+        }
+      } catch {
+        // ignore background resync errors
+      }
+    });
+  }, [load]);
 
   const housingPlatform = useMemo(
     () => platforms.find((p) => p.platform === 'housing'),
@@ -114,8 +130,11 @@ export default function Integrations() {
       const r = await api.post('/housing/sync', {});
       const created = Array.isArray(r.data?.created) ? r.data.created.length : 0;
       const duplicates = Array.isArray(r.data?.duplicates) ? r.data.duplicates.length : 0;
+      const skipped = Number(r.data?.skipped_stale || 0);
       const fetched = Number(r.data?.fetched || 0);
-      setMessage(`Housing sync: ${fetched} fetched from API, ${created} new, ${duplicates} already in CRM.`);
+      setMessage(
+        `Housing sync: ${fetched} fetched, ${created} new, ${duplicates} already in CRM${skipped ? `, ${skipped} old skipped` : ''} (recent leads only).`,
+      );
       await load();
     } catch (e: any) {
       setMessage(e?.response?.data?.detail || 'Housing sync failed.');
@@ -168,19 +187,25 @@ export default function Integrations() {
   };
 
   const metaExtraNote = useMemo(() => {
-    if (metaLeads.length > 0) {
-      return `${metaLeads.length} lead(s) in CRM · token ${fbVerify?.token_valid ? 'valid' : 'check Render env'}`;
-    }
-    if (fbVerify?.token_valid) {
-      return 'Token valid. Click Import Past Meta Leads to pull previously submitted Facebook form leads.';
+    if (!fbVerify?.token_configured) {
+      return 'Webhook URL verified ≠ leads working. Add FACEBOOK_PAGE_ACCESS_TOKEN on Render (Page token with leads_retrieval).';
     }
     if (fbVerify?.token_error) {
       return fbVerify.token_error;
     }
-    if (fbEvents.length) {
-      return `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'} · ${String(fbEvents[0].created_at || '').slice(0, 19)}`;
+    if ((fbVerify?.pending_webhook_events || 0) > 0) {
+      return `${fbVerify?.pending_webhook_events} webhook lead(s) waiting — click Resync Webhooks after token is set.`;
     }
-    return 'Submit a real lead via your Facebook Lead Ad form to see leads here.';
+    if (metaLeads.length > 0) {
+      return `${metaLeads.length} in CRM · ${fbVerify?.forms_count ?? 0} form(s) · Page ${fbVerify?.page_id || '—'}`;
+    }
+    if (fbVerify?.token_valid) {
+      return `Token OK · ${fbVerify?.forms_count ?? 0} Lead Ad form(s). Click Import Past Meta Leads for older submissions.`;
+    }
+    if (fbEvents.length) {
+      return `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'}`;
+    }
+    return 'Submit a real lead via your Facebook Lead Ad form, then Import or Resync.';
   }, [fbEvents, fbVerify, metaLeads.length]);
 
   return (
@@ -202,14 +227,14 @@ export default function Integrations() {
                 ['Encryption key', !!status?.housing?.encryption_key_configured],
                 ['Integration UUID', !!status?.housing?.integration_uuid_configured],
                 ['API reachable', !!housingVerify?.api_reachable],
-                ['Leads in API (24h)', (housingVerify?.leads_available || 0) > 0],
+                ['Leads in API (2h)', (housingVerify?.leads_available || 0) > 0],
               ]}
               extraNote={
                 housingVerify
                   ? `API: ${housingVerify.leads_available} available · CRM: ${housingVerify.db_housing_leads} stored`
                   : undefined
               }
-              actionLabel={syncing ? 'Syncing' : 'Sync Leads (last 24h)'}
+              actionLabel={syncing ? 'Syncing' : 'Sync New Housing Leads (2h)'}
               actionIcon="sync-outline"
               onAction={runHousingSync}
               actionDisabled={syncing}
@@ -223,7 +248,7 @@ export default function Integrations() {
               source={metaPlatform}
               checks={[
                 ['Verify token', !!status?.facebook?.verify_token_configured],
-                ['Lead retrieval', !!status?.facebook?.lead_retrieval_configured],
+                ['Page token (lead fetch)', !!status?.facebook?.lead_retrieval_configured && !!fbVerify?.token_valid],
                 ['Page token valid', !!fbVerify?.token_valid],
                 ['Recent webhooks', fbEvents.length > 0],
               ]}

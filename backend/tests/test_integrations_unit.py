@@ -38,6 +38,52 @@ def _install_fake_supabase(monkeypatch):
     return inserted
 
 
+def test_housing_sync_skips_stale_leads(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    monkeypatch.setattr(main, "HOUSING_PROFILE_ID", "2548773")
+    monkeypatch.setattr(main, "HOUSING_ENCRYPTION_KEY", "secret-key")
+    monkeypatch.setattr(main, "get_last_housing_sync_end_epoch", lambda: None)
+    monkeypatch.setattr(main, "record_housing_sync_checkpoint", lambda *args, **kwargs: None)
+
+    old_ts = int(time.time()) - 7 * 86400
+    recent_ts = int(time.time()) - 300
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return [
+                {"lead_id": "old-1", "lead_phone": "9876500001", "lead_date": str(old_ts)},
+                {"lead_id": "new-1", "lead_phone": "9876500002", "lead_date": str(recent_ts), "lead_name": "Fresh"},
+            ]
+
+    monkeypatch.setattr(main._http, "get", lambda *args, **kwargs: FakeResponse())
+
+    monkeypatch.setattr(main, "log_activity", lambda *args, **kwargs: None)
+
+    class FakeUser:
+        user_id = "u1"
+        employee_id = None
+        email = "admin@test.com"
+        role = "admin"
+        name = "Admin"
+        acting_as_employee_id = None
+
+    main.app.dependency_overrides[main.get_current_user] = lambda: FakeUser()
+    try:
+        response = TestClient(main.app).post("/api/housing/sync", json={})
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["skipped_stale"] == 1
+    assert len(body["created"]) == 1
+    assert len(inserted["leads"]) == 1
+    assert inserted["leads"][0]["external_lead_id"] == "new-1"
+
+
 def test_housing_webhook_creates_housing_lead(monkeypatch):
     inserted = _install_fake_supabase(monkeypatch)
     monkeypatch.setattr(main, "HOUSING_WEBHOOK_SECRET", "test-integration-uuid")
@@ -195,7 +241,7 @@ def test_facebook_leadgen_webhook_payload(monkeypatch):
     monkeypatch.setattr(main, "FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")
     monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "page-token")
 
-    def fake_fetch(leadgen_id):
+    def fake_fetch(leadgen_id, page_id=None):
         return {
             "leadgen_id": leadgen_id,
             "full_name": "Graph Lead",

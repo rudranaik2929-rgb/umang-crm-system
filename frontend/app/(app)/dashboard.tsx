@@ -99,7 +99,10 @@ export default function Dashboard() {
     const pollMs = 5 * 60 * 1000;
     const interval = setInterval(async () => {
       try {
-        await api.post('/integrations/housing/poll', {}).catch(() => {});
+        await Promise.all([
+          api.post('/integrations/housing/poll', {}).catch(() => {}),
+          api.post('/integrations/facebook/poll', {}).catch(() => {}),
+        ]);
       } finally {
         load();
       }

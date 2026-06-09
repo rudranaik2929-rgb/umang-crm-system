@@ -22,6 +22,8 @@ services:
         value: UMANGCRM123
       - key: FACEBOOK_PAGE_ACCESS_TOKEN
         sync: false
+      - key: FACEBOOK_PAGE_ID
+        sync: false
       - key: HOUSING_PROFILE_ID
         value: "2548773"
       - key: HOUSING_ENCRYPTION_KEY

@@ -187,11 +187,17 @@ FACEBOOK_GRAPH_VERSION = os.environ.get("FACEBOOK_GRAPH_VERSION", "v20.0")
 FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID", "")
 FACEBOOK_FORM_ID = os.environ.get("FACEBOOK_FORM_ID", "")
 META_FAKE_LEADGEN_IDS = {"444444444444", "0", "test"}
+_FACEBOOK_PAGE_TOKEN_CACHE: Dict[str, Any] = {"tokens": {}, "fetched_at": 0.0}
 HOUSING_PROFILE_ID = os.environ.get("HOUSING_PROFILE_ID", "")
 HOUSING_ENCRYPTION_KEY = os.environ.get("HOUSING_ENCRYPTION_KEY", "")
 HOUSING_INTEGRATION_UUID = os.environ.get("HOUSING_INTEGRATION_UUID", "")
 HOUSING_API_URL = os.environ.get("HOUSING_API_URL", "https://leads.housing.com/api/v0/get-builder-leads")
 HOUSING_WEBHOOK_SECRET = os.environ.get("HOUSING_WEBHOOK_SECRET", HOUSING_INTEGRATION_UUID)
+# Housing API pull: only import leads inside this window (not old backlog).
+HOUSING_POLL_INITIAL_WINDOW_SEC = int(os.environ.get("HOUSING_POLL_INITIAL_WINDOW_SEC", "1200"))  # 20 min
+HOUSING_POLL_OVERLAP_SEC = int(os.environ.get("HOUSING_POLL_OVERLAP_SEC", "300"))  # 5 min overlap
+HOUSING_MANUAL_DEFAULT_WINDOW_SEC = int(os.environ.get("HOUSING_MANUAL_DEFAULT_WINDOW_SEC", "7200"))  # 2 hours
+HOUSING_API_MAX_RANGE_SEC = 2 * 86400  # Housing.com rejects ranges wider than 2 days
 
 def sb_headers():
     return {
@@ -753,6 +759,7 @@ class CampaignCreate(BaseModel):
 class HousingSyncRequest(BaseModel):
     start_date: Optional[int]=None
     end_date: Optional[int]=None
+    allow_historical: bool = False
 
 class FacebookImportRequest(BaseModel):
     page_id: Optional[str] = None
@@ -1382,6 +1389,95 @@ def record_integration_event(source: str, payload: Any, status: str, lead_id: Op
     result = sb_insert("integration_events", event)
     return result or event
 
+def parse_epoch_seconds(value: Any) -> Optional[int]:
+    """Parse Housing lead_date / Meta created_time to Unix seconds."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        ts = int(raw)
+        if ts > 1e12:
+            ts = ts // 1000
+        return ts
+    iso = parse_external_datetime(value)
+    if iso:
+        try:
+            return int(datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp())
+        except Exception:
+            return None
+    return None
+
+
+def get_housing_lead_epoch(payload: Dict[str, Any]) -> Optional[int]:
+    return parse_epoch_seconds(pick_first(payload, [
+        "lead_date", "created_time", "created_at", "lead_created_time", "submitted_at", "time",
+    ]))
+
+
+def get_last_housing_sync_end_epoch() -> Optional[int]:
+    rows = sb_select("integration_events", {
+        "source": "eq.Housing.com",
+        "status": "eq.housing_sync_checkpoint",
+        "select": "raw_payload",
+        "order": "created_at.desc",
+        "limit": "1",
+    })
+    if not rows:
+        return None
+    raw = rows[0].get("raw_payload")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return None
+    if isinstance(raw, dict) and raw.get("end_date") is not None:
+        try:
+            return int(raw["end_date"])
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def record_housing_sync_checkpoint(end_date: int, meta: Dict[str, Any]) -> None:
+    record_integration_event("Housing.com", {"end_date": end_date, **meta}, "housing_sync_checkpoint")
+
+
+def housing_sync_window(
+    mode: str,
+    start_date: Optional[int],
+    end_date: Optional[int],
+    allow_historical: bool,
+) -> tuple:
+    """Compute API pull window — poll only fetches new leads since last checkpoint."""
+    end_date = end_date or int(now_utc().timestamp())
+    if start_date is not None:
+        if not allow_historical and (end_date - start_date) > HOUSING_MANUAL_DEFAULT_WINDOW_SEC:
+            start_date = end_date - HOUSING_MANUAL_DEFAULT_WINDOW_SEC
+        if end_date - start_date > HOUSING_API_MAX_RANGE_SEC:
+            start_date = end_date - HOUSING_API_MAX_RANGE_SEC
+        return start_date, end_date
+
+    if mode == "poll":
+        last_end = get_last_housing_sync_end_epoch()
+        if last_end:
+            start_date = max(last_end - HOUSING_POLL_OVERLAP_SEC, end_date - HOUSING_POLL_INITIAL_WINDOW_SEC)
+        else:
+            start_date = end_date - HOUSING_POLL_INITIAL_WINDOW_SEC
+    else:
+        start_date = end_date - HOUSING_MANUAL_DEFAULT_WINDOW_SEC
+    return start_date, end_date
+
+
+def should_import_housing_lead_on_sync(payload: Dict[str, Any], start_date: int, end_date: int) -> bool:
+    """Skip old Housing API leads — only import when lead_date is inside the sync window."""
+    lead_ts = get_housing_lead_epoch(payload)
+    if lead_ts is None:
+        return False
+    return (start_date - HOUSING_POLL_OVERLAP_SEC) <= lead_ts <= (end_date + 60)
+
+
 def parse_external_datetime(value: Any) -> Optional[str]:
     """Best-effort parse of a platform-provided lead time (Meta created_time,
     Housing lead_date) into an ISO timestamp. Returns None if unparseable."""
@@ -1531,20 +1627,46 @@ def find_existing_integrated_lead(phone: str, email: Optional[str], source: str,
         })
         if rows:
             return rows[0]
+        if source:
+            events = sb_select("integration_events", {
+                "source": f"eq.{source}",
+                "external_id": f"eq.{external_id}",
+                "status": "eq.created",
+                "select": "lead_id",
+                "limit": "1",
+            })
+            if events and events[0].get("lead_id"):
+                rows = sb_select("leads", {
+                    "lead_id": f"eq.{events[0]['lead_id']}",
+                    "select": "*",
+                    "limit": "1",
+                })
+                if rows:
+                    return rows[0]
+
+    scoped_source = source if source in ("Housing.com", "Facebook") else None
 
     if phone:
-        rows = sb_select("leads", {"phone": f"eq.{phone}", "select": "*", "limit": "1"})
+        params: Dict[str, str] = {"phone": f"eq.{phone}", "select": "*", "limit": "1"}
+        if scoped_source:
+            params["source"] = f"eq.{scoped_source}"
+        rows = sb_select("leads", params)
         if rows:
             return rows[0]
 
     if email:
-        rows = sb_select("leads", {"email": f"eq.{email}", "select": "*", "limit": "1"})
+        params = {"email": f"eq.{email}", "select": "*", "limit": "1"}
+        if scoped_source:
+            params["source"] = f"eq.{scoped_source}"
+        rows = sb_select("leads", params)
         if rows:
             return rows[0]
 
     for lead in SESSION_CACHE["leads"]:
         if external_id and lead.get("external_lead_id") == external_id:
             return lead
+        if scoped_source and lead.get("source") != scoped_source:
+            continue
         if phone and lead.get("phone") == phone:
             return lead
         if email and lead.get("email") == email:
@@ -1580,8 +1702,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
     initial_stage = "broker" if brokerage else ("assigned" if assigned_to else "new")
     lead_type = "brokerage" if brokerage else "standard"
     now = now_utc().isoformat()
-    # Use the real platform submission time (Meta created_time / Housing lead_date)
-    # as the lead's created_at so dashboards show when the lead actually arrived.
+    # Store the platform submission time when available (Housing lead_date / Meta created_time).
     created_at = normalized.get("external_created_at") or now
     lead_id = gen_id("lead")
     base_lead = {
@@ -1604,6 +1725,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
     optional_lead = {
         **base_lead,
         "external_lead_id": normalized.get("external_lead_id"),
+        "external_created_at": normalized.get("external_created_at"),
         "integration_uuid": clean_text(payload.get("integration_uuid")) or HOUSING_INTEGRATION_UUID if source == "Housing.com" else clean_text(payload.get("integration_uuid")),
         "raw_payload": safe_json(payload),
     }
@@ -1738,6 +1860,46 @@ def facebook_graph_paginate(
             break
     return items[:max_items]
 
+def _facebook_page_tokens_map() -> Dict[str, str]:
+    """Page id → page access token from me/accounts (cached 5 min)."""
+    now = time.time()
+    if now - float(_FACEBOOK_PAGE_TOKEN_CACHE.get("fetched_at") or 0) < 300:
+        cached = _FACEBOOK_PAGE_TOKEN_CACHE.get("tokens")
+        if isinstance(cached, dict) and cached:
+            return cached
+    tokens: Dict[str, str] = {}
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        return tokens
+    try:
+        accounts = facebook_graph_paginate(
+            "me/accounts",
+            {"fields": "id,name,access_token", "limit": "50"},
+            max_items=50,
+        )
+        for acct in accounts:
+            pid = clean_text(acct.get("id"))
+            tok = clean_text(acct.get("access_token"))
+            if pid and tok:
+                tokens[pid] = tok
+    except Exception as exc:
+        logging.warning("Facebook: could not load page tokens from me/accounts: %s", exc)
+    _FACEBOOK_PAGE_TOKEN_CACHE["tokens"] = tokens
+    _FACEBOOK_PAGE_TOKEN_CACHE["fetched_at"] = now
+    return tokens
+
+
+def resolve_page_access_token(page_id: Optional[str] = None) -> str:
+    """Best Graph API token for a Lead Ad page (page-scoped token when available)."""
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        return ""
+    pid = clean_text(page_id or FACEBOOK_PAGE_ID)
+    if pid:
+        page_tok = _facebook_page_tokens_map().get(pid)
+        if page_tok:
+            return page_tok
+    return FACEBOOK_PAGE_ACCESS_TOKEN
+
+
 def resolve_facebook_page_context(page_id: Optional[str] = None) -> Tuple[str, str]:
     """Return (page_id, access_token) for Lead Ads API calls."""
     resolved_page = clean_text(page_id or FACEBOOK_PAGE_ID)
@@ -1818,36 +1980,56 @@ def merge_facebook_meta_fields(lead_payload: Dict[str, Any], event: Dict[str, An
         merged["webhook_value"] = event["raw_value"]
     return merged
 
-def fetch_facebook_lead(leadgen_id: str) -> Dict[str, Any]:
-    logging.info("Facebook Graph API: fetching lead details for leadgen_id=%s", leadgen_id)
-    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+def fetch_facebook_lead(leadgen_id: str, page_id: Optional[str] = None) -> Dict[str, Any]:
+    logging.info(
+        "Facebook Graph API: fetching lead details for leadgen_id=%s page_id=%s",
+        leadgen_id,
+        page_id,
+    )
+    token = resolve_page_access_token(page_id)
+    if not token:
         logging.warning(
             "Facebook Graph API: FACEBOOK_PAGE_ACCESS_TOKEN is not set; cannot fetch fields for leadgen_id=%s",
             leadgen_id,
         )
+        record_integration_event(
+            "Facebook",
+            {"leadgen_id": leadgen_id, "page_id": page_id},
+            "graph_error",
+            external_id=leadgen_id,
+            error="FACEBOOK_PAGE_ACCESS_TOKEN not configured on server",
+        )
         return {
             "leadgen_id": leadgen_id,
-            "notes": "Facebook leadgen_id received. Configure FACEBOOK_PAGE_ACCESS_TOKEN to retrieve lead fields.",
+            "notes": "Facebook leadgen_id received. Set FACEBOOK_PAGE_ACCESS_TOKEN (Page token with leads_retrieval) on Render.",
         }
     url = f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/{leadgen_id}"
-    r = _http.get(url, params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN}, timeout=30)
+    r = _http.get(
+        url,
+        params={
+            "access_token": token,
+            "fields": "created_time,id,ad_id,form_id,field_data",
+        },
+        timeout=30,
+    )
     if r.status_code >= 400:
+        err_body = r.text[:500]
         logging.error(
             "Facebook Graph API: failed leadgen_id=%s status=%s body=%s",
             leadgen_id,
             r.status_code,
-            r.text[:500],
+            err_body,
         )
         record_integration_event(
             "Facebook",
-            {"leadgen_id": leadgen_id, "status_code": r.status_code, "response": r.text[:500]},
+            {"leadgen_id": leadgen_id, "page_id": page_id, "status_code": r.status_code, "response": err_body},
             "graph_error",
             external_id=leadgen_id,
-            error=r.text[:180],
+            error=err_body[:180],
         )
-        raise HTTPException(status_code=502, detail=f"Meta lead retrieval failed: {r.text[:180]}")
+        raise HTTPException(status_code=502, detail=f"Meta lead retrieval failed: {err_body[:180]}")
     graph_data = r.json()
-    payload = facebook_fields_to_payload(graph_data, leadgen_id)
+    payload = normalize_meta_field_payload(facebook_fields_to_payload(graph_data, leadgen_id))
     logging.info(
         "Facebook Graph API: success leadgen_id=%s name=%s phone=%s email=%s",
         leadgen_id,
@@ -1884,7 +2066,7 @@ async def process_facebook_lead_event(
         lead_payload = merge_facebook_meta_fields(body, event)
         logging.info("Facebook: using inline webhook fields for leadgen_id=%s", leadgen_id)
     else:
-        lead_payload = merge_facebook_meta_fields(fetch_facebook_lead(leadgen_id), event)
+        lead_payload = merge_facebook_meta_fields(fetch_facebook_lead(leadgen_id, event.get("page_id")), event)
 
     result = create_integrated_lead(lead_payload, "Facebook")
     logging.info(
@@ -2040,8 +2222,16 @@ async def facebook_webhook(request: Request):
                     duplicates.append(result["lead_id"])
                 else:
                     ignored.append({"leadgen_id": leadgen_id, "reason": result.get("reason")})
-            except HTTPException:
-                raise
+            except HTTPException as exc:
+                logging.error("Facebook webhook Graph/import error leadgen_id=%s: %s", leadgen_id, exc.detail)
+                record_integration_event(
+                    "Facebook",
+                    {"leadgen_id": leadgen_id, "event": event},
+                    "graph_error",
+                    external_id=leadgen_id,
+                    error=str(exc.detail)[:180],
+                )
+                ignored.append({"leadgen_id": leadgen_id, "reason": str(exc.detail)[:180]})
             except Exception as exc:
                 logging.exception("Facebook webhook failed for leadgen_id=%s", leadgen_id)
                 record_integration_event(
@@ -2075,77 +2265,8 @@ async def facebook_webhook(request: Request):
     logging.info("Facebook webhook POST complete: %s", json.dumps(response, default=str))
     return response
 
-@api_router.get("/integrations/facebook/verify")
-async def facebook_verify(cu: User = Depends(get_current_user)):
-    """Check Meta webhook config, Page token validity, and CRM Meta lead count."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
-    db_meta = sb_select("leads", {"source": "eq.Facebook", "select": "lead_id"})
-    recent = sb_select("integration_events", {
-        "source": "eq.Facebook",
-        "select": "status,error,external_id,created_at",
-        "order": "created_at.desc",
-        "limit": "5",
-    })
-    token_configured = bool(FACEBOOK_PAGE_ACCESS_TOKEN)
-    token_valid = False
-    token_error: Optional[str] = None
-    if not token_configured:
-        token_error = "FACEBOOK_PAGE_ACCESS_TOKEN is not set on Render/backend .env"
-    else:
-        try:
-            r = _http.get(
-                f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/me",
-                params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN},
-                timeout=20,
-            )
-            if r.status_code == 200:
-                token_valid = True
-            else:
-                body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
-                token_error = (body.get("error") or {}).get("message") or r.text[:220]
-        except Exception as exc:
-            token_error = str(exc)[:220]
-
-    last_graph_error = next((e for e in recent if e.get("status") == "graph_error"), None)
-    return {
-        "webhook_url": "/api/facebook/webhook",
-        "verify_token": FACEBOOK_VERIFY_TOKEN,
-        "token_configured": token_configured,
-        "token_valid": token_valid,
-        "token_error": token_error,
-        "db_meta_leads": len(db_meta),
-        "pending_webhook_events": sum(1 for e in recent if e.get("status") in ("graph_error", "leadgen_received", "ignored")),
-        "last_error": last_graph_error.get("error") if last_graph_error else None,
-        "recent_events": recent,
-        "page_id": FACEBOOK_PAGE_ID or None,
-        "form_id": FACEBOOK_FORM_ID or None,
-        "fix_steps": [
-            "Meta Business Suite → your Page → Page access token (long-lived)",
-            "Render → Environment → FACEBOOK_PAGE_ACCESS_TOKEN → paste new token → redeploy",
-            "CRM → Total Leads → Meta → tap to resync past webhook leads",
-        ],
-    }
-
-@api_router.get("/integrations/facebook/events")
-async def facebook_integration_events(
-    limit: int = 20,
-    cu: User = Depends(get_current_user),
-):
-    """Recent Facebook webhook / Graph API events for debugging (admin/manager/marketing)."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
-    limit = min(max(limit, 1), 100)
-    rows = sb_select("integration_events", {
-        "source": "eq.Facebook",
-        "select": "event_id,source,external_id,status,lead_id,error,created_at",
-        "order": "created_at.desc",
-        "limit": str(limit),
-    })
-    return {"events": rows, "count": len(rows)}
-
-@api_router.post("/integrations/facebook/resync")
-async def facebook_resync(cu: User = Depends(get_current_user)):
-    """Re-fetch Meta leadgen IDs from integration_events and import missing CRM leads."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+def _facebook_resync_pending_impl() -> Dict[str, Any]:
+    """Import CRM leads from webhook leadgen IDs that were not yet created."""
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         raise HTTPException(
             status_code=400,
@@ -2154,7 +2275,7 @@ async def facebook_resync(cu: User = Depends(get_current_user)):
 
     rows = sb_select("integration_events", {
         "source": "eq.Facebook",
-        "select": "external_id,status,lead_id,created_at",
+        "select": "external_id,status,lead_id,created_at,raw_payload",
         "order": "created_at.desc",
         "limit": "500",
     })
@@ -2176,9 +2297,20 @@ async def facebook_resync(cu: User = Depends(get_current_user)):
         if evt.get("status") not in ("leadgen_received", "graph_error", "ignored", "error", "webhook_received"):
             continue
 
+        page_id = None
+        raw = evt.get("raw_payload")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = {}
+        if isinstance(raw, dict):
+            event = raw.get("event") if isinstance(raw.get("event"), dict) else {}
+            page_id = clean_text(event.get("page_id") or raw.get("page_id"))
+
         retried += 1
         try:
-            payload = fetch_facebook_lead(leadgen_id)
+            payload = fetch_facebook_lead(leadgen_id, page_id)
             result = create_integrated_lead(payload, "Facebook")
             status = result.get("status")
             if status == "created":
@@ -2202,6 +2334,132 @@ async def facebook_resync(cu: User = Depends(get_current_user)):
         "ignored": ignored,
         "failed": failed,
         "results": results[:50],
+    }
+
+
+@api_router.get("/integrations/facebook/verify")
+async def facebook_verify(cu: User = Depends(get_current_user)):
+    """Check Meta webhook config, Page token validity, and CRM Meta lead count."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    all_fb = fetch_all_leads_merged("lead_id,source,phone,email,external_lead_id")
+    db_meta_real = len([l for l in clean_leads_for_platform_stats(all_fb) if lead_matches_platform(l, "meta")])
+    recent = sb_select("integration_events", {
+        "source": "eq.Facebook",
+        "select": "status,error,external_id,created_at",
+        "order": "created_at.desc",
+        "limit": "20",
+    })
+    token_configured = bool(FACEBOOK_PAGE_ACCESS_TOKEN)
+    token_valid = False
+    token_error: Optional[str] = None
+    forms_count = 0
+    page_id_resolved: Optional[str] = None
+    if not token_configured:
+        token_error = "FACEBOOK_PAGE_ACCESS_TOKEN is not set on Render/backend .env"
+    else:
+        try:
+            r = _http.get(
+                f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/me",
+                params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN, "fields": "id,name"},
+                timeout=20,
+            )
+            if r.status_code == 200:
+                token_valid = True
+                try:
+                    page_id_resolved, page_token = resolve_facebook_page_context(FACEBOOK_PAGE_ID or None)
+                    forms = list_facebook_leadgen_forms(page_id_resolved, access_token=page_token)
+                    forms_count = len(forms)
+                except HTTPException as exc:
+                    token_error = str(exc.detail)[:220]
+                except Exception as exc:
+                    token_error = str(exc)[:220]
+            else:
+                body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
+                token_error = (body.get("error") or {}).get("message") or r.text[:220]
+        except Exception as exc:
+            token_error = str(exc)[:220]
+
+    pending_ids: set[str] = set()
+    for evt in recent:
+        lid = clean_text(evt.get("external_id"))
+        if not lid or lid in META_FAKE_LEADGEN_IDS:
+            continue
+        if evt.get("status") in ("leadgen_received", "graph_error", "error", "webhook_received"):
+            pending_ids.add(lid)
+    for lid in list(pending_ids):
+        if sb_select("leads", {"external_lead_id": f"eq.{lid}", "select": "lead_id", "limit": "1"}):
+            pending_ids.discard(lid)
+
+    last_graph_error = next((e for e in recent if e.get("status") == "graph_error"), None)
+    return {
+        "webhook_url": "/api/facebook/webhook",
+        "verify_token": FACEBOOK_VERIFY_TOKEN,
+        "token_configured": token_configured,
+        "token_valid": token_valid,
+        "token_error": token_error,
+        "db_meta_leads": db_meta_real,
+        "forms_count": forms_count,
+        "page_id": page_id_resolved or FACEBOOK_PAGE_ID or None,
+        "pending_webhook_events": len(pending_ids),
+        "last_error": last_graph_error.get("error") if last_graph_error else None,
+        "recent_events": recent[:5],
+        "form_id": FACEBOOK_FORM_ID or None,
+        "fix_steps": [
+            "Meta webhook callback URL is only step 1 — you also need FACEBOOK_PAGE_ACCESS_TOKEN on Render",
+            "Use a Page access token with leads_retrieval permission (not only User token)",
+            "Set FACEBOOK_PAGE_ID to your Facebook Page id in Render env",
+            "CRM → Integrations → Resync Webhooks or Import Past Meta Leads",
+        ],
+    }
+
+@api_router.get("/integrations/facebook/events")
+async def facebook_integration_events(
+    limit: int = 20,
+    cu: User = Depends(get_current_user),
+):
+    """Recent Facebook webhook / Graph API events for debugging (admin/manager/marketing)."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    limit = min(max(limit, 1), 100)
+    rows = sb_select("integration_events", {
+        "source": "eq.Facebook",
+        "select": "event_id,source,external_id,status,lead_id,error,created_at",
+        "order": "created_at.desc",
+        "limit": str(limit),
+    })
+    return {"events": rows, "count": len(rows)}
+
+@api_router.post("/integrations/facebook/resync")
+async def facebook_resync(cu: User = Depends(get_current_user)):
+    """Re-fetch Meta leadgen IDs from integration_events and import missing CRM leads."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    return _facebook_resync_pending_impl()
+
+
+@api_router.post("/integrations/facebook/poll")
+async def facebook_poll(cu: User = Depends(get_current_user)):
+    """Auto-retry pending Meta webhook leads + import last 24h from Lead Ad forms."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        return {"status": "skipped", "reason": "FACEBOOK_PAGE_ACCESS_TOKEN not configured"}
+
+    resync = _facebook_resync_pending_impl()
+    import_result: Dict[str, Any] = {"fetched": 0, "created": 0, "duplicates": 0}
+    try:
+        import_result = await facebook_import(FacebookImportRequest(days=1, limit=100), cu)
+    except HTTPException as exc:
+        import_result = {"error": str(exc.detail)[:180]}
+    except Exception as exc:
+        import_result = {"error": str(exc)[:180]}
+
+    return {
+        "status": "success",
+        "resync": resync,
+        "import_recent": {
+            "fetched": import_result.get("fetched", 0),
+            "created": import_result.get("created", 0),
+            "duplicates": import_result.get("duplicates", 0),
+            "error": import_result.get("error"),
+        },
     }
 
 @api_router.post("/integrations/facebook/import")
@@ -2298,14 +2556,11 @@ async def housing_webhook(request: Request):
             ignored.append(result)
     return {"status": "success", "source": "Housing.com", "created": created, "duplicates": duplicates, "ignored": ignored}
 
-@api_router.post("/housing/sync")
-async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current_user)):
+async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = "manual") -> Dict[str, Any]:
     ensure_roles(cu, ["admin", "manager", "marketing"])
-    end_date = payload.end_date or int(now_utc().timestamp())
-    start_date = payload.start_date or int((now_utc() - timedelta(days=1)).timestamp())
-    # Housing.com API rejects ranges wider than 2 days.
-    if end_date - start_date > 2 * 86400:
-        start_date = end_date - 2 * 86400
+    start_date, end_date = housing_sync_window(
+        mode, payload.start_date, payload.end_date, payload.allow_historical,
+    )
     params = housing_sync_params(start_date, end_date)
     r = _http.get(HOUSING_API_URL, params=params)
     if r.status_code >= 400:
@@ -2321,8 +2576,16 @@ async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current
         if message:
             raise HTTPException(status_code=502, detail=f"Housing.com sync failed: {message}")
 
-    created, duplicates, ignored = [], [], []
+    created, duplicates, ignored, skipped_stale = [], [], [], []
     for lead_payload in lead_payloads:
+        if not should_import_housing_lead_on_sync(lead_payload, start_date, end_date):
+            skipped_stale.append(clean_text(pick_first(lead_payload, ["lead_id", "id"])) or "unknown")
+            record_integration_event(
+                "Housing.com", lead_payload, "skipped_stale",
+                external_id=clean_text(pick_first(lead_payload, ["lead_id", "id", "enquiry_id"])),
+                error="lead_date outside sync window",
+            )
+            continue
         result = create_integrated_lead(lead_payload, "Housing.com", actor=cu)
         if result["status"] == "created":
             created.append(result["lead_id"])
@@ -2330,23 +2593,41 @@ async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current
             duplicates.append(result["lead_id"])
         else:
             ignored.append(result)
+
+    record_housing_sync_checkpoint(end_date, {
+        "mode": mode,
+        "start_date": start_date,
+        "fetched": len(lead_payloads),
+        "created": len(created),
+        "duplicates": len(duplicates),
+        "skipped_stale": len(skipped_stale),
+    })
     return {
         "status": "success",
         "source": "Housing.com",
+        "mode": mode,
         "start_date": start_date,
         "end_date": end_date,
         "fetched": len(lead_payloads),
         "created": created,
         "duplicates": duplicates,
         "ignored": ignored,
+        "skipped_stale": len(skipped_stale),
     }
+
+
+@api_router.post("/housing/sync")
+async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current_user)):
+    """Pull recent Housing.com leads only (default last 2 hours, not full history)."""
+    return await _housing_sync_impl(payload, cu, mode="manual")
+
 
 @api_router.post("/integrations/housing/poll")
 async def housing_poll(cu: User=Depends(get_current_user)):
-    """Lightweight Housing pull for dashboard auto-refresh (max 2-day window)."""
+    """Dashboard auto-refresh — only new leads since last poll checkpoint."""
     ensure_roles(cu, ["admin", "manager", "marketing"])
     logging.info("Housing poll: auto-sync triggered by %s", cu.email)
-    return await housing_sync(HousingSyncRequest(), cu)
+    return await _housing_sync_impl(HousingSyncRequest(), cu, mode="poll")
 
 @api_router.get("/integrations/housing/verify")
 async def housing_verify(cu: User=Depends(get_current_user)):
@@ -2363,7 +2644,7 @@ async def housing_verify(cu: User=Depends(get_current_user)):
         }
 
     end_date = int(now_utc().timestamp())
-    start_date = end_date - 86400
+    start_date = end_date - HOUSING_MANUAL_DEFAULT_WINDOW_SEC
     params = housing_sync_params(start_date, end_date)
     try:
         r = _http.get(HOUSING_API_URL, params=params, timeout=30)
