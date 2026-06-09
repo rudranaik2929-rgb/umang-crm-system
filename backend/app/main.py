@@ -720,6 +720,9 @@ class SiteVisitFollowUpCreate(BaseModel):
 class LeadFollowUpCreate(BaseModel):
     follow_up_date: Optional[str]=None; follow_up_time: Optional[str]=None
     follow_up_day: Optional[str]=None; reason: Optional[str]=None; notes: Optional[str]=None
+class BulkAssignRequest(BaseModel):
+    lead_ids: List[str]
+    assigned_to: str
 class BookingCreate(BaseModel):
     lead_id: str; property_name: str; booking_amount: float=0; token_received: float=0
     unit_number: Optional[str]=None; tower: Optional[str]=None
@@ -1107,20 +1110,63 @@ Always:
             return "Could not generate summary."
 
 # ---- Assignment Engine (Round Robin) ----
-def assign_lead_round_robin():
-    """Finds the next active telecaller to assign a lead to."""
-    # 1. Get all active telecallers
-    emps = sb_select("employees", {"role": "eq.telecaller", "active": "eq.true", "order": "last_assigned_at.asc.nullslast"})
-    if not emps:
-        # Fallback to admins if no telecallers
-        emps = sb_select("employees", {"role": "eq.admin", "active": "eq.true", "order": "last_assigned_at.asc.nullslast"})
-    
-    if not emps: return None
-    
-    selected = emps[0]
-    # Update last_assigned_at
+ASSIGNABLE_EMPLOYEE_ROLES = {"telecaller", "site_visit", "sales_executive"}
+
+
+def assign_lead_round_robin() -> Optional[str]:
+    """Auto-assign new leads to the next active telecaller / sales executive (round-robin)."""
+    emps = sb_select("employees", {
+        "active": "eq.true",
+        "select": "employee_id,role,last_assigned_at",
+        "order": "last_assigned_at.asc.nullslast",
+    })
+    candidates = [e for e in emps if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES]
+    if not candidates:
+        candidates = [e for e in emps if e.get("role") == "admin"]
+    if not candidates:
+        return None
+    selected = candidates[0]
     sb_update("employees", "employee_id", selected["employee_id"], {"last_assigned_at": now_utc().isoformat()})
     return selected["employee_id"]
+
+
+def stamp_lead_assignment(
+    assigned_to: str,
+    assigned_by: Optional[str] = None,
+    current_stage: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Fields applied when a lead is assigned (auto or manager)."""
+    now = now_utc().isoformat()
+    data: Dict[str, Any] = {
+        "assigned_to": assigned_to,
+        "assigned_at": now,
+        "updated_at": now,
+    }
+    if assigned_by:
+        data["assigned_by"] = assigned_by
+    if current_stage in (None, "new"):
+        data["stage"] = "assigned"
+    return data
+
+
+def assign_lead_to_employee(
+    lead_id: str,
+    old_lead: Dict[str, Any],
+    employee_id: str,
+    actor: Optional[User],
+) -> Dict[str, Any]:
+    """Single lead assignment — shared by PATCH and bulk assign."""
+    emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "name", "limit": "1"})
+    emp_name = emps[0]["name"] if emps else employee_id
+    actor_id = None
+    if actor:
+        actor_id = actor.acting_as_employee_id or actor.user_id
+    data = stamp_lead_assignment(employee_id, assigned_by=actor_id, current_stage=old_lead.get("stage"))
+    updated = sb_update("leads", "lead_id", lead_id, data) or {**old_lead, **data}
+    update_cached_lead(lead_id, data)
+    log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
+    create_notification(employee_id, "Lead assigned", f"{old_lead.get('name', 'Lead')} has been assigned to you.", lead_id=lead_id)
+    return updated
 
 # ---- Activity Logger ----
 def log_activity(actor, type_, text, lead_id=None): 
@@ -1718,6 +1764,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         "stage": initial_stage,
         "status": "active",
         "assigned_to": assigned_to,
+        "assigned_at": now if assigned_to else None,
         "lead_type": lead_type,
         "created_at": created_at,
         "updated_at": now,
@@ -2155,11 +2202,14 @@ async def create_lead_public(p: LeadCreatePublic):
     lid = gen_id("lead")
     assigned_to = assign_lead_round_robin()
     initial_stage = "assigned" if assigned_to else "new"
+    now = now_utc().isoformat()
     lead = {
         "lead_id": lid, "name": p.name, "phone": phone, "email": p.email,
         "budget": p.budget, "location": p.location, "property_type": p.property_type,
         "notes": p.notes, "source": p.source or "website", "stage": initial_stage, "status": "active",
-        "assigned_to": assigned_to, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
+        "assigned_to": assigned_to,
+        "assigned_at": now if assigned_to else None,
+        "created_at": now, "updated_at": now,
     }
     if p.starred is not None: lead["starred"] = p.starred
     result = sb_insert("leads", lead)
@@ -2874,9 +2924,10 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             "property_type": r["property_type"],
             "notes": lead_notes,
             "source": "bulk_import",
-            "stage": "new",
+            "stage": "assigned" if assigned_to else "new",
             "status": "active",
             "assigned_to": assigned_to,
+            "assigned_at": now if assigned_to else None,
             "created_at": now,
             "updated_at": now
         }
@@ -3235,13 +3286,81 @@ async def stats_lead_buckets(cu: User = Depends(get_current_user)):
 
 @api_router.get("/leads/assign-queue")
 async def list_assign_queue(cu: User = Depends(get_current_user)):
-    """Unassigned pipeline leads for manager assign workspace."""
+    """Unassigned pipeline leads for manager reassign / bulk assign workspace."""
     ensure_roles(cu, ["admin", "manager"])
-    all_leads = fetch_all_leads_merged()
+    all_leads = fetch_all_leads_merged(
+        "lead_id,name,phone,email,source,stage,status,budget,location,assigned_to,assigned_at,created_at"
+    )
     queue = compute_unassigned_queue(all_leads)
     queue.sort(key=lambda l: l.get("created_at") or "", reverse=True)
-    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "active": "eq.true", "order": "name.asc"})
-    return {"total": len(queue), "leads": queue, "employees": employees}
+    employees = sb_select("employees", {
+        "select": "employee_id,name,email,role,department,active",
+        "active": "eq.true",
+        "order": "name.asc",
+    })
+    assignable = [e for e in employees if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") == "admin"]
+    return {
+        "total": len(queue),
+        "leads": queue,
+        "employees": assignable or employees,
+        "auto_assign_enabled": True,
+    }
+
+
+@api_router.post("/leads/bulk-assign")
+async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_current_user)):
+    """Manager: assign multiple selected leads to one employee."""
+    ensure_roles(cu, ["admin", "manager"])
+    lead_ids = [lid.strip() for lid in (body.lead_ids or []) if lid and lid.strip()]
+    employee_id = (body.assigned_to or "").strip()
+    if len(lead_ids) < 1:
+        raise HTTPException(status_code=400, detail="Select at least one lead.")
+    if not employee_id:
+        raise HTTPException(status_code=400, detail="Select an employee to assign to.")
+
+    emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,active", "limit": "1"})
+    if not emps or not emps[0].get("active", True):
+        raise HTTPException(status_code=400, detail="Employee not found or inactive.")
+
+    assigned: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    for lead_id in lead_ids:
+        leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
+        old_lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
+        if not old_lead:
+            skipped.append({"lead_id": lead_id, "reason": "not_found"})
+            continue
+        if old_lead.get("assigned_to") == employee_id:
+            skipped.append({"lead_id": lead_id, "reason": "already_assigned"})
+            continue
+        assign_lead_to_employee(lead_id, old_lead, employee_id, cu)
+        assigned.append(lead_id)
+
+    sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
+    return {
+        "status": "success",
+        "assigned": assigned,
+        "assigned_count": len(assigned),
+        "skipped": skipped,
+        "employee_id": employee_id,
+        "employee_name": emps[0].get("name"),
+    }
+
+
+@api_router.post("/leads/assign-queue/auto")
+async def auto_assign_queue(cu: User = Depends(get_current_user)):
+    """Round-robin assign all unassigned leads (e.g. after import or reset)."""
+    ensure_roles(cu, ["admin", "manager"])
+    all_leads = fetch_all_leads_merged("lead_id,name,stage,status,assigned_to")
+    queue = compute_unassigned_queue(all_leads)
+    assigned: List[str] = []
+    for lead in queue:
+        eid = assign_lead_round_robin()
+        if not eid:
+            break
+        assign_lead_to_employee(lead["lead_id"], lead, eid, cu)
+        assigned.append(lead["lead_id"])
+    return {"status": "success", "assigned_count": len(assigned), "assigned": assigned}
 
 
 @api_router.get("/stats/assignment")
@@ -3439,19 +3558,18 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     if data.get("call_status") and data["call_status"] not in valid_call_statuses:
         raise HTTPException(status_code=400, detail="Invalid call status")
     
-    # Auto-set stage to 'assigned' when admin assigns a lead that's at 'new' stage
-    if p.assigned_to and old_lead.get("stage") == "new":
-        data["stage"] = "assigned"
-    
-    # Log assignment activity
     if p.assigned_to and p.assigned_to != old_lead.get("assigned_to"):
-        emp_name = p.assigned_to
+        stamp = stamp_lead_assignment(
+            p.assigned_to,
+            assigned_by=cu.acting_as_employee_id or cu.user_id,
+            current_stage=old_lead.get("stage"),
+        )
+        data.update(stamp)
         emps = sb_select("employees", {"employee_id": f"eq.{p.assigned_to}", "select": "name"})
-        if emps: emp_name = emps[0]["name"]
-        data["assigned_at"] = now_utc().isoformat()
-        data["assigned_by"] = cu.acting_as_employee_id or cu.user_id
+        emp_name = emps[0]["name"] if emps else p.assigned_to
         log_activity(cu, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
         create_notification(p.assigned_to, "Lead assigned", f"{old_lead.get('name', 'Lead')} has been assigned to you.", lead_id=lead_id)
+        sb_update("employees", "employee_id", p.assigned_to, {"last_assigned_at": now_utc().isoformat()})
     
     updated = sb_update("leads", "lead_id", lead_id, data)
     

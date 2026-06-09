@@ -428,7 +428,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       />
                     </View>
                     {lead.assigned_to ? (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 4 }}>
+                      <View style={{ marginTop: 4, gap: 4 }}>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
                         <Ionicons name="person-circle" size={20} color="#8B5CF6" />
                         <Text style={{ color: colors.text, fontSize: 13, flex: 1 }}>
                           Assigned to: <Text style={{ fontWeight: '700' }}>{employees.find((e: any) => e.employee_id === lead.assigned_to)?.name || lead.assigned_to}</Text>
@@ -439,6 +440,14 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                         >
                           <Text style={{ color: '#8B5CF6', fontSize: 11, fontWeight: '600' }}>Reassign</Text>
                         </Pressable>
+                      </View>
+                      {lead.assigned_at ? (
+                        <Text style={{ color: colors.textMuted, fontSize: 11, marginLeft: 28 }}>
+                          Assigned: {new Date(lead.assigned_at).toLocaleString('en-IN', {
+                            day: '2-digit', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
+                          })}
+                        </Text>
+                      ) : null}
                       </View>
                     ) : (
                       <Pressable
