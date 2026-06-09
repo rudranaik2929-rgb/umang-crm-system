@@ -122,7 +122,7 @@ export default function AssignLeads() {
     try {
       const r = await api.post('/leads/assign-queue/auto', {});
       const n = Number(r.data?.assigned_count ?? 0);
-      setMessage(n > 0 ? `Auto-assigned ${n} lead(s) to team (round-robin).` : 'No unassigned leads left.');
+      setMessage(n > 0 ? `Manager distributed ${n} lead(s) to team (round-robin).` : 'No unassigned leads left.');
       await load();
     } catch (e: any) {
       setMessage(e?.response?.data?.detail || 'Auto-assign failed.');
@@ -135,7 +135,7 @@ export default function AssignLeads() {
     <View style={{ flex: 1 }}>
       <TopBar
         title="Assign Leads"
-        subtitle="New Housing/Meta leads auto-assign · manager can reassign or bulk-assign here"
+        subtitle="New leads stay unassigned until manager assigns — single, bulk, or distribute all"
       />
       {loading ? (
         <View style={{ padding: 48 }}><ActivityIndicator color={colors.primary} /></View>
@@ -156,7 +156,7 @@ export default function AssignLeads() {
             <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Text style={[styles.panelTitle, { color: colors.text }]}>Team snapshot</Text>
               <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                Incoming leads go straight to telecallers. Use this page to reassign or bulk-assign.
+                Housing & Meta leads arrive unassigned. Manager assigns here (one-by-one or multiple).
               </Text>
               <View style={styles.empGrid}>
                 {assignmentStats.map((emp) => (
@@ -188,7 +188,7 @@ export default function AssignLeads() {
                     style={[styles.autoBtn, { borderColor: colors.positive, backgroundColor: colors.positive + '12' }]}
                   >
                     <Ionicons name="flash-outline" size={14} color={colors.positive} />
-                    <Text style={{ color: colors.positive, fontSize: 11, fontWeight: '700' }}>Auto all</Text>
+                    <Text style={{ color: colors.positive, fontSize: 11, fontWeight: '700' }}>Distribute</Text>
                   </Pressable>
                 ) : null}
               </View>
@@ -208,7 +208,7 @@ export default function AssignLeads() {
 
               {queue.length === 0 ? (
                 <Text style={{ color: colors.textMuted, paddingVertical: 20, textAlign: 'center' }}>
-                  All caught up — new leads are auto-assigned when they arrive.
+                  All caught up — no unassigned leads waiting for manager.
                 </Text>
               ) : (
                 <View style={{ gap: 10, marginTop: 8 }}>

@@ -190,7 +190,7 @@ where not exists (select 1 from leads l where l.assigned_to = e.employee_id);
 -- ---------------------------------------------------------------------
 -- 13. COMMENTS
 -- ---------------------------------------------------------------------
-comment on column leads.assigned_at is 'When lead was assigned (auto round-robin or manager bulk assign)';
+comment on column leads.assigned_at is 'When manager assigned this lead to an employee (not set on intake)';
 comment on column leads.assigned_by is 'user_id or employee_id of manager who assigned';
 comment on column leads.external_created_at is 'Real submission time from Housing lead_date or Meta created_time';
 
@@ -223,6 +223,18 @@ select 'integration_events', count(*)::text from integration_events;
 --   count(*) filter (where lower(priority) = 'low_budget') as low_budget,
 --   count(*) filter (where call_status is not null and trim(call_status) <> '') as ringing
 -- from leads where assigned_to is not null group by assigned_to;
+
+-- =====================================================================
+-- OPTIONAL: Undo auto-assigned Housing/Meta leads (run once after disabling auto-assign)
+-- =====================================================================
+/*
+update leads
+set assigned_to = null, assigned_at = null, assigned_by = null, stage = 'new', updated_at = now()
+where source in ('Housing.com', 'Facebook', 'website', 'bulk_import')
+  and assigned_to is not null
+  and status = 'active'
+  and stage in ('new', 'assigned');
+*/
 
 -- =====================================================================
 -- OPTIONAL: Full clean reset (assignments, loans, bookings → 0)

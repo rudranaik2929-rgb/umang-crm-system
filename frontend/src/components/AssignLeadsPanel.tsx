@@ -35,7 +35,7 @@ export function AssignLeadsPanel({ compact = false }: Props) {
     <View>
       <View style={styles.headerRow}>
         <Text style={{ color: colors.textSecondary, fontSize: compact ? 12 : 13, flex: 1 }}>
-          New leads auto-assign · {unassigned} need manager assign
+          {unassigned} unassigned · manager assigns from here
         </Text>
         <Pressable
           onPress={() => router.push('/(app)/assign-leads' as any)}
@@ -59,7 +59,7 @@ export function AssignLeadsPanel({ compact = false }: Props) {
       {unassigned > 0 ? (
         <Pressable onPress={() => router.push('/(app)/assign-leads' as any)} style={[styles.alert, { backgroundColor: '#6366F112', borderColor: '#6366F1' }]}>
           <Ionicons name="alert-circle-outline" size={16} color="#6366F1" />
-          <Text style={{ color: colors.text, fontSize: 12, flex: 1 }}>{unassigned} unassigned — bulk assign or auto-assign</Text>
+          <Text style={{ color: colors.text, fontSize: 12, flex: 1 }}>{unassigned} leads waiting — assign one-by-one or bulk</Text>
         </Pressable>
       ) : null}
     </View>

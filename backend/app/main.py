@@ -1114,7 +1114,7 @@ ASSIGNABLE_EMPLOYEE_ROLES = {"telecaller", "site_visit", "sales_executive"}
 
 
 def assign_lead_round_robin() -> Optional[str]:
-    """Auto-assign new leads to the next active telecaller / sales executive (round-robin)."""
+    """Round-robin pick for manager-initiated bulk assign only — not used on new lead intake."""
     emps = sb_select("employees", {
         "active": "eq.true",
         "select": "employee_id,role,last_assigned_at",
@@ -1744,8 +1744,8 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         return {"status": "duplicate", "lead": updated or merged, "lead_id": existing["lead_id"]}
 
     brokerage = is_brokerage_lead(source, payload)
-    assigned_to = None if brokerage else assign_lead_round_robin()
-    initial_stage = "broker" if brokerage else ("assigned" if assigned_to else "new")
+    assigned_to = None
+    initial_stage = "broker" if brokerage else "new"
     lead_type = "brokerage" if brokerage else "standard"
     now = now_utc().isoformat()
     # Store the platform submission time when available (Housing lead_date / Meta created_time).
@@ -1784,8 +1784,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
     if brokerage:
         log_activity(actor, "broker_lead_received", f"Brokerage lead stored for future: {normalized['name']} ({source})", lead_id=lead_id)
     else:
-        log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']}", lead_id=lead_id)
-        create_notification(assigned_to, "New lead assigned", f"{normalized['name']} came from {source}.", lead_id=lead_id)
+        log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']} (awaiting manager assignment)", lead_id=lead_id)
     record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
     return {"status": "created", "lead": lead_record, "lead_id": lead_id}
 
@@ -2200,21 +2199,17 @@ async def create_lead_public(p: LeadCreatePublic):
     if not phone:
         raise HTTPException(status_code=400, detail="A valid phone number is required.")
     lid = gen_id("lead")
-    assigned_to = assign_lead_round_robin()
-    initial_stage = "assigned" if assigned_to else "new"
     now = now_utc().isoformat()
     lead = {
         "lead_id": lid, "name": p.name, "phone": phone, "email": p.email,
         "budget": p.budget, "location": p.location, "property_type": p.property_type,
-        "notes": p.notes, "source": p.source or "website", "stage": initial_stage, "status": "active",
-        "assigned_to": assigned_to,
-        "assigned_at": now if assigned_to else None,
+        "notes": p.notes, "source": p.source or "website", "stage": "new", "status": "active",
+        "assigned_to": None,
         "created_at": now, "updated_at": now,
     }
     if p.starred is not None: lead["starred"] = p.starred
     result = sb_insert("leads", lead)
-    log_activity(None, "website_enquiry", f"New website enquiry received from {p.name}.", lead_id=lid)
-    create_notification(assigned_to, "New lead assigned", f"{p.name} has been assigned to you.", lead_id=lid)
+    log_activity(None, "website_enquiry", f"New website enquiry received from {p.name} (awaiting manager assignment).", lead_id=lid)
     
     # Auto-responder (Real Interakt API if key exists)
     WhatsAppService.send_template(phone, "welcome_enquiry", [p.name])
@@ -2900,7 +2895,6 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             skipped_count += 1
             continue
 
-        assigned_to = assign_lead_round_robin()
         lid = gen_id("lead")
         now = now_utc().isoformat()
         
@@ -2924,10 +2918,9 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             "property_type": r["property_type"],
             "notes": lead_notes,
             "source": "bulk_import",
-            "stage": "assigned" if assigned_to else "new",
+            "stage": "new",
             "status": "active",
-            "assigned_to": assigned_to,
-            "assigned_at": now if assigned_to else None,
+            "assigned_to": None,
             "created_at": now,
             "updated_at": now
         }
@@ -3162,13 +3155,16 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
     lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    assigned_to = body.assigned_to or assign_lead_round_robin()
-    data = {
-        "stage": "assigned" if assigned_to else "new",
+    assigned_to = clean_text(body.assigned_to)
+    data: Dict[str, Any] = {
         "lead_type": "standard",
-        "assigned_to": assigned_to,
         "updated_at": now_utc().isoformat(),
     }
+    if assigned_to:
+        data.update(stamp_lead_assignment(assigned_to, assigned_by=cu.acting_as_employee_id or cu.user_id, current_stage=lead.get("stage")))
+    else:
+        data["stage"] = "new"
+        data["assigned_to"] = None
     if body.brokerage_amount is not None:
         data["brokerage_amount"] = body.brokerage_amount
     updated = sb_update("leads", "lead_id", lead_id, data) or {**lead, **data}
@@ -3303,7 +3299,7 @@ async def list_assign_queue(cu: User = Depends(get_current_user)):
         "total": len(queue),
         "leads": queue,
         "employees": assignable or employees,
-        "auto_assign_enabled": True,
+        "auto_assign_on_intake": False,
     }
 
 
