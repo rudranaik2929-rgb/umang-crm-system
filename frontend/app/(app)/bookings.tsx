@@ -16,6 +16,11 @@ function leadInBookingQueue(lead: any) {
   return pr === 'handoff_booking' || pr === 'hot' || lead?.stage === 'booking';
 }
 
+/** Booking team sees all records — hot leads stay assigned to telecaller. */
+function seesAllBookings(role?: string | null) {
+  return role === 'admin' || role === 'manager' || role === 'booking';
+}
+
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };
 const BOOKING_TASKS = [
   { key: 'login_file', label: 'Login File', status: 'login file', icon: 'folder-open-outline', color: '#0284C7' },
@@ -49,14 +54,18 @@ export default function Bookings() {
         api.get('/bookings'),
         api.get('/leads', { params: { limit: 500 } }),
       ]);
-      let bookingData = b.data || [];
-      // Non-admin: only show bookings for leads assigned to this employee
-      if (user?.role !== 'admin' && (user as any)?.acting_as_employee_id) {
-        const myLeadIds = new Set((l.data || []).filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id).map((x: any) => x.lead_id));
-        bookingData = bookingData.filter((x: any) => myLeadIds.has(x.lead_id));
+      const allBookings = Array.isArray(b.data) ? b.data : [];
+      let bookingData = allBookings;
+      if (!seesAllBookings(user?.role) && (user as any)?.acting_as_employee_id) {
+        const myLeadIds = new Set(
+          (l.data || [])
+            .filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id)
+            .map((x: any) => x.lead_id),
+        );
+        bookingData = allBookings.filter((x: any) => myLeadIds.has(x.lead_id));
       }
       setBookings(bookingData);
-      const bookedLeadIds = new Set(bookingData.map((x: any) => x.lead_id));
+      const bookedLeadIds = new Set(allBookings.map((x: any) => x.lead_id));
       setLeads((l.data || []).filter((x: any) =>
         x.status !== 'negative'
         && !bookedLeadIds.has(x.lead_id)
@@ -140,17 +149,21 @@ export default function Bookings() {
             <Ionicons name="chevron-forward" size={18} color="#EF4444" />
           </Pressable>
         ) : null}
-        {loading ? <ActivityIndicator color={colors.primary} /> :
-          bookings.length === 0 ? (
+        {loading ? <ActivityIndicator color={colors.primary} /> : (
+          <>
+          {bookings.length === 0 ? (
             <EmptyState
               variant="leads"
               title="No bookings yet"
-              description="When a site visit converts, a booking record captures the property, token amount and agreement progress."
+              description="Pick a hot lead from New Booking — after you create, the record appears in this list."
               actionLabel="Create First Booking"
               onAction={() => setShowCreate(true)}
               testIDAction="empty-create-booking"
             />
-          ) : bookings.map((b) => {
+          ) : (
+            <>
+            <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>ACTIVE BOOKINGS ({bookings.length})</Text>
+            {bookings.map((b) => {
             const rawAgreement = b.agreement_status || 'pending';
             const realAgreementStatus = rawAgreement.split(' | ')[0] || 'pending';
             const brokerageAmount = Number(b.brokerage_amount || 0) || (() => {
@@ -294,12 +307,26 @@ export default function Bookings() {
             </View>
           );
         })}
+            </>
+          )}
+          </>
+        )}
       </ScrollView>
 
       <CreateBookingModal
         visible={showCreate}
         onClose={() => setShowCreate(false)}
-        onCreated={async () => { setShowCreate(false); await load(); }}
+        onCreated={async (created) => {
+          setShowCreate(false);
+          if (created?.booking_id) {
+            setBookings((prev) => {
+              const ids = new Set(prev.map((x) => x.booking_id));
+              return ids.has(created.booking_id) ? prev : [created, ...prev];
+            });
+            setLeads((prev) => prev.filter((x) => x.lead_id !== created.lead_id));
+          }
+          await load();
+        }}
         leads={leads}
         colors={colors}
       />
@@ -362,8 +389,8 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
       const reg = parseNum(registrationFees); if (reg !== undefined) payload.registration_fees = reg;
       const gstVal = parseNum(gst); if (gstVal !== undefined) payload.gst = gstVal;
       const soc = parseNum(societyCharges); if (soc !== undefined) payload.society_charges = soc;
-      await api.post('/bookings', payload);
-      onCreated();
+      const res = await api.post('/bookings', payload);
+      onCreated(res.data);
     } catch (e: any) {
       setError(e?.response?.data?.detail || 'Could not create booking.');
     } finally { setBusy(false); }
@@ -558,6 +585,7 @@ function FormField({ label, value, onChange, colors, keyboardType, testID, place
 }
 
 const styles = StyleSheet.create({
+  sectionTitle: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginBottom: 4 },
   queueBanner: {
     flexDirection: 'row',
     alignItems: 'center',

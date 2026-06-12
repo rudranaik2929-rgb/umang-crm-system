@@ -16,6 +16,10 @@ function leadInLoanQueue(lead: any) {
   return pr === 'handoff_loan' || pr === 'hot' || lead?.stage === 'loan';
 }
 
+function seesAllLoans(role?: string | null) {
+  return role === 'admin' || role === 'manager' || role === 'loan';
+}
+
 const STAGE_PROGRESS: Record<string, number> = {
   documentation: 25,
   verification: 50,
@@ -42,14 +46,18 @@ export default function Loans() {
         api.get('/loans'),
         api.get('/leads', { params: { limit: 500 } }),
       ]);
-      let loanData = lo.data || [];
-      // Non-admin: only show loans for leads assigned to this employee
-      if (user?.role !== 'admin' && (user as any)?.acting_as_employee_id) {
-        const myLeadIds = new Set((l.data || []).filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id).map((x: any) => x.lead_id));
-        loanData = loanData.filter((x: any) => myLeadIds.has(x.lead_id));
+      const allLoans = Array.isArray(lo.data) ? lo.data : [];
+      let loanData = allLoans;
+      if (!seesAllLoans(user?.role) && (user as any)?.acting_as_employee_id) {
+        const myLeadIds = new Set(
+          (l.data || [])
+            .filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id)
+            .map((x: any) => x.lead_id),
+        );
+        loanData = allLoans.filter((x: any) => myLeadIds.has(x.lead_id));
       }
       setLoans(loanData);
-      const loanLeadIds = new Set(loanData.map((x: any) => x.lead_id));
+      const loanLeadIds = new Set(allLoans.map((x: any) => x.lead_id));
       setLeads((l.data || []).filter((x: any) =>
         x.status !== 'negative'
         && !loanLeadIds.has(x.lead_id)
@@ -365,7 +373,17 @@ export default function Loans() {
       <CreateLoanModal
         visible={showCreate}
         onClose={() => setShowCreate(false)}
-        onCreated={async () => { setShowCreate(false); await load(); }}
+        onCreated={async (created) => {
+          setShowCreate(false);
+          if (created?.loan_id) {
+            setLoans((prev) => {
+              const ids = new Set(prev.map((x) => x.loan_id));
+              return ids.has(created.loan_id) ? prev : [created, ...prev];
+            });
+            setLeads((prev) => prev.filter((x) => x.lead_id !== created.lead_id));
+          }
+          await load();
+        }}
         leads={leads}
         colors={colors}
       />
@@ -396,8 +414,8 @@ function CreateLoanModal({ visible, onClose, onCreated, leads, colors }: any) {
     if (!leadId) return;
     setBusy(true);
     try {
-      await api.post('/loans', { lead_id: leadId, bank_name: bank, amount: parseFloat(amount) || 0 });
-      onCreated();
+      const res = await api.post('/loans', { lead_id: leadId, bank_name: bank, amount: parseFloat(amount) || 0 });
+      onCreated(res.data);
     } finally { setBusy(false); }
   };
 
