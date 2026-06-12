@@ -85,6 +85,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [showConfetti, setShowConfetti] = useState(false);
   const [employees, setEmployees] = useState<any[]>([]);
   const [showAssignDropdown, setShowAssignDropdown] = useState(false);
+  const [assignSearch, setAssignSearch] = useState('');
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [brokerageAmount, setBrokerageAmount] = useState('');
   const subAnim = React.useRef(new Animated.Value(0)).current;
   const confettiAnims = React.useRef([...Array(50)].map(() => new Animated.Value(0))).current;
@@ -116,6 +118,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       load();
       setAiSummary(null);
       setShowAssignDropdown(false);
+      setAssignSearch('');
+      setActionMessage(null);
       setBrokerageAmount('');
       api.get('/employees').then(r => setEmployees((r.data || []).filter((e: any) => e.active))).catch(() => {});
     }
@@ -460,7 +464,24 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     )}
                     {showAssignDropdown && (
                       <View style={{ marginTop: 10, borderRadius: 8, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceAlt, overflow: 'hidden' }}>
-                        {employees.map((emp: any) => (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, padding: 8, borderBottomWidth: 1, borderBottomColor: colors.border }}>
+                          <Ionicons name="search" size={16} color={colors.textMuted} />
+                          <TextInput
+                            value={assignSearch}
+                            onChangeText={setAssignSearch}
+                            placeholder="Search employee name..."
+                            placeholderTextColor={colors.textMuted}
+                            style={{ flex: 1, color: colors.text, fontSize: 13, paddingVertical: 4 }}
+                          />
+                        </View>
+                        <ScrollView style={{ maxHeight: 220 }}>
+                        {employees.filter((emp: any) => {
+                          const q = assignSearch.trim().toLowerCase();
+                          if (!q) return true;
+                          return String(emp.name || '').toLowerCase().includes(q)
+                            || String(emp.role || '').toLowerCase().includes(q)
+                            || String(emp.department || '').toLowerCase().includes(q);
+                        }).map((emp: any) => (
                           <Pressable
                             key={emp.employee_id}
                             onPress={() => assignToEmployee(emp.employee_id, emp.name)}
@@ -483,6 +504,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             )}
                           </Pressable>
                         ))}
+                        </ScrollView>
                         {employees.length === 0 && (
                           <Text style={{ padding: 12, color: colors.textMuted, fontSize: 12, textAlign: 'center' }}>No active employees found</Text>
                         )}
@@ -558,6 +580,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   <DetailRow label="Notes" value={cleanNotes} colors={colors} />
                 </View>
 
+                {actionMessage ? (
+                  <View style={[styles.block, { borderColor: colors.positive + '50', backgroundColor: colors.positive + '10' }]}>
+                    <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>{actionMessage}</Text>
+                  </View>
+                ) : null}
+
                 {/* Quick actions Refactored */}
                 <View style={[styles.block, { borderColor: colors.border, overflow: 'hidden' }]}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>LEAD UPDATE</Text>
@@ -611,10 +639,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                           />
                           <SubActionBtn 
                             label="Hot Lead 🔥" 
-                            sub="Active with Urgent requirement"
+                            sub="Stays in your queue — does not go to Booking/Loan"
                             onPress={async () => {
                               await updateLead({ stage: 'positive', status: 'active', priority: 'hot' }, 'hot');
-                              onClose();
+                              setActionMessage('Marked as Hot. Lead stays in your queue until Sales Executive sends it to Booking.');
+                              setActiveCategory(null);
                             }}
                             busy={busy === 'hot'}
                             color="#E11D48"
@@ -674,26 +703,39 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             busy={busy === 'follow_up'}
                             color={colors.info}
                           />
-                          <SubActionBtn 
-                            label="Ready for Booking" 
-                            sub="Send to booking department"
-                            onPress={async () => {
-                              await updateLead({ stage: 'booking' }, 'ready_booking');
-                              onClose();
-                            }}
-                            busy={busy === 'ready_booking'}
-                            color={colors.primary}
-                          />
-                          <SubActionBtn 
-                            label="Need Loan Info" 
-                            sub="Send to loan department"
-                            onPress={async () => {
-                              await updateLead({ stage: 'loan' }, 'need_loan');
-                              onClose();
-                            }}
-                            busy={busy === 'need_loan'}
-                            color="#7C3AED"
-                          />
+                          {(userRole === 'admin' || userRole === 'manager' || userRole === 'sales_executive' || userRole === 'site_visit') ? (
+                            <>
+                              <SubActionBtn 
+                                label="Ready for Booking" 
+                                sub="Queues for Booking team — use New Booking to open list"
+                                onPress={async () => {
+                                  await updateLead({
+                                    stage: lead.stage === 'site_visit' ? 'site_visit' : 'site_visit',
+                                    status: 'active',
+                                    priority: 'handoff_booking',
+                                  }, 'ready_booking');
+                                  setActionMessage('Sent to Booking queue. Booking team will pick this lead from New Booking.');
+                                  setActiveCategory(null);
+                                }}
+                                busy={busy === 'ready_booking'}
+                                color={colors.primary}
+                              />
+                              <SubActionBtn 
+                                label="Need Loan Info" 
+                                sub="Queues for Loan team — use New Application to open list"
+                                onPress={async () => {
+                                  await updateLead({
+                                    status: 'active',
+                                    priority: 'handoff_loan',
+                                  }, 'need_loan');
+                                  setActionMessage('Sent to Loan queue. Loan team will pick this lead from New Application.');
+                                  setActiveCategory(null);
+                                }}
+                                busy={busy === 'need_loan'}
+                                color="#7C3AED"
+                              />
+                            </>
+                          ) : null}
                         </View>
                       )}
 

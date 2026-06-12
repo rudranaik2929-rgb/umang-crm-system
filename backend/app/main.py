@@ -529,6 +529,28 @@ def _lead_priority(lead: Dict[str, Any]) -> str:
     return str(lead.get("priority") or "").strip().lower()
 
 
+HANDOFF_BOOKING = "handoff_booking"
+HANDOFF_LOAN = "handoff_loan"
+
+
+def lead_ready_for_booking_queue(lead: Dict[str, Any]) -> bool:
+    if lead.get("status") == "negative":
+        return False
+    pr = _lead_priority(lead)
+    if pr == HANDOFF_BOOKING:
+        return True
+    return lead.get("stage") == "booking"
+
+
+def lead_ready_for_loan_queue(lead: Dict[str, Any]) -> bool:
+    if lead.get("status") == "negative":
+        return False
+    pr = _lead_priority(lead)
+    if pr == HANDOFF_LOAN:
+        return True
+    return lead.get("stage") == "loan"
+
+
 def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: str) -> List[Dict[str, Any]]:
     """Single source of truth for employee performance boxes + drill-down lists."""
     rows = dedupe_leads(emp_leads)
@@ -545,7 +567,11 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
     if metric_key == "not_interested":
         return [l for l in rows if l.get("status") == "negative"]
     if metric_key == "booking_done":
-        return [l for l in rows if l.get("stage") in ["booking", "loan", "registration"]]
+        return [
+            l for l in rows
+            if l.get("stage") in ["booking", "loan", "registration"]
+            or _lead_priority(l) in [HANDOFF_BOOKING, HANDOFF_LOAN]
+        ]
     if metric_key == "low_budget":
         return [l for l in rows if _lead_priority(l) == "low_budget"]
     if metric_key == "ringing":
@@ -604,7 +630,7 @@ def classify_inquiry_status(lead: Dict[str, Any]) -> str:
         return "low_budget"
     if clean_text(lead.get("call_status")):
         return "ringing"
-    if lead.get("stage") in ["booking", "loan", "registration"]:
+    if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
         return "booked"
     if lead.get("stage") in ["site_visit", "positive"]:
         return "visited"
@@ -624,7 +650,7 @@ def lead_matches_inquiry_filter(lead: Dict[str, Any], inquiry_status: str) -> bo
     if key == "unassigned":
         return not lead.get("assigned_to")
     if key == "booked":
-        return lead.get("stage") in ["booking", "loan", "registration"]
+        return lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]
     return classify_inquiry_status(lead) == key
 
 
@@ -3845,8 +3871,6 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             ensure_visit_record(lead_id, old_lead.get("name", "Lead"), old_lead.get("assigned_to"))
             if p.stage == "positive":
                 create_notification(old_lead.get("assigned_to"), "Positive lead", f"{old_lead.get('name', 'Lead')} is ready for site visit follow-up.", lead_id=lead_id)
-        elif p.stage == "loan":
-            ensure_loan_record(lead_id, old_lead.get("name", "Lead"))
         elif p.stage == "closed":
             create_customer_from_lead(lead_id, cu)
 
@@ -3887,8 +3911,6 @@ async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):
     # Auto-create related records when lead enters a new department stage
     if new_stage in ["positive", "site_visit"]:
         ensure_visit_record(lead_id, lead.get("name", "Lead"), lead.get("assigned_to"))
-    elif new_stage == "loan":
-        ensure_loan_record(lead_id, lead.get("name", "Lead"))
     elif new_stage == "closed":
         create_customer_from_lead(lead_id, cu)
 
@@ -4200,8 +4222,12 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
             b[k] = v
     result = sb_insert("bookings", b)
     SESSION_CACHE["bookings"].insert(0, result or b)
-    # Auto-sync lead stage to booking
-    sync_lead_stage(p.lead_id, "booking", force=True)
+    sb_update("leads", "lead_id", p.lead_id, {
+        "stage": "booking",
+        "priority": None,
+        "updated_at": now_utc().isoformat(),
+    })
+    update_cached_lead(p.lead_id, {"stage": "booking", "priority": None, "updated_at": now_utc().isoformat()})
     return result or b
 
 @api_router.get("/bookings")
@@ -4319,8 +4345,12 @@ async def create_loan(p: LoanCreate, cu: User=Depends(get_current_user)):
     if p.starred is not None: l["starred"] = p.starred
     result = sb_insert("loans", l)
     SESSION_CACHE["loans"].insert(0, result or l)
-    # Auto-sync lead stage to loan
-    sync_lead_stage(p.lead_id, "loan", force=True)
+    sb_update("leads", "lead_id", p.lead_id, {
+        "stage": "loan",
+        "priority": None,
+        "updated_at": now_utc().isoformat(),
+    })
+    update_cached_lead(p.lead_id, {"stage": "loan", "priority": None, "updated_at": now_utc().isoformat()})
     return result or l
 
 @api_router.get("/loans")

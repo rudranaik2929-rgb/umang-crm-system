@@ -9,6 +9,12 @@ import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
 import { canSeeRevenue } from '../../src/lib/constants';
+import { SearchableSelect } from '../../src/components/SearchableSelect';
+
+function leadInBookingQueue(lead: any) {
+  const pr = String(lead?.priority || '').toLowerCase();
+  return pr === 'handoff_booking' || lead?.stage === 'booking';
+}
 
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };
 const BOOKING_TASKS = [
@@ -50,8 +56,8 @@ export default function Bookings() {
       const bookedLeadIds = new Set(bookingData.map((x: any) => x.lead_id));
       setLeads((l.data || []).filter((x: any) =>
         x.status !== 'negative'
-        && x.stage === 'booking'
         && !bookedLeadIds.has(x.lead_id)
+        && leadInBookingQueue(x)
       ));
     } finally { setLoading(false); }
   }, [user]);
@@ -289,6 +295,7 @@ export default function Bookings() {
 
 function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any) {
   const [leadId, setLeadId] = useState('');
+  const [leadSearch, setLeadSearch] = useState('');
   const [property, setProperty] = useState('');
   const [amount, setAmount] = useState('');
   const [token, setToken] = useState('');
@@ -305,6 +312,7 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
     if (visible && leads[0]) setLeadId(leads[0].lead_id);
     if (visible) {
       setError(null);
+      setLeadSearch('');
       setProperty(''); setAmount(''); setToken('');
       setFlatCost(''); setAgreementValue(''); setStampDuty('');
       setRegistrationFees(''); setGst(''); setSocietyCharges('');
@@ -341,6 +349,18 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
   };
 
   const selectedLead = leads.find((l: any) => l.lead_id === leadId);
+  const filteredLeads = leads.filter((l: any) => {
+    const q = leadSearch.trim().toLowerCase();
+    if (!q) return true;
+    return String(l.name || '').toLowerCase().includes(q)
+      || String(l.phone || '').toLowerCase().includes(q)
+      || String(l.location || '').toLowerCase().includes(q);
+  });
+  const leadOptions = filteredLeads.map((l: any) => ({
+    key: l.lead_id,
+    label: l.name || 'Lead',
+    sublabel: `${l.phone || '—'}${l.location ? ` · ${l.location}` : ''}`,
+  }));
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -353,20 +373,27 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
             </Text>
           ) : (
             <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
-              <Text style={[styles.label, { color: colors.textMuted }]}>LEAD (FROM SITE VISIT → BOOKING DONE)</Text>
-              <ScrollView style={{ maxHeight: 140 }} contentContainerStyle={{ gap: 6 }}>
-                {leads.map((l: any) => (
-                  <Pressable key={l.lead_id} testID={`booking-lead-${l.lead_id}`} onPress={() => setLeadId(l.lead_id)}
-                    style={[styles.leadOpt, {
-                      borderColor: leadId === l.lead_id ? colors.primary : colors.border,
-                      backgroundColor: leadId === l.lead_id ? colors.primary + '20' : colors.surfaceAlt,
-                    }]}
-                  >
-                    <Text style={{ color: colors.text, fontWeight: '600', fontSize: 13 }}>{l.name}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone}{l.location ? ` · ${l.location}` : ''}</Text>
-                  </Pressable>
-                ))}
-              </ScrollView>
+              <Text style={[styles.label, { color: colors.textMuted }]}>SELECT LEAD (SEARCH & PICK)</Text>
+              <View style={[styles.searchRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+                <Ionicons name="search" size={16} color={colors.textMuted} />
+                <TextInput
+                  value={leadSearch}
+                  onChangeText={setLeadSearch}
+                  placeholder="Search name, phone, location..."
+                  placeholderTextColor={colors.textMuted}
+                  style={{ flex: 1, color: colors.text, fontSize: 13, paddingVertical: 8, paddingHorizontal: 8 }}
+                />
+              </View>
+              <View style={{ marginTop: 10 }}>
+                <SearchableSelect
+                  label="LEAD"
+                  value={leadId}
+                  options={leadOptions.length ? leadOptions : [{ key: '', label: 'No matches' }]}
+                  onChange={setLeadId}
+                  placeholder="Choose lead for booking"
+                  testID="booking-lead-select"
+                />
+              </View>
               {selectedLead ? (
                 <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 8 }}>
                   Selected: {selectedLead.name} · {selectedLead.phone || 'No phone'}
@@ -525,4 +552,12 @@ const styles = StyleSheet.create({
   modal: { width: '92%', maxWidth: 480, padding: 20, borderRadius: 12, borderWidth: 1 },
   label: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginBottom: 6 },
   leadOpt: { padding: 10, borderRadius: 8, borderWidth: 1 },
+  searchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    marginTop: 8,
+  },
 });

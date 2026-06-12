@@ -14,6 +14,7 @@ import {
   inquiryStatusLabel,
 } from '../../src/components/AssignLeadsAdvancedModal';
 import { Ionicons } from '@expo/vector-icons';
+import { SearchableSelect } from '../../src/components/SearchableSelect';
 
 const DEFAULT_FILTERS: AssignWorkspaceFilters = {
   inquiry_status: 'all',
@@ -83,6 +84,15 @@ export default function AssignLeads() {
   }, [filters]);
 
   useEffect(() => { load(); }, [load]);
+
+  const employeeOptions = useMemo(
+    () => employees.map((e) => ({
+      key: e.employee_id,
+      label: e.name,
+      sublabel: roleLabel(e.role),
+    })),
+    [employees],
+  );
 
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const allSelected = leads.length > 0 && selected.size === leads.length;
@@ -288,27 +298,17 @@ export default function AssignLeads() {
                             {lead.assigned_at ? ` · ${formatDt(lead.assigned_at)}` : ''}
                           </Text>
                         </View>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.assignChips}>
-                          {employees.map((emp) => (
-                            <Pressable
-                              key={emp.employee_id}
-                              disabled={busyId === lead.lead_id || bulkBusy}
-                              onPress={() => assignLead(lead.lead_id, emp.employee_id)}
-                              style={[styles.assignChip, {
-                                borderColor: lead.assigned_to === emp.employee_id ? colors.positive : colors.primary,
-                                backgroundColor: (lead.assigned_to === emp.employee_id ? colors.positive : colors.primary) + '12',
-                              }]}
-                            >
-                              <Text style={{
-                                color: lead.assigned_to === emp.employee_id ? colors.positive : colors.primary,
-                                fontSize: 11,
-                                fontWeight: '600',
-                              }}>
-                                {emp.name?.split(' ')[0]}
-                              </Text>
-                            </Pressable>
-                          ))}
-                        </ScrollView>
+                        <View style={{ width: 200 }}>
+                          <SearchableSelect
+                            label=""
+                            compact
+                            value={lead.assigned_to || ''}
+                            options={employeeOptions}
+                            onChange={(employeeId) => assignLead(lead.lead_id, employeeId)}
+                            placeholder="Assign to…"
+                            testID={`assign-lead-${lead.lead_id}`}
+                          />
+                        </View>
                         <Pressable
                           onPress={() => setOpenLead(lead.lead_id)}
                           style={[styles.openBtn, { borderColor: colors.border, backgroundColor: colors.surface }]}
@@ -347,52 +347,28 @@ export default function AssignLeads() {
           {selectedIds.length > 0 ? (
             <View style={[styles.bulkBar, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Text style={{ color: colors.text, fontSize: 12, fontWeight: '700' }}>{selectedIds.length} selected</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 72 }}>
-                <View style={styles.bulkSection}>
-                  <Text style={[styles.bulkLabel, { color: colors.textMuted }]}>ASSIGN TO</Text>
-                  <View style={styles.bulkEmpRow}>
-                    {employees.map((emp) => {
-                      const active = bulkEmployeeId === emp.employee_id;
-                      return (
-                        <Pressable
-                          key={emp.employee_id}
-                          onPress={() => setBulkEmployeeId(active ? null : emp.employee_id)}
-                          style={[styles.bulkEmpChip, {
-                            borderColor: active ? colors.primary : colors.border,
-                            backgroundColor: active ? colors.primary + '18' : colors.surfaceAlt,
-                          }]}
-                        >
-                          <Text style={{ color: active ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>
-                            {emp.name?.split(' ')[0]}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
+              <View style={styles.bulkFilters}>
+                <View style={{ flex: 1, minWidth: 180 }}>
+                  <SearchableSelect
+                    label="ASSIGN TO"
+                    value={bulkEmployeeId || ''}
+                    options={employeeOptions}
+                    onChange={(id) => setBulkEmployeeId(id || null)}
+                    placeholder="Choose employee…"
+                    testID="bulk-assign-employee"
+                  />
                 </View>
-                <View style={[styles.bulkSection, { marginLeft: 12 }]}>
-                  <Text style={[styles.bulkLabel, { color: colors.textMuted }]}>CHANGE STATUS</Text>
-                  <View style={styles.bulkEmpRow}>
-                    {STATUS_ACTIONS.map((act) => {
-                      const active = bulkStatusAction === act.key;
-                      return (
-                        <Pressable
-                          key={act.key}
-                          onPress={() => setBulkStatusAction(active ? null : act.key)}
-                          style={[styles.bulkEmpChip, {
-                            borderColor: active ? colors.warning : colors.border,
-                            backgroundColor: active ? colors.warning + '18' : colors.surfaceAlt,
-                          }]}
-                        >
-                          <Text style={{ color: active ? colors.warning : colors.text, fontSize: 10, fontWeight: '600' }}>
-                            {act.label}
-                          </Text>
-                        </Pressable>
-                      );
-                    })}
-                  </View>
+                <View style={{ flex: 1, minWidth: 180 }}>
+                  <SearchableSelect
+                    label="CHANGE STATUS"
+                    value={bulkStatusAction || ''}
+                    options={STATUS_ACTIONS.map((a) => ({ key: a.key, label: a.label }))}
+                    onChange={(id) => setBulkStatusAction(id || null)}
+                    placeholder="Choose status…"
+                    testID="bulk-status-action"
+                  />
                 </View>
-              </ScrollView>
+              </View>
               <Pressable
                 onPress={bulkApply}
                 disabled={bulkBusy || (!bulkEmployeeId && !bulkStatusAction)}
@@ -468,6 +444,7 @@ const styles = StyleSheet.create({
     position: 'absolute', left: 0, right: 0, bottom: 0,
     borderTopWidth: 1, paddingHorizontal: 12, paddingVertical: 10, gap: 8,
   },
+  bulkFilters: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   bulkSection: { marginBottom: 4 },
   bulkLabel: { fontSize: 9, fontWeight: '700', letterSpacing: 0.8, marginBottom: 4 },
   bulkEmpRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },

@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Modal, TextInput, ScrollView } from 'react-native';
+import React, { useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Modal, TextInput } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { roleLabel } from '../lib/constants';
+import { SearchableSelect } from './SearchableSelect';
 
 export type AssignWorkspaceFilters = {
   inquiry_status: string;
@@ -61,10 +62,36 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
     if (visible) setDraft(filters);
   }, [visible, filters]);
 
-  const chip = (active: boolean) => ({
-    borderColor: active ? colors.primary : colors.border,
-    backgroundColor: active ? colors.primary + '16' : colors.surfaceAlt,
-  });
+  const inquiryOptions = useMemo(
+    () => INQUIRY_OPTIONS.map((opt) => ({
+      key: opt.key,
+      label: opt.label,
+      count: facets?.inquiry_status?.[opt.key],
+    })),
+    [facets],
+  );
+
+  const sourceOptions = useMemo(
+    () => SOURCE_OPTIONS.map((opt) => ({
+      key: opt.key,
+      label: opt.label,
+      count: facets?.source?.[opt.key],
+    })),
+    [facets],
+  );
+
+  const employeeOptions = useMemo(
+    () => [
+      { key: 'all', label: 'All employees' },
+      { key: 'unassigned', label: 'Unassigned only' },
+      ...employees.map((e) => ({
+        key: e.employee_id,
+        label: e.name,
+        sublabel: roleLabel(e.role),
+      })),
+    ],
+    [employees],
+  );
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -77,7 +104,7 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
             </Pressable>
           </View>
 
-          <ScrollView style={{ maxHeight: 520 }} contentContainerStyle={{ gap: 16, paddingBottom: 8 }}>
+          <View style={{ gap: 14 }}>
             <View>
               <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>SEARCH</Text>
               <TextInput
@@ -89,72 +116,33 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
               />
             </View>
 
-            <View>
-              <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>ENQUIRY STATUS</Text>
-              <View style={styles.chipGrid}>
-                {INQUIRY_OPTIONS.map((opt) => {
-                  const active = draft.inquiry_status === opt.key;
-                  const count = facets?.inquiry_status?.[opt.key];
-                  return (
-                    <Pressable
-                      key={opt.key}
-                      onPress={() => setDraft((d) => ({ ...d, inquiry_status: opt.key }))}
-                      style={[styles.chip, chip(active)]}
-                    >
-                      <Text style={{ color: active ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>
-                        {opt.label}{count != null ? ` (${count})` : ''}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
+            <View style={styles.filterRow}>
+              <SearchableSelect
+                label="ENQUIRY STATUS"
+                value={draft.inquiry_status}
+                options={inquiryOptions}
+                onChange={(inquiry_status) => setDraft((d) => ({ ...d, inquiry_status }))}
+                placeholder="All enquiries"
+                testID="filter-inquiry-status"
+              />
+              <SearchableSelect
+                label="SOURCE"
+                value={draft.source}
+                options={sourceOptions}
+                onChange={(source) => setDraft((d) => ({ ...d, source }))}
+                placeholder="All sources"
+                testID="filter-source"
+              />
+              <SearchableSelect
+                label="ASSIGNED TO"
+                value={draft.assigned_to}
+                options={employeeOptions}
+                onChange={(assigned_to) => setDraft((d) => ({ ...d, assigned_to }))}
+                placeholder="All employees"
+                testID="filter-assigned-to"
+              />
             </View>
-
-            <View>
-              <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>SOURCE</Text>
-              <View style={styles.chipGrid}>
-                {SOURCE_OPTIONS.map((opt) => {
-                  const active = draft.source === opt.key;
-                  const count = facets?.source?.[opt.key];
-                  return (
-                    <Pressable
-                      key={opt.key}
-                      onPress={() => setDraft((d) => ({ ...d, source: opt.key }))}
-                      style={[styles.chip, chip(active)]}
-                    >
-                      <Text style={{ color: active ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>
-                        {opt.label}{count != null ? ` (${count})` : ''}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-
-            <View>
-              <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>ASSIGNED TO</Text>
-              <View style={styles.chipGrid}>
-                {[
-                  { key: 'all', label: 'All employees' },
-                  { key: 'unassigned', label: 'Unassigned only' },
-                  ...employees.map((e) => ({ key: e.employee_id, label: e.name })),
-                ].map((opt) => {
-                  const active = draft.assigned_to === opt.key;
-                  return (
-                    <Pressable
-                      key={opt.key}
-                      onPress={() => setDraft((d) => ({ ...d, assigned_to: opt.key }))}
-                      style={[styles.chip, chip(active)]}
-                    >
-                      <Text style={{ color: active ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }} numberOfLines={1}>
-                        {opt.label}
-                      </Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-            </View>
-          </ScrollView>
+          </View>
 
           <View style={styles.actions}>
             <Pressable
@@ -186,14 +174,13 @@ export function employeeRoleLabel(emp: any) {
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 20 },
-  sheet: { borderRadius: 14, borderWidth: 1, padding: 18, maxWidth: 640, width: '100%', alignSelf: 'center' },
+  sheet: { borderRadius: 14, borderWidth: 1, padding: 18, maxWidth: 860, width: '100%', alignSelf: 'center' },
   head: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
   title: { fontSize: 17, fontWeight: '700' },
   sectionLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1, marginBottom: 8 },
   input: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
-  chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  chip: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999, borderWidth: 1 },
-  actions: { flexDirection: 'row', gap: 10, marginTop: 16 },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  actions: { flexDirection: 'row', gap: 10, marginTop: 18 },
   btnGhost: { flex: 1, paddingVertical: 12, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
   btnPrimary: { flex: 2, paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
 });
