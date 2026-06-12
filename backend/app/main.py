@@ -531,22 +531,25 @@ def _lead_priority(lead: Dict[str, Any]) -> str:
 
 HANDOFF_BOOKING = "handoff_booking"
 HANDOFF_LOAN = "handoff_loan"
+HOT_PRIORITY = "hot"
 
 
 def lead_ready_for_booking_queue(lead: Dict[str, Any]) -> bool:
+    """Leads telecaller marks Hot, or sales marks handoff_booking, or legacy stage=booking."""
     if lead.get("status") == "negative":
         return False
     pr = _lead_priority(lead)
-    if pr == HANDOFF_BOOKING:
+    if pr in (HANDOFF_BOOKING, HOT_PRIORITY):
         return True
     return lead.get("stage") == "booking"
 
 
 def lead_ready_for_loan_queue(lead: Dict[str, Any]) -> bool:
+    """Hot leads and loan handoffs — visible in Loan department New Application list."""
     if lead.get("status") == "negative":
         return False
     pr = _lead_priority(lead)
-    if pr == HANDOFF_LOAN:
+    if pr in (HANDOFF_LOAN, HOT_PRIORITY):
         return True
     return lead.get("stage") == "loan"
 

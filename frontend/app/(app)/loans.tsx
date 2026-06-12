@@ -13,7 +13,7 @@ import { SearchableSelect } from '../../src/components/SearchableSelect';
 
 function leadInLoanQueue(lead: any) {
   const pr = String(lead?.priority || '').toLowerCase();
-  return pr === 'handoff_loan' || lead?.stage === 'loan';
+  return pr === 'handoff_loan' || pr === 'hot' || lead?.stage === 'loan';
 }
 
 const STAGE_PROGRESS: Record<string, number> = {
@@ -38,7 +38,10 @@ export default function Loans() {
 
   const load = useCallback(async () => {
     try {
-      const [lo, l] = await Promise.all([api.get('/loans'), api.get('/leads')]);
+      const [lo, l] = await Promise.all([
+        api.get('/loans'),
+        api.get('/leads', { params: { limit: 500 } }),
+      ]);
       let loanData = lo.data || [];
       // Non-admin: only show loans for leads assigned to this employee
       if (user?.role !== 'admin' && (user as any)?.acting_as_employee_id) {
@@ -93,6 +96,24 @@ export default function Loans() {
         }
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
+        {!loading && leads.length > 0 ? (
+          <Pressable
+            testID="loan-queue-banner"
+            onPress={() => setShowCreate(true)}
+            style={[styles.queueBanner, { backgroundColor: '#7C3AED14', borderColor: '#7C3AED55' }]}
+          >
+            <Ionicons name="flame" size={18} color="#7C3AED" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>
+                {leads.length} hot / ready lead{leads.length === 1 ? '' : 's'} waiting
+              </Text>
+              <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                Tap here or use New Application to pick from telecaller hot list
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#7C3AED" />
+          </Pressable>
+        ) : null}
         {loading ? <ActivityIndicator color={colors.primary} /> : (() => {
             const activeLoans = loans.filter((lo) => lo.bank_stage !== 'disbursal' && lo.application_status !== 'disbursed');
             const historyLoans = loans.filter((lo) => lo.bank_stage === 'disbursal' || lo.application_status === 'disbursed');
@@ -386,7 +407,9 @@ function CreateLoanModal({ visible, onClose, onCreated, leads, colors }: any) {
         <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>New Loan Application</Text>
           {leads.length === 0 ? (
-            <Text style={{ color: colors.textSecondary, marginTop: 14, fontSize: 13 }}>No leads available yet.</Text>
+            <Text style={{ color: colors.textSecondary, marginTop: 14, fontSize: 13 }}>
+              No leads in queue yet. Hot leads from telecaller appear here under New Application.
+            </Text>
           ) : (
             <>
               <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>SELECT LEAD (SEARCH & PICK)</Text>
@@ -408,11 +431,15 @@ function CreateLoanModal({ visible, onClose, onCreated, leads, colors }: any) {
                     const q = leadSearch.trim().toLowerCase();
                     if (!q) return true;
                     return String(l.name || '').toLowerCase().includes(q) || String(l.phone || '').toLowerCase().includes(q);
-                  }).map((l: any) => ({
-                    key: l.lead_id,
-                    label: l.name || 'Lead',
-                    sublabel: l.phone || '—',
-                  }))}
+                  }).map((l: any) => {
+                    const pr = String(l.priority || '').toLowerCase();
+                    const tag = pr === 'hot' ? '🔥 Hot' : pr === 'handoff_loan' ? 'Ready' : '';
+                    return {
+                      key: l.lead_id,
+                      label: l.name || 'Lead',
+                      sublabel: `${tag ? `${tag} · ` : ''}${l.phone || '—'}`,
+                    };
+                  })}
                   onChange={setLeadId}
                   placeholder="Choose lead for loan"
                   testID="loan-lead-select"
@@ -516,6 +543,14 @@ function LoanField({ label, value, onChange, colors, keyboardType, testID }: any
 }
 
 const styles = StyleSheet.create({
+  queueBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
   primary: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 36, borderRadius: 8 },
   primaryText: { color: '#fff', fontWeight: '600', fontSize: 12 },
   card: { borderRadius: 12, borderWidth: 1, padding: 16 },

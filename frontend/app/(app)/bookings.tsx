@@ -13,7 +13,7 @@ import { SearchableSelect } from '../../src/components/SearchableSelect';
 
 function leadInBookingQueue(lead: any) {
   const pr = String(lead?.priority || '').toLowerCase();
-  return pr === 'handoff_booking' || lead?.stage === 'booking';
+  return pr === 'handoff_booking' || pr === 'hot' || lead?.stage === 'booking';
 }
 
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };
@@ -45,7 +45,10 @@ export default function Bookings() {
 
   const load = useCallback(async () => {
     try {
-      const [b, l] = await Promise.all([api.get('/bookings'), api.get('/leads')]);
+      const [b, l] = await Promise.all([
+        api.get('/bookings'),
+        api.get('/leads', { params: { limit: 500 } }),
+      ]);
       let bookingData = b.data || [];
       // Non-admin: only show bookings for leads assigned to this employee
       if (user?.role !== 'admin' && (user as any)?.acting_as_employee_id) {
@@ -119,6 +122,24 @@ export default function Bookings() {
         }
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
+        {!loading && leads.length > 0 ? (
+          <Pressable
+            testID="booking-queue-banner"
+            onPress={() => setShowCreate(true)}
+            style={[styles.queueBanner, { backgroundColor: '#EF444414', borderColor: '#EF444455' }]}
+          >
+            <Ionicons name="flame" size={18} color="#EF4444" />
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>
+                {leads.length} hot / ready lead{leads.length === 1 ? '' : 's'} waiting
+              </Text>
+              <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                Tap here or use New Booking to select a lead from telecaller hot list
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#EF4444" />
+          </Pressable>
+        ) : null}
         {loading ? <ActivityIndicator color={colors.primary} /> :
           bookings.length === 0 ? (
             <EmptyState
@@ -356,11 +377,15 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
       || String(l.phone || '').toLowerCase().includes(q)
       || String(l.location || '').toLowerCase().includes(q);
   });
-  const leadOptions = filteredLeads.map((l: any) => ({
-    key: l.lead_id,
-    label: l.name || 'Lead',
-    sublabel: `${l.phone || '—'}${l.location ? ` · ${l.location}` : ''}`,
-  }));
+  const leadOptions = filteredLeads.map((l: any) => {
+    const pr = String(l.priority || '').toLowerCase();
+    const tag = pr === 'hot' ? '🔥 Hot' : pr === 'handoff_booking' ? 'Ready' : '';
+    return {
+      key: l.lead_id,
+      label: l.name || 'Lead',
+      sublabel: `${tag ? `${tag} · ` : ''}${l.phone || '—'}${l.location ? ` · ${l.location}` : ''}`,
+    };
+  });
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -369,7 +394,7 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
           <Text style={[styles.cardTitle, { color: colors.text }]}>New Booking</Text>
           {leads.length === 0 ? (
             <Text style={{ color: colors.textSecondary, marginTop: 14, fontSize: 13 }}>
-              No leads ready for booking. Mark a site visit as Booking Done first, then add the booking here.
+              No leads in queue yet. When telecaller marks Hot Lead, they appear here under New Booking.
             </Text>
           ) : (
             <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
@@ -533,6 +558,14 @@ function FormField({ label, value, onChange, colors, keyboardType, testID, place
 }
 
 const styles = StyleSheet.create({
+  queueBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
   primary: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 36, borderRadius: 8 },
   primaryText: { color: '#fff', fontWeight: '600', fontSize: 12 },
   card: { borderRadius: 12, borderWidth: 1, padding: 16, gap: 6 },

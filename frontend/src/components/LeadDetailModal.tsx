@@ -639,10 +639,10 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                           />
                           <SubActionBtn 
                             label="Hot Lead 🔥" 
-                            sub="Stays in your queue — does not go to Booking/Loan"
+                            sub="Shows in Booking & Loan department — New Booking / New Application"
                             onPress={async () => {
                               await updateLead({ stage: 'positive', status: 'active', priority: 'hot' }, 'hot');
-                              setActionMessage('Marked as Hot. Lead stays in your queue until Sales Executive sends it to Booking.');
+                              setActionMessage('Marked as Hot. Lead is now visible in Booking and Loan departments (New Booking / New Application).');
                               setActiveCategory(null);
                             }}
                             busy={busy === 'hot'}
