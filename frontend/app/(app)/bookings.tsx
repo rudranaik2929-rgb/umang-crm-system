@@ -8,7 +8,7 @@ import { Badge } from '../../src/components/Badge';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
-import { canSeeRevenue } from '../../src/lib/constants';
+import { canViewBookingFinance } from '../../src/lib/constants';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
 
 function leadInBookingQueue(lead: any) {
@@ -31,6 +31,28 @@ const BOOKING_TASKS = [
   { key: 'amount_received', label: 'Amt Received / Receipt', status: 'amount received', icon: 'wallet-outline', color: '#10B981' },
 ];
 
+const CHARGE_FIELDS = [
+  { key: 'agreement_value', label: 'Agreement Value' },
+  { key: 'stamp_duty', label: 'Stamp Duty' },
+  { key: 'registration_fees', label: 'Registration Charges' },
+  { key: 'gst', label: 'GST' },
+  { key: 'society_charges', label: 'Society Charges' },
+  { key: 'flat_cost', label: 'Flat Cost' },
+] as const;
+
+function formatRupee(n: number) {
+  return `₹${Math.round(n || 0).toLocaleString('en-IN')}`;
+}
+
+function isCancelledBooking(b: any) {
+  const s = String(b?.status || '').toLowerCase();
+  return s === 'cancellation' || s === 'cancelled';
+}
+
+function additionalChargesTotal(booking: any) {
+  return CHARGE_FIELDS.reduce((sum, f) => sum + Number(booking?.[f.key] || 0), 0);
+}
+
 function completedTasksFor(booking: any): string[] {
   if (Array.isArray(booking.completed_tasks)) return booking.completed_tasks;
   const fromStatus = BOOKING_TASKS.find((task) => task.status === booking.status);
@@ -47,6 +69,9 @@ export default function Bookings() {
   const [editingBooking, setEditingBooking] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [localBrokerage, setLocalBrokerage] = useState<Record<string, string>>({});
+  const [localCharges, setLocalCharges] = useState<Record<string, Record<string, string>>>({});
+  const [openChargesId, setOpenChargesId] = useState<string | null>(null);
+  const canFinance = canViewBookingFinance(user?.role, user?.email);
 
   const load = useCallback(async () => {
     try {
@@ -100,10 +125,37 @@ export default function Bookings() {
         payload.payment_progress = amount ? Math.min(100, Math.round((token / amount) * 100)) : 0;
       }
     }
+    const allDone = BOOKING_TASKS.every((t) => next.includes(t.key));
+    if (allDone) {
+      payload.status = 'amount received';
+      payload.agreement_status = 'signed';
+    }
     setBookings((items) => items.map((item) => (
       item.booking_id === booking.booking_id ? { ...item, ...payload } : item
     )));
     await update(booking.booking_id, payload, task.key);
+  };
+
+  const saveChargeField = async (bookingId: string, field: string, raw: string) => {
+    const parsed = raw.trim() === '' ? 0 : parseFloat(raw);
+    await update(bookingId, { [field]: Number.isFinite(parsed) ? parsed : 0 }, field);
+  };
+
+  const cancelBooking = async (booking: any) => {
+    const ok = typeof window === 'undefined' || window.confirm(
+      `Cancel booking for ${booking.lead_name}? The lead will move to Not Interested.`,
+    );
+    if (!ok) return;
+    setBusy(`${booking.booking_id}-cancel`);
+    try {
+      await api.patch(`/bookings/${booking.booking_id}`, {
+        status: 'cancellation',
+        agreement_status: 'cancelled',
+      });
+      await load();
+    } finally {
+      setBusy(null);
+    }
   };
 
   const toggleStar = async (booking: any) => {
@@ -116,6 +168,233 @@ export default function Bookings() {
     if (!ok) return;
     await api.delete(`/bookings/${booking.booking_id}`);
     await load();
+  };
+
+  const activeBookings = bookings.filter((b) => !isCancelledBooking(b));
+  const cancelledBookings = bookings.filter((b) => isCancelledBooking(b));
+
+  const renderBookingCard = (b: any, cancelled = false) => {
+    const rawAgreement = b.agreement_status || 'pending';
+    const realAgreementStatus = rawAgreement.split(' | ')[0] || 'pending';
+    const brokerageAmount = Number(b.brokerage_amount || 0) || (() => {
+      const m = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
+      return m ? parseFloat(m[1]) : 0;
+    })();
+    const completed = completedTasksFor(b);
+    const completedSet = new Set(completed);
+    const completedLabels = BOOKING_TASKS.filter((task) => completedSet.has(task.key));
+    const paymentProgress = completedSet.has('amount_received') ? 100 : Number(b.payment_progress || 0);
+    const allTasksDone = BOOKING_TASKS.every((t) => completedSet.has(t.key));
+    const chargesOpen = openChargesId === b.booking_id;
+    const extraTotal = additionalChargesTotal(b);
+    const chargeLocal = localCharges[b.booking_id] || {};
+
+    return (
+      <View
+        key={b.booking_id}
+        style={[styles.card, {
+          backgroundColor: colors.surface,
+          borderColor: allTasksDone ? colors.positive + '80' : cancelled ? colors.negative + '50' : colors.border,
+          borderWidth: allTasksDone ? 1.5 : 1,
+        }]}
+      >
+        {allTasksDone && !cancelled ? (
+          <View style={[styles.allDoneBanner, { backgroundColor: colors.positive + '14', borderColor: colors.positive }]}>
+            <Ionicons name="trophy" size={16} color={colors.positive} />
+            <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '800' }}>ALL 6 TASKS COMPLETED — BOOKING DONE</Text>
+          </View>
+        ) : null}
+
+        <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
+          <View style={[styles.iconBig, { backgroundColor: cancelled ? colors.negative + '18' : colors.warning + '18' }]}>
+            <Ionicons name={cancelled ? 'close-circle' : 'document-text'} size={18} color={cancelled ? colors.negative : colors.warning} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              {b.starred ? <Ionicons name="star" size={14} color={colors.warning} /> : null}
+              <Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>{b.property_name}</Text>
+            </View>
+            <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
+            <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
+              <Badge text={`AGREEMENT: ${realAgreementStatus.toUpperCase()}`} color={AGREEMENT_COLOR[realAgreementStatus] || colors.info} />
+              <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned', 'amount received'].includes(b.status) ? colors.positive : cancelled ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
+              {cancelled ? <Badge text="NOT INTERESTED" color={colors.negative} /> : null}
+            </View>
+          </View>
+          <CardActionMenu
+            colors={colors}
+            isStarred={!!b.starred}
+            onEdit={() => setEditingBooking(b)}
+            onToggleStar={() => toggleStar(b)}
+            onDelete={() => deleteBooking(b)}
+            testIDPrefix={`booking-${b.booking_id}`}
+          />
+        </View>
+
+        {canFinance ? (
+          <View style={[styles.amountRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.miniLabel, { color: colors.textMuted }]}>BOOKING AMOUNT</Text>
+              <Text style={[styles.bigVal, { color: colors.text, fontSize: 18 }]}>{formatRupee(b.booking_amount)}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4 }}>
+                Token: {formatRupee(b.token_received)}
+              </Text>
+            </View>
+            <Pressable
+              testID={`booking-charges-toggle-${b.booking_id}`}
+              onPress={() => setOpenChargesId(chargesOpen ? null : b.booking_id)}
+              style={[styles.chargesBtn, { borderColor: colors.primary, backgroundColor: chargesOpen ? colors.primary + '14' : colors.surface }]}
+            >
+              <Ionicons name="receipt-outline" size={16} color={colors.primary} />
+              <View>
+                <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>Additional Charges</Text>
+                <Text style={{ color: colors.textMuted, fontSize: 10 }}>{formatRupee(extraTotal)} total</Text>
+              </View>
+              <Ionicons name={chargesOpen ? 'chevron-up' : 'chevron-down'} size={14} color={colors.primary} />
+            </Pressable>
+          </View>
+        ) : null}
+
+        {canFinance && chargesOpen ? (
+          <View style={[styles.chargesPanel, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+            <Text style={[styles.miniLabel, { color: colors.textMuted, marginBottom: 8 }]}>EDIT CHARGES (₹)</Text>
+            {CHARGE_FIELDS.map((field) => {
+              const val = chargeLocal[field.key] !== undefined
+                ? chargeLocal[field.key]
+                : (b[field.key] != null && b[field.key] !== '' ? String(b[field.key]) : '');
+              return (
+                <View key={field.key} style={styles.chargeFieldRow}>
+                  <Text style={{ color: colors.textSecondary, fontSize: 12, flex: 1 }}>{field.label}</Text>
+                  <TextInput
+                    testID={`booking-charge-${field.key}-${b.booking_id}`}
+                    value={val}
+                    onChangeText={(text) => setLocalCharges((prev) => ({
+                      ...prev,
+                      [b.booking_id]: { ...(prev[b.booking_id] || {}), [field.key]: text },
+                    }))}
+                    onBlur={() => {
+                      const raw = chargeLocal[field.key];
+                      if (raw === undefined) return;
+                      saveChargeField(b.booking_id, field.key, raw);
+                    }}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor={colors.textMuted}
+                    style={[styles.chargeInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surface }]}
+                  />
+                </View>
+              );
+            })}
+            <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 6, textAlign: 'right' }}>
+              Additional total: {formatRupee(extraTotal)}
+            </Text>
+          </View>
+        ) : null}
+
+        <View style={[styles.checkSummary, { backgroundColor: colors.surfaceAlt, borderColor: colors.borderSoft }]}>
+          <View style={[styles.completedBadge, {
+            backgroundColor: allTasksDone ? colors.positive + '22' : colors.positive + '16',
+            borderColor: colors.positive + '45',
+          }]}>
+            <Ionicons name={allTasksDone ? 'checkmark-done' : 'checkmark-circle'} size={14} color={colors.positive} />
+            <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '800' }}>
+              {allTasksDone ? '6/6 DONE' : `${completed.length}/${BOOKING_TASKS.length} Completed`}
+            </Text>
+          </View>
+          <View style={styles.completedChips}>
+            {completedLabels.length === 0 ? (
+              <Text style={{ color: colors.textMuted, fontSize: 11 }}>Complete each task below</Text>
+            ) : completedLabels.map((task) => (
+              <View key={task.key} style={[styles.doneChip, { borderColor: task.color + '55', backgroundColor: task.color + '10' }]}>
+                <Ionicons name="checkmark" size={11} color={task.color} />
+                <Text style={{ color: task.color, fontSize: 10, fontWeight: '800' }}>{task.label}</Text>
+              </View>
+            ))}
+          </View>
+        </View>
+
+        {canFinance ? (
+          <View style={{ marginTop: 14 }}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: {formatRupee(b.token_received)}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{paymentProgress}%</Text>
+            </View>
+            <View style={[styles.track, { backgroundColor: colors.surfaceAlt }]}>
+              <View style={[styles.fill, { width: `${paymentProgress}%`, backgroundColor: colors.positive }]} />
+            </View>
+          </View>
+        ) : null}
+
+        {canFinance ? (
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12, flexWrap: 'wrap' }}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE (₹)</Text>
+              <TextInput
+                value={localBrokerage[b.booking_id] !== undefined ? localBrokerage[b.booking_id] : (brokerageAmount > 0 ? String(brokerageAmount) : '')}
+                placeholder="Enter Brokerage"
+                placeholderTextColor={colors.textMuted}
+                keyboardType="numeric"
+                onChangeText={(text) => setLocalBrokerage((prev) => ({ ...prev, [b.booking_id]: text }))}
+                onBlur={() => {
+                  const val = localBrokerage[b.booking_id];
+                  if (val === undefined) return;
+                  update(b.booking_id, { brokerage_amount: parseFloat(val) || 0 }, 'brokerage');
+                }}
+                style={{ height: 28, width: 140, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
+              />
+            </View>
+            {((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) > 0) && b.booking_amount > 0 ? (
+              <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>
+                ({(((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) / b.booking_amount) * 100).toFixed(2)}%)
+              </Text>
+            ) : null}
+          </View>
+        ) : null}
+
+        {!cancelled ? (
+          <View style={styles.actions}>
+            {BOOKING_TASKS.map((task) => {
+              const done = completedSet.has(task.key);
+              return (
+                <Pressable
+                  key={task.key}
+                  testID={`booking-task-${task.key}-${b.booking_id}`}
+                  onPress={() => completeTask(b, task)}
+                  disabled={done || busy !== null}
+                  style={[styles.act, {
+                    borderColor: done ? colors.positive + '70' : task.color + '60',
+                    backgroundColor: done ? colors.positive + '14' : task.color + '10',
+                    opacity: busy !== null && !done ? 0.65 : 1,
+                  }]}
+                >
+                  {busy === `${b.booking_id}-${task.key}` ? <ActivityIndicator size="small" color={task.color} /> : <>
+                    <Ionicons name={done ? 'checkmark-circle' : task.icon as any} size={13} color={done ? colors.positive : task.color} />
+                    <Text style={{ color: done ? colors.positive : task.color, fontSize: 11, fontWeight: '700' }}>
+                      {done ? 'Done' : task.label}
+                    </Text>
+                  </>}
+                </Pressable>
+              );
+            })}
+            <Pressable
+              testID={`booking-cancel-${b.booking_id}`}
+              onPress={() => cancelBooking(b)}
+              disabled={busy !== null}
+              style={[styles.act, { borderColor: colors.negative + '60', backgroundColor: colors.negative + '10' }]}
+            >
+              {busy === `${b.booking_id}-cancel` ? <ActivityIndicator size="small" color={colors.negative} /> : <>
+                <Ionicons name="close-circle-outline" size={13} color={colors.negative} />
+                <Text style={{ color: colors.negative, fontSize: 11, fontWeight: '600' }}>Cancellation</Text>
+              </>}
+            </Pressable>
+          </View>
+        ) : (
+          <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 8 }}>
+            Lead moved to Not Interested. You can delete this record if needed.
+          </Text>
+        )}
+      </View>
+    );
   };
 
   return (
@@ -151,7 +430,7 @@ export default function Bookings() {
         ) : null}
         {loading ? <ActivityIndicator color={colors.primary} /> : (
           <>
-          {bookings.length === 0 ? (
+          {activeBookings.length === 0 && cancelledBookings.length === 0 ? (
             <EmptyState
               variant="leads"
               title="No bookings yet"
@@ -162,151 +441,18 @@ export default function Bookings() {
             />
           ) : (
             <>
-            <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>ACTIVE BOOKINGS ({bookings.length})</Text>
-            {bookings.map((b) => {
-            const rawAgreement = b.agreement_status || 'pending';
-            const realAgreementStatus = rawAgreement.split(' | ')[0] || 'pending';
-            const brokerageAmount = Number(b.brokerage_amount || 0) || (() => {
-              const m = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
-              return m ? parseFloat(m[1]) : 0;
-            })();
-            const completed = completedTasksFor(b);
-            const completedSet = new Set(completed);
-            const completedLabels = BOOKING_TASKS.filter((task) => completedSet.has(task.key));
-            const paymentProgress = completedSet.has('amount_received') ? 100 : Number(b.payment_progress || 0);
-
-            return (
-              <View key={b.booking_id} style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-                <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12 }}>
-                  <View style={[styles.iconBig, { backgroundColor: colors.warning + '18' }]}>
-                    <Ionicons name="document-text" size={18} color={colors.warning} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                      {b.starred ? <Ionicons name="star" size={14} color={colors.warning} /> : null}
-                      <Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>{b.property_name}</Text>
-                    </View>
-                    <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
-                    <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                      <Badge text={`AGREEMENT: ${realAgreementStatus.toUpperCase()}`} color={AGREEMENT_COLOR[realAgreementStatus] || colors.info} />
-                      <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned'].includes(b.status) ? colors.positive : ['cancellation', 'cancelled'].includes(b.status) ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
-                    </View>
-                  </View>
-                  {canSeeRevenue(user?.role, user?.email) && (
-                  <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={[styles.bigVal, { color: colors.text }]}>₹{(b.booking_amount || 0).toLocaleString('en-IN')}</Text>
-                    <Text style={[styles.cardSub, { color: colors.textMuted }]}>Booking amount</Text>
-                  </View>
-                  )}
-                  <CardActionMenu
-                    colors={colors}
-                    isStarred={!!b.starred}
-                    onEdit={() => setEditingBooking(b)}
-                    onToggleStar={() => toggleStar(b)}
-                    onDelete={() => deleteBooking(b)}
-                    testIDPrefix={`booking-${b.booking_id}`}
-                  />
-                </View>
-
-                <View style={[styles.checkSummary, { backgroundColor: colors.surfaceAlt, borderColor: colors.borderSoft }]}>
-                  <View style={[styles.completedBadge, { backgroundColor: colors.positive + '16', borderColor: colors.positive + '45' }]}>
-                    <Ionicons name="checkmark-circle" size={14} color={colors.positive} />
-                    <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '800' }}>
-                      {completed.length}/{BOOKING_TASKS.length} Completed
-                    </Text>
-                  </View>
-                  <View style={styles.completedChips}>
-                    {completedLabels.length === 0 ? (
-                      <Text style={{ color: colors.textMuted, fontSize: 11 }}>No checklist task completed yet</Text>
-                    ) : completedLabels.map((task) => (
-                      <View key={task.key} style={[styles.doneChip, { borderColor: task.color + '55', backgroundColor: task.color + '10' }]}>
-                        <Ionicons name="checkmark" size={11} color={task.color} />
-                        <Text style={{ color: task.color, fontSize: 10, fontWeight: '800' }}>{task.label}</Text>
-                      </View>
-                    ))}
-                  </View>
-                </View>
-
-                {canSeeRevenue(user?.role, user?.email) && (
-                <View style={{ marginTop: 14 }}>
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 }}>
-                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>Token received: ₹{(b.token_received || 0).toLocaleString('en-IN')}</Text>
-                    <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{paymentProgress}%</Text>
-                  </View>
-                  <View style={[styles.track, { backgroundColor: colors.surfaceAlt }]}>
-                    <View style={[styles.fill, { width: `${paymentProgress}%`, backgroundColor: colors.positive }]} />
-                  </View>
-                </View>
-                )}
-
-                {/* Brokerage Input & Percentage Calculation — hidden for manager */}
-                {canSeeRevenue(user?.role, user?.email) && (
-                <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12, flexWrap: 'wrap' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-                    <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE (₹)</Text>
-                    <TextInput
-                      value={localBrokerage[b.booking_id] !== undefined ? localBrokerage[b.booking_id] : (brokerageAmount > 0 ? String(brokerageAmount) : '')}
-                      placeholder="Enter Brokerage"
-                      placeholderTextColor={colors.textMuted}
-                      keyboardType="numeric"
-                      onChangeText={(text) => setLocalBrokerage(prev => ({ ...prev, [b.booking_id]: text }))}
-                      onBlur={() => {
-                        const val = localBrokerage[b.booking_id];
-                        if (val === undefined) return;
-                        const parsedVal = parseFloat(val) || 0;
-                        update(b.booking_id, { brokerage_amount: parsedVal }, 'brokerage');
-                      }}
-                      style={{ height: 28, width: 140, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
-                    />
-                  </View>
-                  {((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) > 0) && b.booking_amount > 0 && (
-                    <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>
-                      ({(((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) / b.booking_amount) * 100).toFixed(2)}%)
-                    </Text>
-                  )}
-                </View>
-                )}
-
-                <View style={styles.actions}>
-                {BOOKING_TASKS.map((task) => {
-                  if (task.key === 'amount_received' && !canSeeRevenue(user?.role, user?.email)) return null;
-                  const done = completedSet.has(task.key);
-                  return (
-                    <Pressable
-                      key={task.key}
-                      testID={`booking-task-${task.key}-${b.booking_id}`}
-                      onPress={() => completeTask(b, task)}
-                      disabled={done || busy !== null}
-                      style={[
-                        styles.act,
-                        {
-                          borderColor: done ? colors.positive + '70' : task.color + '60',
-                          backgroundColor: done ? colors.positive + '14' : task.color + '10',
-                          opacity: busy !== null && !done ? 0.65 : 1,
-                        },
-                      ]}
-                    >
-                      {busy === `${b.booking_id}-${task.key}` ? <ActivityIndicator size="small" color={task.color} /> : <>
-                        <Ionicons name={done ? 'checkmark-circle' : task.icon as any} size={13} color={done ? colors.positive : task.color} />
-                        <Text style={{ color: done ? colors.positive : task.color, fontSize: 11, fontWeight: '700' }}>
-                          {done ? 'Completed' : task.label}
-                        </Text>
-                      </>}
-                    </Pressable>
-                  );
-                })}
-
-                {/* 2. Cancellation */}
-                <Pressable testID={`booking-cancel-${b.booking_id}`} onPress={() => update(b.booking_id, { status: 'cancellation' }, 'cancel')} style={[styles.act, { borderColor: colors.negative + '60', backgroundColor: colors.negative + '10' }]}>
-                  {busy === `${b.booking_id}-cancel` ? <ActivityIndicator size="small" color={colors.negative} /> : <>
-                    <Ionicons name="close-circle-outline" size={13} color={colors.negative} />
-                    <Text style={{ color: colors.negative, fontSize: 11, fontWeight: '600' }}>Cancellation</Text>
-                  </>}
-                </Pressable>
-              </View>
-            </View>
-          );
-        })}
+              {activeBookings.length > 0 ? (
+                <>
+                  <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>ACTIVE BOOKINGS ({activeBookings.length})</Text>
+                  {activeBookings.map((b) => renderBookingCard(b, false))}
+                </>
+              ) : null}
+              {cancelledBookings.length > 0 ? (
+                <>
+                  <Text style={[styles.sectionTitle, { color: colors.textMuted, marginTop: 12 }]}>CANCELLED — NOT INTERESTED ({cancelledBookings.length})</Text>
+                  {cancelledBookings.map((b) => renderBookingCard(b, true))}
+                </>
+              ) : null}
             </>
           )}
           </>
@@ -586,6 +732,57 @@ function FormField({ label, value, onChange, colors, keyboardType, testID, place
 
 const styles = StyleSheet.create({
   sectionTitle: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginBottom: 4 },
+  miniLabel: { fontSize: 9, fontWeight: '700', letterSpacing: 1 },
+  allDoneBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    marginBottom: 10,
+  },
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    flexWrap: 'wrap',
+  },
+  chargesBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    minWidth: 160,
+  },
+  chargesPanel: {
+    marginTop: 10,
+    padding: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+  },
+  chargeFieldRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 8,
+  },
+  chargeInput: {
+    width: 120,
+    height: 34,
+    borderWidth: 1,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    fontSize: 12,
+    textAlign: 'right',
+  },
   queueBanner: {
     flexDirection: 'row',
     alignItems: 'center',

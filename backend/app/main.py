@@ -4299,9 +4299,19 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
             sync_lead_stage(lead_id, "loan", force=False)
             ensure_loan_record(lead_id, booking_record.get("lead_name"))
         elif status in ["cancellation", "cancelled"]:
-            sb_update("leads", "lead_id", lead_id, {"status": "negative", "updated_at": now_utc().isoformat()})
-            update_cached_lead(lead_id, {"status": "negative", "updated_at": now_utc().isoformat()})
-            log_activity(cu, "booking_cancelled", "Booking cancelled; lead moved to negative pool.", lead_id=lead_id)
+            lead_patch = {
+                "status": "negative",
+                "priority": None,
+                "follow_up_at": None,
+                "updated_at": now_utc().isoformat(),
+            }
+            sb_update("leads", "lead_id", lead_id, lead_patch)
+            update_cached_lead(lead_id, lead_patch)
+            log_activity(
+                cu, "booking_cancelled",
+                "Booking cancelled; lead moved to Not Interested.",
+                lead_id=lead_id,
+            )
         else:
             sync_lead_stage(lead_id, "booking", force=True)
     return updated

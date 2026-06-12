@@ -133,6 +133,11 @@ export function canSeeRevenue(role?: string | null, email?: string | null) {
   return isOwner(role, email);
 }
 
+/** Booking page: manager sees same financial fields as admin/owner. */
+export function canViewBookingFinance(role?: string | null, email?: string | null) {
+  return isAdmin(role) || role === 'booking' || isOwner(role, email);
+}
+
 export function canAccess(role: string | null | undefined, page: string, email?: string | null, allowedPages?: string[] | null): boolean {
   if (page === 'dashboard' && isOwner(role, email)) return true;
   return effectivePages(role, email, allowedPages).includes(page);
