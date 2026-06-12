@@ -12,6 +12,7 @@ import { roleLabel } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
+import { MyActivityModal } from '../../src/components/MyActivityModal';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -33,6 +34,24 @@ const ROLE_HIGHLIGHT: Record<string, string[]> = {
   marketing: ['actions_total'],
 };
 
+const MY_ACTIVITY_KPIS: Array<{
+  label: string;
+  metric: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  valueKey: string;
+  highlight?: string;
+}> = [
+  { label: 'My Queue', metric: 'queue', icon: 'list-outline', color: 'primary', valueKey: 'assigned_queue', highlight: 'queue' },
+  { label: 'Follow-ups', metric: 'follow_ups', icon: 'time-outline', color: 'warning', valueKey: 'assigned_follow_ups', highlight: 'followups' },
+  { label: 'Completed', metric: 'completed', icon: 'checkmark-circle-outline', color: 'positive', valueKey: 'assigned_completed' },
+  { label: 'Positive', metric: 'positive', icon: 'thumbs-up-outline', color: 'positive', valueKey: 'positives', highlight: 'positives' },
+  { label: 'Call Notes', metric: 'call_notes', icon: 'document-text-outline', color: 'info', valueKey: 'call_notes', highlight: 'call_notes' },
+  { label: 'Bookings', metric: 'bookings_done', icon: 'document-text-outline', color: 'warning', valueKey: 'bookings_done', highlight: 'bookings_done' },
+  { label: 'Loans', metric: 'loans_done', icon: 'business-outline', color: 'loan', valueKey: 'loans_done', highlight: 'loans_done' },
+  { label: 'Closed Deals', metric: 'closed_deals', icon: 'trophy-outline', color: 'accent', valueKey: 'closed_deals', highlight: 'closed_deals' },
+];
+
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
   manager: { label: 'Assign leads to team', route: '/(app)/assign-leads' },
   telecaller: { label: 'Open my telecaller queue', route: '/(app)/telecaller' },
@@ -52,6 +71,7 @@ export default function MyDashboard() {
   const [graphData, setGraphData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [openLead, setOpenLead] = useState<string | null>(null);
+  const [activityMetric, setActivityMetric] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -154,16 +174,34 @@ export default function MyDashboard() {
         {/* Personal KPIs */}
         {role !== 'admin' && (
           <View>
-            <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY</Text>
+            <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY — TAP A BOX FOR LIST</Text>
             <View style={styles.kpiGrid}>
-              <KPI label="My Queue" value={personal.assigned_queue ?? 0} icon="list-outline" color={colors.primary} colors={colors} />
-              <KPI label="Follow-ups" value={personal.assigned_follow_ups ?? personal.followups ?? 0} icon="time-outline" color={colors.warning} colors={colors} highlight={highlight.includes('followups')} />
-              <KPI label="Completed" value={personal.assigned_completed ?? 0} icon="checkmark-circle-outline" color={colors.positive} colors={colors} />
-              <KPI label="Positive" value={personal.positives ?? 0} icon="thumbs-up-outline" color={colors.positive} colors={colors} highlight={highlight.includes('positives')} />
-              <KPI label="Call Notes" value={personal.call_notes} icon="document-text-outline" color={colors.info} colors={colors} highlight={highlight.includes('call_notes')} />
-              <KPI label="Bookings" value={personal.bookings_done} icon="document-text-outline" color={colors.warning} colors={colors} highlight={highlight.includes('bookings_done')} />
-              <KPI label="Loans" value={personal.loans_done} icon="business-outline" color={'#7C3AED'} colors={colors} highlight={highlight.includes('loans_done')} />
-              <KPI label="Closed Deals" value={personal.closed_deals} icon="trophy-outline" color={colors.accent} colors={colors} highlight={highlight.includes('closed_deals')} />
+              {MY_ACTIVITY_KPIS.map((kpi) => {
+                const colorMap: Record<string, string> = {
+                  primary: colors.primary,
+                  warning: colors.warning,
+                  positive: colors.positive,
+                  info: colors.info,
+                  accent: colors.accent,
+                  loan: '#7C3AED',
+                };
+                const c = colorMap[kpi.color] || colors.primary;
+                const raw = personal[kpi.valueKey];
+                const value = kpi.valueKey === 'assigned_follow_ups' ? (raw ?? personal.followups ?? 0) : (raw ?? 0);
+                return (
+                  <KPI
+                    key={kpi.metric}
+                    label={kpi.label}
+                    value={value}
+                    icon={kpi.icon}
+                    color={c}
+                    colors={colors}
+                    highlight={kpi.highlight ? highlight.includes(kpi.highlight) : false}
+                    onPress={() => setActivityMetric(kpi.metric)}
+                    testID={`my-activity-${kpi.metric}`}
+                  />
+                );
+              })}
             </View>
           </View>
         )}
@@ -218,6 +256,13 @@ export default function MyDashboard() {
           </View>
         </View>
       </ScrollView>
+      <MyActivityModal
+        visible={activityMetric !== null}
+        metric={activityMetric}
+        onClose={() => setActivityMetric(null)}
+        userRole={role}
+        onChanged={load}
+      />
       <LeadDetailModal
         leadId={openLead}
         visible={openLead !== null}
@@ -243,19 +288,27 @@ function TempCard({ icon, label, value, color, desc, colors, testID }: any) {
   );
 }
 
-function KPI({ label, value, icon, color, colors, highlight }: any) {
+function KPI({ label, value, icon, color, colors, highlight, onPress, testID }: any) {
   return (
-    <View style={[styles.kpiCard, {
-      backgroundColor: colors.surface,
-      borderColor: highlight ? color + '60' : colors.border,
-      borderWidth: highlight ? 1.5 : 1,
-    }]}>
-      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-        <Ionicons name={icon} size={13} color={color} />
-        <Text style={[styles.kpiLabel, { color: colors.textMuted }]}>{label.toUpperCase()}</Text>
+    <Pressable
+      testID={testID}
+      onPress={onPress}
+      style={[styles.kpiCard, {
+        backgroundColor: colors.surface,
+        borderColor: highlight ? color + '60' : colors.border,
+        borderWidth: highlight ? 1.5 : 1,
+      }]}
+    >
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+          <Ionicons name={icon} size={13} color={color} />
+          <Text style={[styles.kpiLabel, { color: colors.textMuted }]}>{label.toUpperCase()}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
       </View>
       <Text style={[styles.kpiVal, { color: highlight ? color : colors.text }]}>{value}</Text>
-    </View>
+      <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Tap for list</Text>
+    </Pressable>
   );
 }
 

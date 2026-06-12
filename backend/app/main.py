@@ -4999,8 +4999,16 @@ async def stats_me(cu: User=Depends(get_current_user)):
     hot = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"] and l.get("status") != "negative")
     cold = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["new", "assigned", "contacted"] and l.get("status") != "negative")
 
+    employee_row = None
+    if emp_id:
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,email,role,department", "limit": "1"})
+        if emps:
+            employee_row = emps[0]
+
     return {
-        "employee": None, "role": cu.role,
+        "employee": employee_row,
+        "employee_id": emp_id,
+        "role": cu.role,
         "personal": {
             "actions_total": len(activities),
             "leads_total": assignment["assigned_total"],
@@ -5026,6 +5034,129 @@ async def stats_me(cu: User=Depends(get_current_user)):
 
 EMPLOYEE_METRIC_KEYS = ["active", "hot", "visited", "not_interested", "booking_done", "low_budget", "ringing"]
 
+PERSONAL_ACTIVITY_METRICS = [
+    "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
+    "call_notes", "bookings_done", "loans_done", "active", "hot", "visited",
+    "not_interested", "booking_done", "low_budget", "ringing",
+]
+
+PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
+    "queue": "My Queue",
+    "follow_ups": "Follow-ups",
+    "completed": "Completed",
+    "closed_deals": "Closed Deals",
+    "positive": "Positive Leads",
+    "negatives": "Not Interested",
+    "call_notes": "Call Notes",
+    "bookings_done": "Bookings",
+    "loans_done": "Loans",
+    "active": "Active Leads",
+    "hot": "Hot Leads",
+    "visited": "Visited",
+    "not_interested": "Not Interested",
+    "booking_done": "Booking Done",
+    "low_budget": "Low Budget",
+    "ringing": "Ringing",
+}
+
+
+def _employee_may_view_stats(cu: User, employee_id: str) -> bool:
+    if cu.role in ("admin", "manager"):
+        return True
+    own = cu.acting_as_employee_id or cu.employee_id
+    return bool(own and own == employee_id)
+
+
+def filter_personal_activity(
+    metric_key: str,
+    emp_leads: List[Dict[str, Any]],
+    activities: List[Dict[str, Any]],
+    role: Optional[str],
+) -> Dict[str, Any]:
+    """Drill-down lists for My Dashboard activity boxes — counts match stats_me."""
+    key = (metric_key or "").strip().lower()
+    rows = dedupe_leads(emp_leads)
+    if key in ("queue", "assigned_queue"):
+        items = filter_employee_queue_leads(rows, role)
+        return {"kind": "leads", "items": items}
+    if key in ("follow_ups", "followups", "assigned_follow_ups"):
+        items = filter_employee_follow_up_leads(rows)
+        return {"kind": "leads", "items": items}
+    if key in ("completed", "assigned_completed", "closed_deals"):
+        items = [l for l in rows if l.get("stage") == "closed"]
+        return {"kind": "leads", "items": items}
+    if key in ("positive", "positives"):
+        items = [
+            l for l in rows
+            if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]
+            and l.get("status") != "negative"
+        ]
+        return {"kind": "leads", "items": items}
+    if key in ("negatives", "not_interested"):
+        items = filter_employee_metric_leads(rows, "not_interested")
+        return {"kind": "leads", "items": items}
+    if key == "call_notes":
+        items = [a for a in activities if "call" in str(a.get("type", "")).lower()]
+        return {"kind": "activities", "items": items}
+    if key == "bookings_done":
+        items = [a for a in activities if "booking" in str(a.get("type", "")).lower()]
+        return {"kind": "activities", "items": items}
+    if key == "loans_done":
+        items = [a for a in activities if "loan" in str(a.get("type", "")).lower()]
+        return {"kind": "activities", "items": items}
+    if key in EMPLOYEE_METRIC_KEYS:
+        return {"kind": "leads", "items": filter_employee_metric_leads(rows, key)}
+    raise HTTPException(400, detail=f"Unknown activity metric: {key}")
+
+
+@api_router.get("/stats/me/activity/{metric_key}")
+async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depends(get_current_user)):
+    """My Dashboard — tap an activity box to see the matching lead/activity list."""
+    key = (metric_key or "").strip().lower()
+    if key not in PERSONAL_ACTIVITY_METRICS:
+        raise HTTPException(400, detail=f"metric must be one of: {', '.join(PERSONAL_ACTIVITY_METRICS)}")
+    limit = min(max(limit, 1), 500)
+    emp_id = cu.acting_as_employee_id or cu.employee_id
+    if not emp_id and cu.role != "admin":
+        raise HTTPException(400, detail="No employee profile linked to this login.")
+
+    activity_keys = actor_activity_keys(cu)
+    db_activities = sb_select_all("activities", {"select": "*", "order": "created_at.desc"})
+    cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+    all_activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
+    if cu.role == "admin" and not emp_id:
+        activities = all_activities
+        all_leads = fetch_all_leads_merged(
+            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,budget,location"
+        )
+        emp_leads = all_leads
+    else:
+        activities = [a for a in all_activities if a.get("user_id") in activity_keys]
+        all_leads = fetch_all_leads_merged(
+            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,budget,location"
+        )
+        emp_leads = [l for l in all_leads if l.get("assigned_to") == emp_id]
+
+    result = filter_personal_activity(key, emp_leads, activities, cu.role)
+    lead_map = {l.get("lead_id"): l for l in all_leads if l.get("lead_id")}
+    if result["kind"] == "leads":
+        items = sorted(result["items"], key=lambda l: l.get("created_at") or "", reverse=True)[:limit]
+    else:
+        items = sorted(result["items"], key=lambda a: a.get("created_at") or "", reverse=True)[:limit]
+        for act in items:
+            lid = act.get("lead_id")
+            if lid and lid in lead_map:
+                act["lead_name"] = lead_map[lid].get("name")
+                act["lead_phone"] = lead_map[lid].get("phone")
+
+    return {
+        "metric": key,
+        "label": PERSONAL_ACTIVITY_LABELS.get(key, key.replace("_", " ").title()),
+        "kind": result["kind"],
+        "total": len(result["items"]),
+        "items": items,
+    }
+
 
 @api_router.get("/leads/employee/{employee_id}/metric/{metric_key}")
 async def list_employee_metric_leads(
@@ -5035,6 +5166,8 @@ async def list_employee_metric_leads(
     cu: User = Depends(get_current_user),
 ):
     """Drill-down list for dashboard employee performance boxes."""
+    if not _employee_may_view_stats(cu, employee_id):
+        raise HTTPException(403, detail="Not allowed to view this employee's leads.")
     key = (metric_key or "").strip().lower()
     if key not in EMPLOYEE_METRIC_KEYS:
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(EMPLOYEE_METRIC_KEYS)}")

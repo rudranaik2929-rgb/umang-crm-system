@@ -17,6 +17,7 @@ export default function Index() {
 
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
   // Already signed in (valid session) → go to app; never show "Continue as …" bypass.
@@ -137,14 +138,27 @@ export default function Index() {
               autoCapitalize="none"
               keyboardType="email-address"
             />
-            <TextInput
-              style={[styles.input, { borderColor: colors.border, color: colors.text }]}
-              placeholder="Password"
-              placeholderTextColor={colors.textMuted}
-              value={password}
-              onChangeText={setPassword}
-              secureTextEntry
-            />
+            <View style={styles.passwordRow}>
+              <TextInput
+                testID="login-password"
+                style={[styles.input, styles.passwordInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+                placeholder="Password"
+                placeholderTextColor={colors.textMuted}
+                value={password}
+                onChangeText={setPassword}
+                secureTextEntry={!showPassword}
+                autoCapitalize="none"
+                autoComplete="current-password"
+              />
+              <Pressable
+                testID="login-password-toggle"
+                onPress={() => setShowPassword((v) => !v)}
+                style={[styles.eyeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+                accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+              >
+                <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+              </Pressable>
+            </View>
           </View>
 
           <Pressable
@@ -220,6 +234,16 @@ const styles = StyleSheet.create({
   },
   primaryText: { fontSize: 14, fontWeight: '600' },
   input: { height: 48, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, fontSize: 15 },
+  passwordRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  passwordInput: { flex: 1 },
+  eyeBtn: {
+    width: 48,
+    height: 48,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   divider: { height: 1, marginVertical: 28 },
   outlineBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
