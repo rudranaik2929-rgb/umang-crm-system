@@ -596,6 +596,126 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
     }
 
 
+def classify_inquiry_status(lead: Dict[str, Any]) -> str:
+    """Primary inquiry bucket for manager assign workspace filters."""
+    if lead.get("status") == "negative":
+        return "not_interested"
+    if _lead_priority(lead) == "low_budget":
+        return "low_budget"
+    if clean_text(lead.get("call_status")):
+        return "ringing"
+    if lead.get("stage") in ["booking", "loan", "registration"]:
+        return "booked"
+    if lead.get("stage") in ["site_visit", "positive"]:
+        return "visited"
+    if _lead_priority(lead) == "hot":
+        return "hot"
+    if not lead.get("assigned_to") and lead.get("stage") in ["new", "assigned"]:
+        return "new"
+    if lead.get("status") != "negative" and lead.get("stage") != "closed":
+        return "active"
+    return "active"
+
+
+def lead_matches_inquiry_filter(lead: Dict[str, Any], inquiry_status: str) -> bool:
+    key = (inquiry_status or "all").strip().lower()
+    if key in ("", "all"):
+        return True
+    if key == "unassigned":
+        return not lead.get("assigned_to")
+    if key == "booked":
+        return lead.get("stage") in ["booking", "loan", "registration"]
+    return classify_inquiry_status(lead) == key
+
+
+def lead_matches_assign_source(lead: Dict[str, Any], source_key: str) -> bool:
+    key = (source_key or "all").strip().lower()
+    if key in ("", "all"):
+        return True
+    platform = classify_lead_platform(lead.get("source"))
+    if key == "manual":
+        return platform == "manual"
+    if key == "meta":
+        return platform == "meta" and is_real_meta_lead(lead)
+    if key == "housing":
+        return platform == "housing"
+    return platform == "other"
+
+
+def lead_matches_search_query(lead: Dict[str, Any], q: str) -> bool:
+    needle = (q or "").strip().lower()
+    if not needle:
+        return True
+    hay = " ".join(
+        str(lead.get(k) or "")
+        for k in ("name", "phone", "email", "source", "location", "budget", "notes")
+    ).lower()
+    return needle in hay
+
+
+def filter_assign_workspace_leads(
+    all_leads: List[Dict[str, Any]],
+    inquiry_status: str = "all",
+    source: str = "all",
+    assigned_to: str = "all",
+    q: str = "",
+) -> List[Dict[str, Any]]:
+    rows = [
+        l for l in dedupe_leads(all_leads)
+        if is_pipeline_lead(l)
+        and lead_matches_inquiry_filter(l, inquiry_status)
+        and lead_matches_assign_source(l, source)
+        and lead_matches_search_query(l, q)
+    ]
+    assignee = (assigned_to or "all").strip().lower()
+    if assignee == "unassigned":
+        rows = [l for l in rows if not l.get("assigned_to")]
+    elif assignee not in ("", "all"):
+        rows = [l for l in rows if l.get("assigned_to") == assigned_to]
+    rows.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return rows
+
+
+def compute_assign_workspace_facets(all_leads: List[Dict[str, Any]]) -> Dict[str, Any]:
+    pipeline = [l for l in dedupe_leads(all_leads) if is_pipeline_lead(l)]
+    inquiry: Dict[str, int] = {k: 0 for k in ASSIGN_INQUIRY_STATUSES}
+    source: Dict[str, int] = {k: 0 for k in ASSIGN_SOURCE_FILTERS}
+    for lead in pipeline:
+        inquiry["all"] += 1
+        bucket = classify_inquiry_status(lead)
+        if bucket in inquiry:
+            inquiry[bucket] += 1
+        if not lead.get("assigned_to"):
+            inquiry["unassigned"] += 1
+        plat = classify_lead_platform(lead.get("source"))
+        source["all"] += 1
+        if plat == "housing":
+            source["housing"] += 1
+        elif plat == "meta" and is_real_meta_lead(lead):
+            source["meta"] += 1
+        elif plat == "manual":
+            source["manual"] += 1
+        else:
+            source["other"] += 1
+    return {"inquiry_status": inquiry, "source": source}
+
+
+def enrich_leads_with_employee_names(
+    leads: List[Dict[str, Any]],
+    employees: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    emp_map = {e.get("employee_id"): e.get("name") for e in employees if e.get("employee_id")}
+    out: List[Dict[str, Any]] = []
+    for lead in leads:
+        row = dict(lead)
+        eid = lead.get("assigned_to")
+        row["employee_name"] = emp_map.get(eid) if eid else None
+        row["inquiry_status"] = classify_inquiry_status(lead)
+        row["platform"] = classify_lead_platform(lead.get("source"))
+        out.append(row)
+    return out
+
+
 def compute_unassigned_queue(all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     queue = [
         l for l in all_leads
@@ -723,6 +843,36 @@ class LeadFollowUpCreate(BaseModel):
 class BulkAssignRequest(BaseModel):
     lead_ids: List[str]
     assigned_to: str
+
+
+class BulkLeadManageRequest(BaseModel):
+    lead_ids: List[str]
+    assigned_to: Optional[str] = None
+    inquiry_action: Optional[str] = None
+    stage: Optional[str] = None
+    status: Optional[str] = None
+    priority: Optional[str] = None
+    call_status: Optional[str] = None
+    reactivate: bool = True
+
+
+ASSIGN_INQUIRY_STATUSES = [
+    "all", "active", "new", "hot", "visited", "booked", "ringing",
+    "not_interested", "low_budget", "unassigned",
+]
+ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
+INQUIRY_ACTION_PRESETS: Dict[str, Dict[str, Any]] = {
+    "active": {"status": "active", "stage": "assigned"},
+    "new": {"status": "active", "stage": "new"},
+    "visited": {"status": "active", "stage": "site_visit"},
+    "positive": {"status": "active", "stage": "positive"},
+    "booked": {"status": "active", "stage": "booking"},
+    "booking": {"status": "active", "stage": "booking"},
+    "not_interested": {"status": "negative"},
+    "ringing": {"status": "active", "call_status": "ringing"},
+    "hot": {"status": "active", "stage": "positive", "priority": "hot"},
+    "low_budget": {"status": "negative", "priority": "low_budget"},
+}
 class BookingCreate(BaseModel):
     lead_id: str; property_name: str; booking_amount: float=0; token_received: float=0
     unit_number: Optional[str]=None; tower: Optional[str]=None
@@ -1154,6 +1304,7 @@ def assign_lead_to_employee(
     old_lead: Dict[str, Any],
     employee_id: str,
     actor: Optional[User],
+    reactivate: bool = True,
 ) -> Dict[str, Any]:
     """Single lead assignment — shared by PATCH and bulk assign."""
     emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "name", "limit": "1"})
@@ -1162,6 +1313,10 @@ def assign_lead_to_employee(
     if actor:
         actor_id = actor.acting_as_employee_id or actor.user_id
     data = stamp_lead_assignment(employee_id, assigned_by=actor_id, current_stage=old_lead.get("stage"))
+    if reactivate and old_lead.get("status") == "negative":
+        data["status"] = "active"
+        if old_lead.get("stage") in (None, "closed", "new"):
+            data["stage"] = "assigned"
     updated = sb_update("leads", "lead_id", lead_id, data) or {**old_lead, **data}
     update_cached_lead(lead_id, data)
     log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
@@ -3282,25 +3437,116 @@ async def stats_lead_buckets(cu: User = Depends(get_current_user)):
 
 @api_router.get("/leads/assign-queue")
 async def list_assign_queue(cu: User = Depends(get_current_user)):
-    """Unassigned pipeline leads for manager reassign / bulk assign workspace."""
+    """Backward-compatible: unassigned leads only."""
     ensure_roles(cu, ["admin", "manager"])
-    all_leads = fetch_all_leads_merged(
-        "lead_id,name,phone,email,source,stage,status,budget,location,assigned_to,assigned_at,created_at"
+    data = await list_assign_workspace(
+        inquiry_status="unassigned",
+        source="all",
+        assigned_to="unassigned",
+        q="",
+        limit=500,
+        offset=0,
+        cu=cu,
     )
-    queue = compute_unassigned_queue(all_leads)
-    queue.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return {
+        "total": data["total"],
+        "leads": data["leads"],
+        "employees": data["employees"],
+        "auto_assign_on_intake": False,
+    }
+
+
+@api_router.get("/leads/assign-workspace")
+async def list_assign_workspace(
+    inquiry_status: str = "all",
+    source: str = "all",
+    assigned_to: str = "all",
+    q: str = "",
+    limit: int = 500,
+    offset: int = 0,
+    cu: User = Depends(get_current_user),
+):
+    """Manager assign workspace — all leads with advanced filters."""
+    ensure_roles(cu, ["admin", "manager"])
+    inquiry_key = (inquiry_status or "all").strip().lower()
+    if inquiry_key not in ASSIGN_INQUIRY_STATUSES:
+        raise HTTPException(400, detail=f"inquiry_status must be one of: {', '.join(ASSIGN_INQUIRY_STATUSES)}")
+    source_key = (source or "all").strip().lower()
+    if source_key not in ASSIGN_SOURCE_FILTERS:
+        raise HTTPException(400, detail=f"source must be one of: {', '.join(ASSIGN_SOURCE_FILTERS)}")
+
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
+    select = (
+        "lead_id,name,phone,email,source,stage,status,priority,call_status,"
+        "budget,location,assigned_to,assigned_at,assigned_by,created_at,updated_at"
+    )
+    all_leads = fetch_all_leads_merged(select)
     employees = sb_select("employees", {
         "select": "employee_id,name,email,role,department,active",
         "active": "eq.true",
         "order": "name.asc",
     })
-    assignable = [e for e in employees if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") == "admin"]
+    assignable = [e for e in employees if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") in {"admin", "manager"}]
+    assignable = assignable or employees
+
+    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q)
+    page = enrich_leads_with_employee_names(filtered[offset:offset + limit], assignable)
+    facets = compute_assign_workspace_facets(all_leads)
+
     return {
-        "total": len(queue),
-        "leads": queue,
-        "employees": assignable or employees,
+        "total": len(filtered),
+        "leads": page,
+        "employees": assignable,
+        "facets": facets,
+        "filters": {
+            "inquiry_status": inquiry_key,
+            "source": source_key,
+            "assigned_to": assigned_to or "all",
+            "q": q or "",
+        },
         "auto_assign_on_intake": False,
     }
+
+
+@api_router.post("/leads/bulk-manage")
+async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_current_user)):
+    """Manager bulk assign + change inquiry status (reassign not-interested leads, etc.)."""
+    ensure_roles(cu, ["admin", "manager"])
+    lead_ids = [lid.strip() for lid in (body.lead_ids or []) if lid and lid.strip()]
+    if len(lead_ids) < 1:
+        raise HTTPException(status_code=400, detail="Select at least one lead.")
+
+    preset = INQUIRY_ACTION_PRESETS.get((body.inquiry_action or "").strip().lower(), {})
+    updated: List[str] = []
+    skipped: List[Dict[str, str]] = []
+
+    for lead_id in lead_ids:
+        leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
+        old_lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
+        if not old_lead:
+            skipped.append({"lead_id": lead_id, "reason": "not_found"})
+            continue
+
+        if body.assigned_to:
+            assign_lead_to_employee(lead_id, old_lead, body.assigned_to.strip(), cu, reactivate=body.reactivate)
+            old_lead = {**old_lead, "assigned_to": body.assigned_to.strip(), "status": "active"}
+
+        patch: Dict[str, Any] = {"updated_at": now_utc().isoformat()}
+        for key in ("stage", "status", "priority", "call_status"):
+            val = preset.get(key) if key in preset else getattr(body, key, None)
+            if val is not None:
+                patch[key] = val
+        if patch.keys() - {"updated_at"}:
+            sb_update("leads", "lead_id", lead_id, patch)
+            update_cached_lead(lead_id, patch)
+            log_activity(cu, "manager_bulk_update", f"Manager updated lead inquiry/status ({body.inquiry_action or 'custom'})", lead_id=lead_id)
+        updated.append(lead_id)
+
+    if body.assigned_to:
+        sb_update("employees", "employee_id", body.assigned_to.strip(), {"last_assigned_at": now_utc().isoformat()})
+
+    return {"status": "success", "updated_count": len(updated), "updated": updated, "skipped": skipped}
 
 
 @api_router.post("/leads/bulk-assign")

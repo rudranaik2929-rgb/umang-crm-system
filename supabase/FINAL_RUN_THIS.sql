@@ -89,6 +89,10 @@ create index if not exists idx_integration_events_housing_checkpoint
   on integration_events(source, status, created_at desc)
   where source = 'Housing.com' and status = 'housing_sync_checkpoint';
 
+-- Manager assign workspace (advanced search filters)
+create index if not exists idx_leads_manager_filters on leads(status, stage, assigned_to, source);
+create index if not exists idx_leads_priority on leads(priority) where priority is not null;
+
 -- ---------------------------------------------------------------------
 -- 7. ROW LEVEL SECURITY (backend uses service role — allow all)
 -- ---------------------------------------------------------------------
