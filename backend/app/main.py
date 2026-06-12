@@ -4843,37 +4843,50 @@ async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
         "platforms": breakdown["platforms"],
     }
 
+def _last_n_month_keys(n: int = 12) -> List[str]:
+    """Calendar month keys YYYY-MM ending with current month."""
+    today = now_utc().date()
+    y, m = today.year, today.month
+    keys: List[str] = []
+    for _ in range(n):
+        keys.append(f"{y:04d}-{m:02d}")
+        m -= 1
+        if m == 0:
+            m = 12
+            y -= 1
+    return list(reversed(keys))
+
+
 @api_router.get("/stats/dashboard/graph")
 async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
-    # 1. Real leads per day (last 30 days)
     now = now_utc()
     start_date = (now - timedelta(days=30)).isoformat()
     graph_data = sb_select_parallel({
-        "leads": ("leads", {"select": "lead_id,created_at", "created_at": f"gte.{start_date}"}),
+        "leads": ("leads", {"select": "lead_id,created_at,source,status,stage", "created_at": f"gte.{(now - timedelta(days=400)).isoformat()}"}),
         "bookings": ("bookings", {"select": "booking_id,brokerage_amount,agreement_status,created_at"}),
         "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
     })
-    leads = graph_data["leads"]
-    # Deduplicate
     cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
-    leads = SESSION_CACHE["leads"] + [l for l in leads if l.get("lead_id") not in cache_lead_ids]
-    # if not leads: leads = DEMO_LEADS
-    
+    leads = SESSION_CACHE["leads"] + [l for l in graph_data["leads"] if l.get("lead_id") not in cache_lead_ids]
+    pipeline_leads = [l for l in dedupe_leads(leads) if is_pipeline_lead(l)]
+
     leads_by_day = []
-    days_map = {}
-    for i in range(30):
-        d = (now - timedelta(days=29 - i)).strftime("%Y-%m-%d")
-        days_map[d] = 0
-    
-    for l in leads:
-        d = l.get("created_at", "")[:10]
+    days_map = { (now - timedelta(days=29 - i)).strftime("%Y-%m-%d"): 0 for i in range(30) }
+    for l in pipeline_leads:
+        d = (l.get("created_at") or "")[:10]
         if d in days_map:
             days_map[d] += 1
-            
     for d, cnt in sorted(days_map.items()):
         leads_by_day.append({"date": d, "count": cnt})
 
-    # 2. Real revenue by month (last 12 months)
+    months_map = {k: 0 for k in _last_n_month_keys(12)}
+    for l in pipeline_leads:
+        mk = (l.get("created_at") or "")[:7]
+        if mk in months_map:
+            months_map[mk] += 1
+    leads_by_month = [{"month": mk, "count": months_map[mk]} for mk in sorted(months_map.keys())]
+
+    # Real revenue by month (last 12 calendar months)
     bookings = graph_data["bookings"]
     # Deduplicate
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
@@ -4885,22 +4898,22 @@ async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
     loans = SESSION_CACHE["loans"] + [ln for ln in loans if ln.get("loan_id") not in cache_lon_ids]
     
     rev_by_month = []
-    months_map = {}
-    for i in range(12):
-        d = (now - timedelta(days=(11 - i) * 30)).strftime("%Y-%m")
-        months_map[d] = 0.0
-        
+    rev_months_map = {k: 0.0 for k in _last_n_month_keys(12)}
     for b in bookings:
         if is_legacy_skeleton_booking(b):
             continue
         d = b.get("created_at", "")[:7]
-        if d in months_map:
-            months_map[d] += booking_brokerage_amount(b)
-
-    for d, rev in sorted(months_map.items()):
+        if d in rev_months_map:
+            rev_months_map[d] += booking_brokerage_amount(b)
+    for d, rev in sorted(rev_months_map.items()):
         rev_by_month.append({"month": d, "revenue": rev})
 
-    return {"leads_by_day": leads_by_day, "revenue_by_month": rev_by_month}
+    return {
+        "leads_by_day": leads_by_day,
+        "leads_by_month": leads_by_month,
+        "revenue_by_month": rev_by_month,
+        "total_leads_in_chart": sum(months_map.values()),
+    }
 
 @api_router.get("/activities")
 async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):

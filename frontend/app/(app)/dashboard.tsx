@@ -169,12 +169,15 @@ export default function Dashboard() {
     );
   }
 
-  const chartLeadData = (graphData?.leads_by_day || []).map((d: any) => ({
-    label: String(d.date || '').slice(8) || '-',
-    value: Number(d.count || 0),
-  }));
+  const chartLeadsPerMonth = (graphData?.leads_by_month || []).map((d: any) => {
+    const mk = String(d.month || '');
+    const label = mk
+      ? new Date(`${mk}-01T12:00:00`).toLocaleString('en-IN', { month: 'short' })
+      : '-';
+    return { label, value: Number(d.count || 0) };
+  });
   const chartRevenueData = (graphData?.revenue_by_month || []).map((d: any) => ({
-    label: new Date(`${d.month}-01`).toLocaleString('en', { month: 'short' }),
+    label: new Date(`${d.month}-01T12:00:00`).toLocaleString('en-IN', { month: 'short' }),
     value: Number(d.revenue || 0),
   }));
 
@@ -226,6 +229,31 @@ export default function Dashboard() {
             helper={model.campaigns ? `${model.campaigns} campaigns` : 'Team members'}
             onPress={() => router.push('/(app)/employees' as any)}
           />
+        </View>
+
+        <View style={styles.chartRow}>
+          <LineChart
+            title="Leads per Month"
+            subtitle="New enquiries received each month — last 12 months"
+            data={chartLeadsPerMonth.length ? chartLeadsPerMonth : [{ label: '-', value: 0 }]}
+            color={colors.primary}
+            unitLabel="leads"
+            defaultType="bar"
+            simple
+            testID="leads-per-month-chart"
+          />
+          {canSeeRevenue(user?.role, user?.email) && chartRevenueData.some((d) => d.value > 0) ? (
+            <LineChart
+              title="Brokerage per Month"
+              subtitle="Total brokerage collected — last 12 months"
+              data={chartRevenueData}
+              color={colors.warning}
+              formatValue={formatCompact}
+              defaultType="bar"
+              simple
+              testID="revenue-chart"
+            />
+          ) : null}
         </View>
 
         <Pressable
@@ -318,28 +346,6 @@ export default function Dashboard() {
           </ScrollView>
         </View>
 
-        <View style={styles.chartRow}>
-          <LineChart
-            title="Lead Volume"
-            subtitle="Daily new leads across the last 30 days"
-            data={chartLeadData.length ? chartLeadData : [{ label: '0', value: 0 }]}
-            color={colors.info}
-            unitLabel="leads"
-            defaultType="line"
-            testID="leads-chart"
-          />
-          {canSeeRevenue(user?.role, user?.email) && (
-            <LineChart
-              title="Brokerage Trend"
-              subtitle="Total brokerage collected per month — last 12 months"
-              data={chartRevenueData.length ? chartRevenueData : [{ label: '0', value: 0 }]}
-              color={colors.warning}
-              formatValue={formatCompact}
-              defaultType="bar"
-              testID="revenue-chart"
-            />
-          )}
-        </View>
       </ScrollView>
 
       <LeadSourceModal
@@ -561,6 +567,7 @@ const styles = StyleSheet.create({
   moreText: { fontSize: 11, fontWeight: '700', marginTop: 2 },
   emptyText: { fontSize: 11, fontStyle: 'italic', paddingVertical: 18, textAlign: 'center' },
   chartRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  chartFull: { flex: 1, minWidth: 320 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   followModal: { width: '92%', maxWidth: 560, maxHeight: '82%', borderWidth: 1, borderRadius: 12, padding: 18 },
   followModalHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 14 },

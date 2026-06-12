@@ -15,6 +15,8 @@ interface LineChartProps {
   defaultType?: 'line' | 'bar' | 'pie';
   // Word used in the summary line, e.g. "leads", "bookings".
   unitLabel?: string;
+  /** Hide line/bar/pie toggle — single simple bar chart */
+  simple?: boolean;
 }
 
 const PIE_COLORS = [
@@ -30,9 +32,9 @@ const PIE_COLORS = [
   '#F97316', // Vibrant Orange
 ];
 
-export function LineChart({ title, subtitle, data, color, formatValue, testID, defaultType = 'line', unitLabel }: LineChartProps) {
+export function LineChart({ title, subtitle, data, color, formatValue, testID, defaultType = 'line', unitLabel, simple = false }: LineChartProps) {
   const { colors } = useTheme();
-  const [chartType, setChartType] = useState<'line' | 'bar' | 'pie'>(defaultType);
+  const [chartType, setChartType] = useState<'line' | 'bar' | 'pie'>(simple ? 'bar' : defaultType);
   
   const c = color || '#3B82F6';
   const cleanColor = c.replace('#', '');
@@ -127,26 +129,28 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID, d
             </View>
           )}
         </View>
-        <View style={[styles.toggleRow, { backgroundColor: colors.surfaceAlt }]}>
-          {(['line', 'bar', 'pie'] as const).map((type) => (
-            <TouchableOpacity
-              key={type}
-              onPress={() => setChartType(type)}
-              style={[
-                styles.toggleButton,
-                chartType === type && { backgroundColor: colors.surface, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 1 }
-              ]}
-            >
-              <Text style={[
-                styles.toggleText,
-                { color: chartType === type ? colors.text : colors.textMuted },
-                chartType === type && { fontWeight: '700' }
-              ]}>
-                {type.toUpperCase()}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </View>
+        {!simple ? (
+          <View style={[styles.toggleRow, { backgroundColor: colors.surfaceAlt }]}>
+            {(['line', 'bar', 'pie'] as const).map((type) => (
+              <TouchableOpacity
+                key={type}
+                onPress={() => setChartType(type)}
+                style={[
+                  styles.toggleButton,
+                  chartType === type && { backgroundColor: colors.surface, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.1, shadowRadius: 1 }
+                ]}
+              >
+                <Text style={[
+                  styles.toggleText,
+                  { color: chartType === type ? colors.text : colors.textMuted },
+                  chartType === type && { fontWeight: '700' }
+                ]}>
+                  {type.toUpperCase()}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        ) : null}
       </View>
 
       {/* Graph Area */}
