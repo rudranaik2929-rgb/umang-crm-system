@@ -14,7 +14,7 @@ import { LineChart } from '../../src/components/LineChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
-import { STAGES, STAGE_COLORS, canSeeRevenue, stageLabel } from '../../src/lib/constants';
+import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, stageLabel } from '../../src/lib/constants';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
 const COLD_STAGES = ['new'];
@@ -50,6 +50,13 @@ export default function Dashboard() {
   const [leadsBucket, setLeadsBucket] = useState<string | null>(null);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user?.role) return;
+    if (!canAccessOwnerDashboard(user.role, user.email)) {
+      router.replace('/(app)/my-dashboard' as any);
+    }
+  }, [user?.role, user?.email, router]);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -173,7 +180,7 @@ export default function Dashboard() {
     value: Number(d.revenue || 0),
   }));
 
-  const showLeadAlerts = user?.role === 'admin' || user?.role === 'manager';
+  const showLeadAlerts = canAccessOwnerDashboard(user?.role, user?.email);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -266,7 +273,7 @@ export default function Dashboard() {
 
         <EmployeePerformance employees={employees} />
 
-        {(user?.role === 'admin' || user?.role === 'manager') && (
+        {canAccessOwnerDashboard(user?.role, user?.email) && (
           <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <View style={styles.panelHeader}>
               <View>

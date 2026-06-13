@@ -78,6 +78,11 @@ export function isOwner(role?: string | null, email?: string | null) {
   return role === 'admin' || (!!email && OWNER_EMAILS.includes(email.toLowerCase()));
 }
 
+/** Owner Dashboard (pipeline, revenue, full CRM) — admin/owner only, not manager. */
+export function canAccessOwnerDashboard(role?: string | null, email?: string | null) {
+  return role === 'admin' || isOwner(role, email);
+}
+
 const DEFAULT_ROUTES: Record<string, string> = {
   admin: '/(app)/dashboard',
   manager: '/(app)/my-dashboard',
@@ -101,11 +106,19 @@ const DEPRECATED_PAGE_KEYS = ['follow-ups', 'visits'];
 
 export function effectivePages(role?: string | null, email?: string | null, allowedPages?: string[] | null): string[] {
   const strip = (keys: string[]) => keys.filter((k) => !DEPRECATED_PAGE_KEYS.includes(k));
-  if (isOwner(role, email)) return strip(NAV_ITEMS.map((n) => n.key));
-  if (Array.isArray(allowedPages) && allowedPages.length > 0) {
-    return strip(Array.from(new Set(['my-dashboard', ...allowedPages])));
+  let pages: string[];
+  if (isOwner(role, email)) {
+    pages = strip(NAV_ITEMS.map((n) => n.key));
+  } else if (Array.isArray(allowedPages) && allowedPages.length > 0) {
+    pages = strip(Array.from(new Set(['my-dashboard', ...allowedPages])));
+  } else {
+    pages = strip(ROLE_ACCESS[role || 'admin'] || ROLE_ACCESS.admin);
   }
-  return strip(ROLE_ACCESS[role || 'admin'] || ROLE_ACCESS.admin);
+  // Manager always uses My Dashboard — never the owner Dashboard nav item.
+  if (role === 'manager') {
+    pages = pages.filter((k) => k !== 'dashboard');
+  }
+  return pages;
 }
 
 export function visibleNavFor(role?: string | null, email?: string | null, allowedPages?: string[] | null) {
@@ -139,7 +152,7 @@ export function canViewBookingFinance(role?: string | null, email?: string | nul
 }
 
 export function canAccess(role: string | null | undefined, page: string, email?: string | null, allowedPages?: string[] | null): boolean {
-  if (page === 'dashboard' && isOwner(role, email)) return true;
+  if (page === 'dashboard') return canAccessOwnerDashboard(role, email);
   return effectivePages(role, email, allowedPages).includes(page);
 }
 
@@ -150,6 +163,8 @@ export function pageKeyFromPathname(pathname?: string | null): string | null {
 }
 
 export function defaultRouteFor(role?: string | null, email?: string | null, allowedPages?: string[] | null): string {
+  if (canAccessOwnerDashboard(role, email) && role === 'admin') return DEFAULT_ROUTES.admin;
+  if (role === 'manager') return DEFAULT_ROUTES.manager;
   if (isOwner(role, email)) return DEFAULT_ROUTES.admin;
   // Prefer the role's natural landing if the employee has access to it,
   // otherwise land on the first granted service (always at least my-dashboard).

@@ -1056,6 +1056,13 @@ def ensure_roles(cu: User, allowed: Iterable[str]):
     if cu.role not in set(allowed) and cu.email != "htshpatil13@gmail.com":
         raise HTTPException(status_code=403, detail="You do not have permission for this action.")
 
+
+def ensure_owner_dashboard(cu: User) -> None:
+    """Owner Dashboard API — administrators only (not manager)."""
+    if cu.role == "admin" or cu.email in ("htshpatil13@gmail.com", "umang@admin"):
+        return
+    raise HTTPException(status_code=403, detail="Owner dashboard is for administrators only. Managers use My Dashboard.")
+
 def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
     if uid in HARDCODED_USERS:
         return dict(HARDCODED_USERS[uid])
@@ -4975,6 +4982,7 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
 # ---- Stats / Dashboard ----
 @api_router.get("/stats/dashboard")
 async def stats_dashboard(cu: User=Depends(get_current_user)):
+    ensure_owner_dashboard(cu)
     # Fetch all independent tables concurrently to cut dashboard latency.
     # Leads only needs classification/count columns here — skip the heavy
     # raw_payload JSON to keep the response small and fast.
@@ -5077,7 +5085,8 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
 
 @api_router.get("/stats/dashboard-bundle")
 async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
-    """One round-trip for owner dashboard — shares cached leads fetch across sections."""
+    """One round-trip for owner dashboard — administrators only."""
+    ensure_owner_dashboard(cu)
     stats, graph, employees, recent, leads_page = await asyncio.gather(
         stats_dashboard(cu),
         stats_dashboard_graph(cu),
@@ -5096,9 +5105,12 @@ async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
 
 @api_router.get("/stats/me-bundle")
 async def stats_me_bundle(cu: User = Depends(get_current_user)):
-    """One round-trip for My Dashboard."""
+    """One round-trip for My Dashboard (manager gets team performance too)."""
     me, graph = await asyncio.gather(stats_me(cu), stats_dashboard_graph(cu))
-    return {"me": me, "graph": graph}
+    payload: Dict[str, Any] = {"me": me, "graph": graph}
+    if cu.role == "manager":
+        payload["employees"] = await stats_employees(cu)
+    return payload
 
 
 @api_router.get("/stats/leads-by-source")

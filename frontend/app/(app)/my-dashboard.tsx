@@ -8,11 +8,12 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { LineChart } from '../../src/components/LineChart';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
-import { roleLabel } from '../../src/lib/constants';
+import { roleLabel, canAccessOwnerDashboard } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { MyActivityModal } from '../../src/components/MyActivityModal';
+import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -70,6 +71,7 @@ export default function MyDashboard() {
   const cached = getSnapshot<any>('my-dashboard');
   const [data, setData] = useState<any>(cached?.data ?? null);
   const [graphData, setGraphData] = useState<any>(cached?.graphData ?? null);
+  const [employees, setEmployees] = useState<any[]>(cached?.employees ?? []);
   const [loading, setLoading] = useState(!cached);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [activityMetric, setActivityMetric] = useState<string | null>(null);
@@ -80,15 +82,19 @@ export default function MyDashboard() {
       const bundle = res.data || {};
       setData(bundle.me);
       setGraphData(bundle.graph);
-      setSnapshot('my-dashboard', { data: bundle.me, graphData: bundle.graph });
+      setEmployees(Array.isArray(bundle.employees) ? bundle.employees : []);
+      setSnapshot('my-dashboard', {
+        data: bundle.me,
+        graphData: bundle.graph,
+        employees: bundle.employees || [],
+      });
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  // Manager/admin: Housing sync in background (server also auto-syncs every 5 min)
+  // Manager: Housing sync in background (server also auto-syncs every 5 min)
   useEffect(() => {
-    const role = user?.role;
-    if (role !== 'manager' && role !== 'admin') return;
+    if (user?.role !== 'manager') return;
     const syncHousing = () => {
       api.post('/integrations/housing/poll', {}).catch(() => {}).finally(() => { load(); });
     };
@@ -112,7 +118,7 @@ export default function MyDashboard() {
     );
   }
 
-  const role = data.role || 'admin';
+  const role = user?.role || data?.role || 'telecaller';
   const accent = ROLE_ACCENT[role] || colors.primary;
   const personal = data.personal;
   const leads = data.leads;
@@ -123,7 +129,7 @@ export default function MyDashboard() {
 
   return (
     <View style={{ flex: 1 }}>
-      <NewLeadPopup enabled={role === 'manager' || role === 'admin'} />
+      <NewLeadPopup enabled={role === 'manager'} />
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         <View style={{ flex: 1 }}>
           <TopBar title="My Dashboard" subtitle={`${roleLabel(role)} workspace`} />
@@ -218,12 +224,37 @@ export default function MyDashboard() {
           </View>
         )}
 
-        {(role === 'manager' || role === 'admin') && (
+        {(role === 'manager') && (
           <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16, marginTop: 8 }]}>
             <Text style={[styles.section, { color: colors.textMuted, marginBottom: 10 }]}>TEAM ASSIGNMENTS</Text>
             <AssignLeadsPanel compact />
           </View>
         )}
+
+        {role === 'manager' && (
+          <View style={{ marginTop: 16 }}>
+            <EmployeePerformance employees={employees} />
+          </View>
+        )}
+
+        {role === 'manager' && graphData?.leads_by_month?.length ? (
+          <View style={{ marginTop: 16 }}>
+            <LineChart
+              title="Team Leads per Month"
+              subtitle="New enquiries — last 12 months"
+              data={graphData.leads_by_month.map((d: any) => ({
+                label: d.month
+                  ? new Date(`${d.month}-01T12:00:00`).toLocaleString('en-IN', { month: 'short' })
+                  : '-',
+                value: Number(d.count || 0),
+              }))}
+              color={colors.primary}
+              unitLabel="leads"
+              defaultType="bar"
+              simple
+            />
+          </View>
+        ) : null}
 
         {(role === 'telecaller' || role === 'site_visit' || role === 'sales_executive') && (
           <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16 }]}>
