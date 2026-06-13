@@ -419,7 +419,22 @@ def classify_lead_platform(source: Optional[str]) -> str:
         or "metalead" in normalized
     ):
         return "meta"
-    if normalized in {"manual", "manualentry", "walkin", "referral", "direct", "call"} or normalized.startswith("manual"):
+    # "Database" = leads entered/owned by the team: manual add, walk-in,
+    # referral, website enquiry, and Excel/CSV bulk uploads.
+    MANUAL_SOURCES = {
+        "manual", "manualentry", "walkin", "walkins", "referral", "direct", "call",
+        "database", "db", "bulkimport", "bulk", "import", "excel", "excelimport",
+        "csv", "csvimport", "spreadsheet", "offline", "website", "websiteenquiry",
+        "webenquiry", "enquiry", "inquiry", "contactform",
+    }
+    if (
+        normalized in MANUAL_SOURCES
+        or normalized.startswith("manual")
+        or normalized.startswith("bulkimport")
+        or normalized.startswith("import")
+        or normalized.startswith("excel")
+        or normalized.startswith("csv")
+    ):
         return "manual"
     return "other"
 
@@ -3340,7 +3355,10 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         log_activity(cu, "bulk_import", f"Lead imported via bulk upload: {name}", lead_id=lid)
         imported_leads.append(result or lead)
         imported_count += 1
-        
+
+    # Surface imported leads instantly in dashboard / Database section.
+    invalidate_leads_cache()
+
     return {
         "status": "success",
         "imported_count": imported_count,
