@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable } from
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { isAdmin } from '../../src/lib/constants';
 
@@ -21,12 +21,12 @@ function formatClockTime(value?: string | null) {
 export default function FollowUpsPage() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [items, setItems] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedFu = getSnapshot<any[]>('follow-ups-page');
+  const [items, setItems] = useState<any[]>(cachedFu ?? []);
+  const [loading, setLoading] = useState(!cachedFu);
   const managerView = isAdmin(user?.role) || user?.role === 'manager';
 
   const load = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await api.get('/visit-followups');
       let list = Array.isArray(res.data) ? res.data : [];
@@ -43,6 +43,7 @@ export default function FollowUpsPage() {
         }
       }
       setItems(list);
+      setSnapshot('follow-ups-page', list);
     } finally {
       setLoading(false);
     }

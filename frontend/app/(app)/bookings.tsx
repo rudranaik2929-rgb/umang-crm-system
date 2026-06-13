@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
@@ -62,9 +62,10 @@ function completedTasksFor(booking: any): string[] {
 export default function Bookings() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [bookings, setBookings] = useState<any[]>([]);
-  const [leads, setLeads] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedBookings = getSnapshot<any>('bookings-page');
+  const [bookings, setBookings] = useState<any[]>(cachedBookings?.bookings ?? []);
+  const [leads, setLeads] = useState<any[]>(cachedBookings?.leads ?? []);
+  const [loading, setLoading] = useState(!cachedBookings);
   const [showCreate, setShowCreate] = useState(false);
   const [editingBooking, setEditingBooking] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -91,11 +92,13 @@ export default function Bookings() {
       }
       setBookings(bookingData);
       const bookedLeadIds = new Set(allBookings.map((x: any) => x.lead_id));
-      setLeads((l.data || []).filter((x: any) =>
+      const queueLeads = (l.data || []).filter((x: any) =>
         x.status !== 'negative'
         && !bookedLeadIds.has(x.lead_id)
         && leadInBookingQueue(x)
-      ));
+      );
+      setLeads(queueLeads);
+      setSnapshot('bookings-page', { bookings: bookingData, leads: queueLeads });
     } finally { setLoading(false); }
   }, [user]);
 

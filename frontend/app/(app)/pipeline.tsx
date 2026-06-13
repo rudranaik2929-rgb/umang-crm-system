@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Anima
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { STAGES, STAGE_COLORS, stageLabel } from '../../src/lib/constants';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
@@ -13,14 +13,17 @@ import { Ionicons } from '@expo/vector-icons';
 export default function Pipeline() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [leads, setLeads] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cached = getSnapshot<any[]>('pipeline-leads');
+  const [leads, setLeads] = useState<any[]>(cached ?? []);
+  const [loading, setLoading] = useState(!cached);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const r = await api.get('/leads');
-      setLeads(r.data.filter((l: any) => l.status !== 'negative' && l.stage !== 'broker' && l.lead_type !== 'brokerage'));
+      const next = (r.data || []).filter((l: any) => l.status !== 'negative' && l.stage !== 'broker' && l.lead_type !== 'brokerage');
+      setLeads(next);
+      setSnapshot('pipeline-leads', next);
     } finally {
       setLoading(false);
     }

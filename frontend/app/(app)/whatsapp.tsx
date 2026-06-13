@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,10 +11,11 @@ const STATUS_COLOR: Record<string, string> = { draft: '#94A3B8', scheduled: '#02
 
 export default function WhatsApp() {
   const { colors } = useTheme();
+  const cachedWa = getSnapshot<any>('whatsapp-page');
   const [tab, setTab] = useState<'campaigns' | 'templates'>('campaigns');
-  const [campaigns, setCampaigns] = useState<any[]>([]);
-  const [templates, setTemplates] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [campaigns, setCampaigns] = useState<any[]>(cachedWa?.campaigns ?? []);
+  const [templates, setTemplates] = useState<any[]>(cachedWa?.templates ?? []);
+  const [loading, setLoading] = useState(!cachedWa);
   const [showCampaign, setShowCampaign] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -22,7 +23,10 @@ export default function WhatsApp() {
   const load = useCallback(async () => {
     try {
       const [c, t] = await Promise.all([api.get('/campaigns'), api.get('/templates')]);
-      setCampaigns(c.data || []); setTemplates(t.data || []);
+      const nextC = c.data || [];
+      const nextT = t.data || [];
+      setCampaigns(nextC); setTemplates(nextT);
+      setSnapshot('whatsapp-page', { campaigns: nextC, templates: nextT });
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);

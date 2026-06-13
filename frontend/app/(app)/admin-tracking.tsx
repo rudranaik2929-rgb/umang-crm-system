@@ -2,14 +2,15 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmployeeMap } from '../../src/components/EmployeeMap';
 import { Ionicons } from '@expo/vector-icons';
 
 export default function AdminTracking() {
   const { colors } = useTheme();
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedTracking = getSnapshot<any[]>('admin-tracking-page');
+  const [employees, setEmployees] = useState<any[]>(cachedTracking ?? []);
+  const [loading, setLoading] = useState(!cachedTracking);
 
   const load = useCallback(async () => {
     try {
@@ -21,6 +22,7 @@ export default function AdminTracking() {
         return new Date(b.last_seen_at).getTime() - new Date(a.last_seen_at).getTime();
       });
       setEmployees(sorted);
+      setSnapshot('admin-tracking-page', sorted);
     } finally {
       setLoading(false);
     }
@@ -28,7 +30,7 @@ export default function AdminTracking() {
 
   useEffect(() => {
     load();
-    const interval = setInterval(load, 30000); // Refresh every 30 seconds
+    const interval = setInterval(load, 60000);
     return () => clearInterval(interval);
   }, [load]);
 

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { roleLabel } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { formatBudgetStringLakhs } from '../../src/lib/leadFormat';
@@ -47,14 +47,15 @@ const INQUIRY_COLORS: Record<string, string> = {
 export default function AssignLeads() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [leads, setLeads] = useState<any[]>([]);
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [assignmentStats, setAssignmentStats] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [facets, setFacets] = useState<any>(null);
+  const cachedAssign = getSnapshot<any>('assign-leads-page');
+  const [leads, setLeads] = useState<any[]>(cachedAssign?.leads ?? []);
+  const [employees, setEmployees] = useState<any[]>(cachedAssign?.employees ?? []);
+  const [assignmentStats, setAssignmentStats] = useState<any[]>(cachedAssign?.assignmentStats ?? []);
+  const [total, setTotal] = useState(cachedAssign?.total ?? 0);
+  const [facets, setFacets] = useState<any>(cachedAssign?.facets ?? null);
   const [filters, setFilters] = useState<AssignWorkspaceFilters>(DEFAULT_FILTERS);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!cachedAssign);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [openLead, setOpenLead] = useState<string | null>(null);
@@ -64,20 +65,31 @@ export default function AssignLeads() {
   const [message, setMessage] = useState<string | null>(null);
 
   const load = useCallback(async (activeFilters = filters) => {
-    setLoading(true);
     try {
       const [ws, s] = await Promise.all([
         api.get('/leads/assign-workspace', { params: activeFilters }),
         api.get('/stats/assignment'),
       ]);
-      setLeads(ws.data?.leads || []);
-      setEmployees(ws.data?.employees || []);
-      setTotal(Number(ws.data?.total ?? 0));
-      setFacets(ws.data?.facets || null);
-      setAssignmentStats(s.data?.employees || []);
+      const nextLeads = ws.data?.leads || [];
+      const nextEmployees = ws.data?.employees || [];
+      const nextTotal = Number(ws.data?.total ?? 0);
+      const nextFacets = ws.data?.facets || null;
+      const nextStats = s.data?.employees || [];
+      setLeads(nextLeads);
+      setEmployees(nextEmployees);
+      setTotal(nextTotal);
+      setFacets(nextFacets);
+      setAssignmentStats(nextStats);
       setSelected(new Set());
       setBulkEmployeeId(null);
       setBulkStatusAction(null);
+      const isDefault = activeFilters.inquiry_status === 'all' && activeFilters.source === 'all'
+        && activeFilters.assigned_to === 'all' && !activeFilters.q;
+      if (isDefault) {
+        setSnapshot('assign-leads-page', {
+          leads: nextLeads, employees: nextEmployees, total: nextTotal, facets: nextFacets, assignmentStats: nextStats,
+        });
+      }
     } finally {
       setLoading(false);
     }

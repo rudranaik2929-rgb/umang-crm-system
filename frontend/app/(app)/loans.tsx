@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
@@ -33,9 +33,10 @@ const STATUS_COLOR: Record<string, string> = {
 export default function Loans() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [loans, setLoans] = useState<any[]>([]);
-  const [leads, setLeads] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedLoans = getSnapshot<any>('loans-page');
+  const [loans, setLoans] = useState<any[]>(cachedLoans?.loans ?? []);
+  const [leads, setLeads] = useState<any[]>(cachedLoans?.leads ?? []);
+  const [loading, setLoading] = useState(!cachedLoans);
   const [showCreate, setShowCreate] = useState(false);
   const [editingLoan, setEditingLoan] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -58,11 +59,13 @@ export default function Loans() {
       }
       setLoans(loanData);
       const loanLeadIds = new Set(allLoans.map((x: any) => x.lead_id));
-      setLeads((l.data || []).filter((x: any) =>
+      const queueLeads = (l.data || []).filter((x: any) =>
         x.status !== 'negative'
         && !loanLeadIds.has(x.lead_id)
         && leadInLoanQueue(x)
-      ));
+      );
+      setLeads(queueLeads);
+      setSnapshot('loans-page', { loans: loanData, leads: queueLeads });
     } finally { setLoading(false); }
   }, [user]);
   useEffect(() => { load(); }, [load]);

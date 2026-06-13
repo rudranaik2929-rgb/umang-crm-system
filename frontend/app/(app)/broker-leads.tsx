@@ -3,20 +3,23 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { Ionicons } from '@expo/vector-icons';
 export default function BrokerLeads() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [leads, setLeads] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedBroker = getSnapshot<any[]>('broker-leads-page');
+  const [leads, setLeads] = useState<any[]>(cachedBroker ?? []);
+  const [loading, setLoading] = useState(!cachedBroker);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const r = await api.get('/broker-leads');
-      setLeads(Array.isArray(r.data?.leads) ? r.data.leads : []);
+      const next = Array.isArray(r.data?.leads) ? r.data.leads : [];
+      setLeads(next);
+      setSnapshot('broker-leads-page', next);
     } finally {
       setLoading(false);
     }

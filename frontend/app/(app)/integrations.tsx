@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from
 import { Ionicons } from '@expo/vector-icons';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api, BACKEND } from '../../src/lib/api';
+import { api, BACKEND, getSnapshot, setSnapshot } from '../../src/lib/api';
 
 type IntegrationStatus = {
   facebook?: {
@@ -62,19 +62,19 @@ type MetaLeadRow = {
 
 export default function Integrations() {
   const { colors } = useTheme();
-  const [status, setStatus] = useState<IntegrationStatus | null>(null);
-  const [platforms, setPlatforms] = useState<PlatformBreakdown[]>([]);
-  const [housingVerify, setHousingVerify] = useState<HousingVerify | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cachedInteg = getSnapshot<any>('integrations-page');
+  const [status, setStatus] = useState<IntegrationStatus | null>(cachedInteg?.status ?? null);
+  const [platforms, setPlatforms] = useState<PlatformBreakdown[]>(cachedInteg?.platforms ?? []);
+  const [housingVerify, setHousingVerify] = useState<HousingVerify | null>(cachedInteg?.housingVerify ?? null);
+  const [loading, setLoading] = useState(!cachedInteg);
   const [syncing, setSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [fbEvents, setFbEvents] = useState<any[]>([]);
-  const [fbVerify, setFbVerify] = useState<FacebookVerify | null>(null);
-  const [metaLeads, setMetaLeads] = useState<MetaLeadRow[]>([]);
+  const [fbEvents, setFbEvents] = useState<any[]>(cachedInteg?.fbEvents ?? []);
+  const [fbVerify, setFbVerify] = useState<FacebookVerify | null>(cachedInteg?.fbVerify ?? null);
+  const [metaLeads, setMetaLeads] = useState<MetaLeadRow[]>(cachedInteg?.metaLeads ?? []);
   const [metaSyncing, setMetaSyncing] = useState(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
     try {
       const [s, plat, verify, fb, fbV, metaList] = await Promise.all([
         api.get('/integrations/status'),
@@ -84,12 +84,22 @@ export default function Integrations() {
         api.get('/integrations/facebook/verify').catch(() => ({ data: null })),
         api.get('/leads/by-platform/meta', { params: { limit: 50 } }).catch(() => ({ data: { leads: [] } })),
       ]);
-      setStatus(s.data || {});
-      setPlatforms(Array.isArray(plat.data?.platforms) ? plat.data.platforms : []);
-      setHousingVerify(verify.data || null);
-      setFbEvents(Array.isArray(fb.data?.events) ? fb.data.events : []);
-      setFbVerify(fbV.data || null);
-      setMetaLeads(Array.isArray(metaList.data?.leads) ? metaList.data.leads : []);
+      const nextStatus = s.data || {};
+      const nextPlatforms = Array.isArray(plat.data?.platforms) ? plat.data.platforms : [];
+      const nextHousing = verify.data || null;
+      const nextEvents = Array.isArray(fb.data?.events) ? fb.data.events : [];
+      const nextFbVerify = fbV.data || null;
+      const nextMeta = Array.isArray(metaList.data?.leads) ? metaList.data.leads : [];
+      setStatus(nextStatus);
+      setPlatforms(nextPlatforms);
+      setHousingVerify(nextHousing);
+      setFbEvents(nextEvents);
+      setFbVerify(nextFbVerify);
+      setMetaLeads(nextMeta);
+      setSnapshot('integrations-page', {
+        status: nextStatus, platforms: nextPlatforms, housingVerify: nextHousing,
+        fbEvents: nextEvents, fbVerify: nextFbVerify, metaLeads: nextMeta,
+      });
     } finally {
       setLoading(false);
     }

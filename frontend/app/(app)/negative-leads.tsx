@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
@@ -12,14 +12,17 @@ import { Ionicons } from '@expo/vector-icons';
 export default function NegativeLeads() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [leads, setLeads] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedNeg = getSnapshot<any[]>('negative-leads-page');
+  const [leads, setLeads] = useState<any[]>(cachedNeg ?? []);
+  const [loading, setLoading] = useState(!cachedNeg);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
       const r = await api.get('/leads', { params: { status_: 'negative', limit: 200 } });
-      setLeads(r.data || []);
+      const next = r.data || [];
+      setLeads(next);
+      setSnapshot('negative-leads-page', next);
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);

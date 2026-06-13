@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { ROLES, roleLabel, ALL_SERVICES } from '../../src/lib/constants';
@@ -44,15 +44,18 @@ function pagesForEmployee(employee: { allowed_pages?: unknown; role?: string }) 
 
 export default function Employees() {
   const { colors } = useTheme();
-  const [employees, setEmployees] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
+  const cachedEmployees = getSnapshot<any[]>('employees-page');
+  const [employees, setEmployees] = useState<any[]>(cachedEmployees ?? []);
+  const [loading, setLoading] = useState(!cachedEmployees);
   const [showAdd, setShowAdd] = useState(false);
   const [editEmployee, setEditEmployee] = useState<any | null>(null);
 
   const load = useCallback(async () => {
     try {
       const r = await api.get('/employees');
-      setEmployees(r.data || []);
+      const next = r.data || [];
+      setEmployees(next);
+      setSnapshot('employees-page', next);
     } catch (e: any) {
       if (e?.response?.status === 401) {
         alert('Session expired. Please log in again.');

@@ -144,7 +144,10 @@ export default function Dashboard() {
     };
   }, [leads, stats, buckets]);
 
-  if (loading) {
+  // Only block the whole screen when there is no cached data yet.
+  const hasData = !!stats || leads.length > 0;
+
+  if (loading && !hasData) {
     return (
       <View style={{ flex: 1 }}>
         <TopBar title="Dashboard" />
@@ -155,7 +158,7 @@ export default function Dashboard() {
     );
   }
 
-  if (loadError) {
+  if (loadError && !hasData) {
     return (
       <View style={{ flex: 1 }}>
         <TopBar title="Dashboard" />
