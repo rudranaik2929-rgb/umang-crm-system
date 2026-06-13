@@ -213,7 +213,13 @@ def sb_headers():
 def sb_url(table: str) -> str:
     return f"{SUPABASE_URL}/rest/v1/{table}"
 
-_http = httpx.Client(timeout=15)
+_http = httpx.Client(timeout=20, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
+
+# Short-lived caches — cut repeated full-table Supabase reads on dashboard/login.
+LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "25"))
+_USER_CACHE_TTL_SEC = int(os.environ.get("USER_CACHE_TTL_SEC", "300"))
+_leads_cache: Dict[str, Any] = {"ts": 0.0, "select": "", "data": []}
+_user_profile_cache: Dict[str, Dict[str, Any]] = {}
 
 def _b64url_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -482,10 +488,23 @@ def sb_select_all(table: str, params: Optional[dict] = None, page_size: int = 10
     return out
 
 
+def invalidate_leads_cache() -> None:
+    _leads_cache["ts"] = 0.0
+
+
 def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
-    """Full leads table + session cache — use for every dashboard count/list."""
+    """Full leads table + session cache — cached briefly so dashboard endpoints share one fetch."""
+    now = time.time()
+    if (
+        _leads_cache["ts"]
+        and (now - float(_leads_cache["ts"])) < LEADS_CACHE_TTL_SEC
+        and _leads_cache.get("select") == select
+    ):
+        return _leads_cache["data"]
     db_leads = sb_select_all("leads", {"select": select, "order": "created_at.desc"})
-    return merge_leads_with_cache(db_leads)
+    merged = merge_leads_with_cache(db_leads)
+    _leads_cache.update({"ts": now, "select": select, "data": merged})
+    return merged
 
 
 def clean_leads_for_platform_stats(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1028,7 +1047,10 @@ def ensure_roles(cu: User, allowed: Iterable[str]):
 def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
     if uid in HARDCODED_USERS:
         return dict(HARDCODED_USERS[uid])
-    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "*"})
+    cached = _user_profile_cache.get(uid)
+    if cached and (time.time() - float(cached.get("_cached_at", 0))) < _USER_CACHE_TTL_SEC:
+        return {k: v for k, v in cached.items() if k != "_cached_at"}
+    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "user_id,email,name,role,employee_id,acting_as_employee_id,created_at"})
     if not users:
         raise HTTPException(401, "User not found")
     u = users[0]
@@ -1042,10 +1064,12 @@ def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
         })
         if emps and emps[0].get("active") is False:
             raise HTTPException(401, "Account is disabled. Contact your manager.")
+    _user_profile_cache[uid] = {**u, "_cached_at": time.time()}
     return u
 
 def invalidate_sessions_for_user(user_id: str):
     """Force re-login for one user (e.g. after password reset). Never clears all sessions."""
+    _user_profile_cache.pop(user_id, None)
     sb_delete("sessions", "user_id", user_id)
     for tok, sess in list(LOCAL_SESSIONS.items()):
         if (sess.get("user") or {}).get("user_id") == user_id:
@@ -1071,18 +1095,25 @@ async def get_current_user(request: Request) -> User:
             u["acting_as_employee_id"] = act_as
         return User(**u)
 
-    # 2. Look up session in Supabase, or fall back to a valid signed JWT so admin
-    #    stays logged in after employee delete/edit (which must not wipe all sessions).
-    rows = sb_select("sessions", {"session_token": f"eq.{token}", "select": "*"})
+    # 2. Valid JWT — skip sessions table (saves a Supabase round-trip on every API call)
+    if jwt_payload and jwt_payload.get("sub"):
+        uid = jwt_payload["sub"]
+        exp = datetime.fromtimestamp(int(jwt_payload["exp"]), tz=timezone.utc).isoformat()
+        u = _resolve_user_by_id(uid, exp)
+        LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
+        act_as = request.headers.get("X-Acting-As")
+        if act_as:
+            u["acting_as_employee_id"] = act_as
+        return User(**u)
+
+    # 3. Legacy session row in Supabase (non-JWT tokens)
+    rows = sb_select("sessions", {"session_token": f"eq.{token}", "select": "user_id,expires_at"})
     if rows:
         sess = rows[0]
         exp = sess.get("expires_at", "")
         if exp and datetime.fromisoformat(exp.replace("Z","+00:00")) <= now_utc():
             raise HTTPException(401, "Session expired")
         uid = sess["user_id"]
-    elif jwt_payload and jwt_payload.get("sub"):
-        uid = jwt_payload["sub"]
-        exp = datetime.fromtimestamp(int(jwt_payload["exp"]), tz=timezone.utc).isoformat()
     else:
         raise HTTPException(401, "Invalid session")
 
@@ -1142,7 +1173,7 @@ async def auth_session(request: Request, response: Response):
     lookup_email = EMAIL_ALIASES.get(email, email)
     
     # Query real users table
-    users = sb_select("users", {"email": f"eq.{lookup_email}", "select": "*"})
+    users = sb_select("users", {"email": f"eq.{lookup_email}", "select": "user_id,email,name,role,employee_id,acting_as_employee_id,password_hash,password,created_at"})
     if not users:
         raise HTTPException(401, "Invalid email or password")
     
@@ -1394,6 +1425,7 @@ def update_cached_lead(lead_id: str, data: dict):
         ({**l, **data} if l.get("lead_id") == lead_id else l)
         for l in SESSION_CACHE["leads"]
     ]
+    invalidate_leads_cache()
 
 def first_related_record(table: str, cache_key: str, lead_id: str):
     rows = sb_select(table, {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
@@ -2003,6 +2035,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         result = sb_insert("leads", {k: v for k, v in base_lead.items() if v is not None})
     lead_record = result or base_lead
     SESSION_CACHE["leads"].insert(0, lead_record)
+    invalidate_leads_cache()
     if brokerage:
         log_activity(actor, "broker_lead_received", f"Brokerage lead stored for future: {normalized['name']} ({source})", lead_id=lead_id)
     else:
@@ -3305,6 +3338,7 @@ async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
     result = sb_insert("leads", lead)
     # Always add to session cache for immediate responsiveness
     SESSION_CACHE["leads"].insert(0, result or lead)
+    invalidate_leads_cache()
     log_activity(cu, "manual_enquiry", f"Manual lead entry created for {p.name}.", lead_id=lid)
     return result or lead
 
@@ -3323,16 +3357,21 @@ async def list_leads(
 ):
     limit = min(max(limit, 1), 500)
     offset = max(offset, 0)
-    params = {"select": "*", "order": "created_at.desc"}
+    list_fields = (
+        "lead_id,name,phone,email,source,stage,status,lead_type,priority,call_status,"
+        "budget,location,property_type,assigned_to,assigned_at,follow_up_at,created_at,updated_at,"
+        "external_lead_id,starred"
+    )
+    params: Dict[str, str] = {"select": list_fields, "order": "created_at.desc"}
     if stage: params["stage"] = f"eq.{stage}"
     if status_: params["status"] = f"eq.{status_}"
     if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
     if source: params["source"] = f"ilike.*{source}*"
 
-    if stage or status_ or assigned_to or source:
-        leads = sb_select("leads", params)
-    else:
-        leads = sb_select_all("leads", params)
+    # Paginate at the database — never pull the entire leads table for a list view.
+    db_fetch = min(limit + offset + 50, 500)
+    params["limit"] = str(db_fetch)
+    leads = sb_select("leads", params)
     
     # Filter session cache to match the query parameters
     filtered_cache = []
@@ -3493,12 +3532,18 @@ async def workspace_leads(
         raise HTTPException(403, detail="Employee profile required for workspace")
 
     limit = min(max(limit, 1), 500)
-    all_leads = fetch_all_leads_merged()
+    select = "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,budget,location"
     if cu.role in ["admin", "manager"] and not cu.acting_as_employee_id:
+        all_leads = fetch_all_leads_merged(select)
         emp_leads = all_leads
         role = "telecaller"
     else:
-        emp_leads = [l for l in all_leads if l.get("assigned_to") == emp_id]
+        db_params = {"select": select, "assigned_to": f"eq.{emp_id}", "order": "created_at.desc"}
+        db_leads = sb_select_all("leads", db_params)
+        cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") == emp_id]
+        cache_ids = {l.get("lead_id") for l in cache_slice}
+        all_leads = cache_slice + [l for l in db_leads if l.get("lead_id") not in cache_ids]
+        emp_leads = all_leads
         emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "role", "limit": "1"})
         role = emps[0].get("role") if emps else cu.role
 
@@ -5031,7 +5076,11 @@ async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):
 @api_router.get("/stats/me")
 async def stats_me(cu: User=Depends(get_current_user)):
     activity_keys = actor_activity_keys(cu)
-    db_activities = sb_select_all("activities", {"select": "*", "order": "created_at.desc"})
+    db_activities = sb_select("activities", {
+        "select": "activity_id,user_id,created_at,type,text,lead_id",
+        "order": "created_at.desc",
+        "limit": "1500",
+    })
     cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     all_activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
     if cu.role == "admin":
@@ -5040,11 +5089,18 @@ async def stats_me(cu: User=Depends(get_current_user)):
         activities = [a for a in all_activities if a.get("user_id") in activity_keys]
 
     emp_id = cu.acting_as_employee_id or cu.employee_id
-    all_leads = fetch_all_leads_merged("lead_id,stage,status,assigned_to,follow_up_at")
+    lead_select = "lead_id,stage,status,assigned_to,follow_up_at,priority,call_status,created_at"
     if cu.role != "admin" and emp_id:
-        leads = [l for l in all_leads if l.get("assigned_to") == emp_id]
+        db_leads = sb_select_all("leads", {
+            "select": lead_select,
+            "assigned_to": f"eq.{emp_id}",
+            "order": "created_at.desc",
+        })
+        cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") == emp_id]
+        cache_ids = {l.get("lead_id") for l in cache_slice}
+        leads = cache_slice + [l for l in db_leads if l.get("lead_id") not in cache_ids]
     else:
-        leads = all_leads
+        leads = fetch_all_leads_merged(lead_select)
 
     assignment = compute_employee_assignment_stats(leads, cu.role)
     positives = assignment["assigned_positive"]
@@ -5244,8 +5300,12 @@ async def list_employee_metric_leads(
 
 @api_router.get("/stats/employees")
 async def stats_employees(cu: User=Depends(get_current_user)):
-    employees = sb_select("employees", {"select": "*"})
-    db_activities = sb_select_all("activities", {"select": "user_id,created_at,type"})
+    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id"})
+    db_activities = sb_select("activities", {
+        "select": "user_id,created_at,type",
+        "order": "created_at.desc",
+        "limit": "2000",
+    })
     cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
     all_leads = fetch_all_leads_merged(

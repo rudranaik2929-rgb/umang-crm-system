@@ -5,7 +5,7 @@ import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { LineChart } from '../../src/components/LineChart';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { roleLabel } from '../../src/lib/constants';
@@ -67,9 +67,10 @@ export default function MyDashboard() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const router = useRouter();
-  const [data, setData] = useState<any>(null);
-  const [graphData, setGraphData] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const cached = getSnapshot<any>('my-dashboard');
+  const [data, setData] = useState<any>(cached?.data ?? null);
+  const [graphData, setGraphData] = useState<any>(cached?.graphData ?? null);
+  const [loading, setLoading] = useState(!cached);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [activityMetric, setActivityMetric] = useState<string | null>(null);
 
@@ -81,24 +82,21 @@ export default function MyDashboard() {
       ]);
       setData(r.data);
       setGraphData(g.data);
+      setSnapshot('my-dashboard', { data: r.data, graphData: g.data });
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
 
-  // Manager/admin: pull Housing.com leads every 5 min (backup to server auto-sync)
+  // Manager/admin: Housing sync in background (server also auto-syncs every 5 min)
   useEffect(() => {
     const role = user?.role;
     if (role !== 'manager' && role !== 'admin') return;
-    const syncHousing = async () => {
-      try {
-        await api.post('/integrations/housing/poll', {}).catch(() => {});
-      } finally {
-        load();
-      }
+    const syncHousing = () => {
+      api.post('/integrations/housing/poll', {}).catch(() => {}).finally(() => { load(); });
     };
-    syncHousing();
+    const t = setTimeout(syncHousing, 4000);
     const id = setInterval(syncHousing, 5 * 60 * 1000);
-    return () => clearInterval(id);
+    return () => { clearTimeout(t); clearInterval(id); };
   }, [user?.role, load]);
 
   // Auto-refresh every 30 seconds for live feel

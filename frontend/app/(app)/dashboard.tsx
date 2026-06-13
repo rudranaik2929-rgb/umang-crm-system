@@ -54,20 +54,17 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [s, g, l, e, b] = await Promise.allSettled([
+      const [s, g, l, e] = await Promise.allSettled([
         api.get('/stats/dashboard'),
         api.get('/stats/dashboard/graph'),
-        api.get('/leads', { params: { limit: 500 } }),
+        api.get('/leads', { params: { limit: 200 } }),
         api.get('/stats/employees'),
-        api.get('/stats/lead-buckets'),
       ]);
       const nextStats = s.status === 'fulfilled' ? (s.value.data || {}) : {};
       const nextGraph = g.status === 'fulfilled' ? (g.value.data || {}) : {};
       const nextLeads = l.status === 'fulfilled' && Array.isArray(l.value.data) ? l.value.data : [];
       const nextEmployees = e.status === 'fulfilled' && Array.isArray(e.value.data) ? e.value.data : [];
-      const nextBuckets = b.status === 'fulfilled'
-        ? (b.value.data || {})
-        : (nextStats.lead_buckets || {});
+      const nextBuckets = nextStats.lead_buckets || {};
       setStats(nextStats);
       setGraphData(nextGraph);
       setLeads(nextLeads);
@@ -96,19 +93,16 @@ export default function Dashboard() {
 
   useEffect(() => {
     const pollMs = 5 * 60 * 1000;
-    const syncIntegrations = async () => {
-      try {
-        await Promise.all([
-          api.post('/integrations/housing/poll', {}).catch(() => {}),
-          api.post('/integrations/facebook/poll', {}).catch(() => {}),
-        ]);
-      } finally {
-        load();
-      }
-    };
     load();
-    syncIntegrations();
-    const interval = setInterval(syncIntegrations, pollMs);
+    // Housing/Meta sync runs in background — never block dashboard paint on it.
+    const runBackgroundSync = () => {
+      Promise.all([
+        api.post('/integrations/housing/poll', {}).catch(() => {}),
+        api.post('/integrations/facebook/poll', {}).catch(() => {}),
+      ]).finally(() => { load(); });
+    };
+    setTimeout(runBackgroundSync, 3000);
+    const interval = setInterval(runBackgroundSync, pollMs);
     return () => clearInterval(interval);
   }, [load]);
 

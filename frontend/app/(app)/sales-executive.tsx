@@ -4,7 +4,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LeadQueueTable } from '../../src/components/LeadQueueTable';
@@ -18,9 +18,10 @@ export default function SalesExecutive() {
   const { user } = useAuth();
   const params = useLocalSearchParams<{ tab?: string }>();
   const [tab, setTab] = useState<Tab>('queue');
-  const [queueLeads, setQueueLeads] = useState<any[]>([]);
-  const [stats, setStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const cached = getSnapshot<any>('sales-workspace');
+  const [queueLeads, setQueueLeads] = useState<any[]>(cached?.queueLeads ?? []);
+  const [stats, setStats] = useState<any>(cached?.stats ?? null);
+  const [loading, setLoading] = useState(!cached);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
   useEffect(() => {
@@ -29,10 +30,11 @@ export default function SalesExecutive() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads/workspace', { params: { limit: 500 } });
+      const r = await api.get('/leads/workspace', { params: { limit: 200 } });
       const data = r.data || {};
       setStats(data.stats || {});
       setQueueLeads(data.queue?.leads || []);
+      setSnapshot('sales-workspace', { stats: data.stats, queueLeads: data.queue?.leads || [] });
     } finally {
       setLoading(false);
     }
