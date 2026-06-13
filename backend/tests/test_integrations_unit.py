@@ -84,6 +84,38 @@ def test_housing_sync_skips_stale_leads(monkeypatch):
     assert inserted["leads"][0]["external_lead_id"] == "new-1"
 
 
+def test_housing_auto_mode_imports_lead_without_lead_date(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    monkeypatch.setattr(main, "HOUSING_PROFILE_ID", "2548773")
+    monkeypatch.setattr(main, "HOUSING_ENCRYPTION_KEY", "secret-key")
+    monkeypatch.setattr(main, "get_last_housing_sync_end_epoch", lambda: None)
+    monkeypatch.setattr(main, "record_housing_sync_checkpoint", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "log_activity", lambda *args, **kwargs: None)
+
+    class FakeResponse:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return [{"lead_id": "no-date-1", "lead_phone": "9876500003", "lead_name": "No Date Lead"}]
+
+    monkeypatch.setattr(main._http, "get", lambda *args, **kwargs: FakeResponse())
+
+    result = main.run_housing_sync_background("auto")
+    assert result["status"] == "success"
+    assert len(result["created"]) == 1
+    assert len(inserted["leads"]) == 1
+
+
+def test_housing_sync_window_auto_uses_checkpoint(monkeypatch):
+    now = int(time.time())
+    monkeypatch.setattr(main, "get_last_housing_sync_end_epoch", lambda: now - 600)
+    start, end = main.housing_sync_window("auto", None, now, False)
+    assert end == now
+    assert start >= now - main.HOUSING_POLL_INITIAL_WINDOW_SEC
+    assert start <= now - 300
+
+
 def test_housing_webhook_creates_housing_lead(monkeypatch):
     inserted = _install_fake_supabase(monkeypatch)
     monkeypatch.setattr(main, "HOUSING_WEBHOOK_SECRET", "test-integration-uuid")

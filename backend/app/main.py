@@ -4,6 +4,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from concurrent.futures import ThreadPoolExecutor
+import asyncio
 import uuid, logging, random, os, httpx, csv, io, openpyxl
 import base64, hashlib, hmac, json, re, time
 from io import BytesIO
@@ -194,10 +195,13 @@ HOUSING_INTEGRATION_UUID = os.environ.get("HOUSING_INTEGRATION_UUID", "")
 HOUSING_API_URL = os.environ.get("HOUSING_API_URL", "https://leads.housing.com/api/v0/get-builder-leads")
 HOUSING_WEBHOOK_SECRET = os.environ.get("HOUSING_WEBHOOK_SECRET", HOUSING_INTEGRATION_UUID)
 # Housing API pull: only import leads inside this window (not old backlog).
-HOUSING_POLL_INITIAL_WINDOW_SEC = int(os.environ.get("HOUSING_POLL_INITIAL_WINDOW_SEC", "1200"))  # 20 min
+HOUSING_POLL_INITIAL_WINDOW_SEC = int(os.environ.get("HOUSING_POLL_INITIAL_WINDOW_SEC", "300"))  # 5 min
 HOUSING_POLL_OVERLAP_SEC = int(os.environ.get("HOUSING_POLL_OVERLAP_SEC", "300"))  # 5 min overlap
 HOUSING_MANUAL_DEFAULT_WINDOW_SEC = int(os.environ.get("HOUSING_MANUAL_DEFAULT_WINDOW_SEC", "7200"))  # 2 hours
 HOUSING_API_MAX_RANGE_SEC = 2 * 86400  # Housing.com rejects ranges wider than 2 days
+HOUSING_AUTO_SYNC_ENABLED = os.environ.get("HOUSING_AUTO_SYNC_ENABLED", "true").lower() in ("1", "true", "yes")
+HOUSING_AUTO_SYNC_INTERVAL_SEC = int(os.environ.get("HOUSING_AUTO_SYNC_INTERVAL_SEC", "300"))  # every 5 min
+CRON_SECRET = os.environ.get("CRON_SECRET", "")
 
 def sb_headers():
     return {
@@ -1689,7 +1693,7 @@ def housing_sync_window(
             start_date = end_date - HOUSING_API_MAX_RANGE_SEC
         return start_date, end_date
 
-    if mode == "poll":
+    if mode in ("poll", "auto", "cron"):
         last_end = get_last_housing_sync_end_epoch()
         if last_end:
             start_date = max(last_end - HOUSING_POLL_OVERLAP_SEC, end_date - HOUSING_POLL_INITIAL_WINDOW_SEC)
@@ -1700,12 +1704,46 @@ def housing_sync_window(
     return start_date, end_date
 
 
-def should_import_housing_lead_on_sync(payload: Dict[str, Any], start_date: int, end_date: int) -> bool:
+def should_import_housing_lead_on_sync(
+    payload: Dict[str, Any],
+    start_date: int,
+    end_date: int,
+    mode: str = "manual",
+) -> bool:
     """Skip old Housing API leads — only import when lead_date is inside the sync window."""
     lead_ts = get_housing_lead_epoch(payload)
     if lead_ts is None:
-        return False
-    return (start_date - HOUSING_POLL_OVERLAP_SEC) <= lead_ts <= (end_date + 60)
+        # Auto/poll: Housing API already scoped by start_date/end_date — don't drop new leads.
+        return mode in ("poll", "auto", "cron")
+    margin = HOUSING_POLL_OVERLAP_SEC if mode in ("poll", "auto", "cron") else 0
+    return (start_date - margin) <= lead_ts <= (end_date + 60)
+
+
+def system_integration_actor():
+    """Synthetic user for background Housing sync (no login required)."""
+    class _SystemUser:
+        user_id = "system"
+        email = "system@integrations"
+        role = "admin"
+        name = "System"
+        employee_id = None
+        acting_as_employee_id = None
+
+    return _SystemUser()
+
+
+def run_housing_sync_background(mode: str = "auto") -> Dict[str, Any]:
+    """Run Housing pull sync on a worker thread (server cron / background loop)."""
+    if not HOUSING_PROFILE_ID or not HOUSING_ENCRYPTION_KEY:
+        return {"status": "skipped", "reason": "credentials_not_configured"}
+    try:
+        return asyncio.run(_housing_sync_impl(HousingSyncRequest(), system_integration_actor(), mode=mode))
+    except HTTPException as exc:
+        logging.error("Housing background sync failed: %s", exc.detail)
+        return {"status": "error", "detail": exc.detail}
+    except Exception as exc:
+        logging.exception("Housing background sync failed")
+        return {"status": "error", "detail": str(exc)[:180]}
 
 
 def parse_external_datetime(value: Any) -> Optional[str]:
@@ -2786,7 +2824,6 @@ async def housing_webhook(request: Request):
     return {"status": "success", "source": "Housing.com", "created": created, "duplicates": duplicates, "ignored": ignored}
 
 async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = "manual") -> Dict[str, Any]:
-    ensure_roles(cu, ["admin", "manager", "marketing"])
     start_date, end_date = housing_sync_window(
         mode, payload.start_date, payload.end_date, payload.allow_historical,
     )
@@ -2807,7 +2844,7 @@ async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = 
 
     created, duplicates, ignored, skipped_stale = [], [], [], []
     for lead_payload in lead_payloads:
-        if not should_import_housing_lead_on_sync(lead_payload, start_date, end_date):
+        if not should_import_housing_lead_on_sync(lead_payload, start_date, end_date, mode=mode):
             skipped_stale.append(clean_text(pick_first(lead_payload, ["lead_id", "id"])) or "unknown")
             record_integration_event(
                 "Housing.com", lead_payload, "skipped_stale",
@@ -2848,6 +2885,7 @@ async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = 
 @api_router.post("/housing/sync")
 async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current_user)):
     """Pull recent Housing.com leads only (default last 2 hours, not full history)."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
     return await _housing_sync_impl(payload, cu, mode="manual")
 
 
@@ -2857,6 +2895,22 @@ async def housing_poll(cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager", "marketing"])
     logging.info("Housing poll: auto-sync triggered by %s", cu.email)
     return await _housing_sync_impl(HousingSyncRequest(), cu, mode="poll")
+
+
+@api_router.post("/integrations/housing/cron")
+async def housing_cron_sync(request: Request):
+    """External cron hook — same as background auto-sync (optional CRON_SECRET header)."""
+    if CRON_SECRET:
+        provided = (
+            request.headers.get("x-cron-secret")
+            or request.headers.get("authorization", "").removeprefix("Bearer ").strip()
+            or request.query_params.get("secret")
+        )
+        if provided != CRON_SECRET:
+            raise HTTPException(status_code=401, detail="Invalid cron secret")
+    result = await asyncio.to_thread(run_housing_sync_background, "cron")
+    logging.info("Housing cron sync: %s", result.get("status"))
+    return result
 
 @api_router.get("/integrations/housing/verify")
 async def housing_verify(cu: User=Depends(get_current_user)):
@@ -2906,6 +2960,8 @@ async def housing_verify(cu: User=Depends(get_current_user)):
 @api_router.get("/integrations/status")
 async def integrations_status(cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager", "marketing"])
+    last_sync_end = get_last_housing_sync_end_epoch()
+    db_housing = sb_select("leads", {"source": "eq.Housing.com", "select": "lead_id"})
     return {
         "facebook": {
             "source": "Facebook",
@@ -2917,10 +2973,17 @@ async def integrations_status(cu: User=Depends(get_current_user)):
             "source": "Housing.com",
             "webhook_path": "/api/housing/webhook",
             "sync_path": "/api/housing/sync",
+            "poll_path": "/api/integrations/housing/poll",
+            "cron_path": "/api/integrations/housing/cron",
             "profile_id_configured": bool(HOUSING_PROFILE_ID),
             "encryption_key_configured": bool(HOUSING_ENCRYPTION_KEY),
             "integration_uuid_configured": bool(HOUSING_INTEGRATION_UUID or HOUSING_WEBHOOK_SECRET),
             "api_url": HOUSING_API_URL,
+            "auto_sync_enabled": HOUSING_AUTO_SYNC_ENABLED,
+            "auto_sync_interval_sec": HOUSING_AUTO_SYNC_INTERVAL_SEC,
+            "last_sync_end_epoch": last_sync_end,
+            "last_sync_at": datetime.fromtimestamp(last_sync_end, tz=timezone.utc).isoformat() if last_sync_end else None,
+            "db_housing_leads": len(db_housing),
         },
     }
 
@@ -5226,3 +5289,53 @@ async def root(): return {"app": "Umang Hometech LLP CRM", "status": "ok", "data
 app.include_router(api_router)
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+
+_housing_sync_task: Optional[asyncio.Task] = None
+
+
+async def _housing_background_sync_loop() -> None:
+    """Pull new Housing.com leads every HOUSING_AUTO_SYNC_INTERVAL_SEC (default 5 min)."""
+    await asyncio.sleep(30)
+    while True:
+        try:
+            if HOUSING_AUTO_SYNC_ENABLED and HOUSING_PROFILE_ID and HOUSING_ENCRYPTION_KEY:
+                result = await asyncio.to_thread(run_housing_sync_background, "auto")
+                created = result.get("created") or []
+                if isinstance(created, list) and created:
+                    logging.info("Housing auto-sync imported %s new lead(s)", len(created))
+                elif result.get("status") == "error":
+                    logging.warning("Housing auto-sync error: %s", result.get("detail"))
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logging.exception("Housing background sync loop error")
+        await asyncio.sleep(max(HOUSING_AUTO_SYNC_INTERVAL_SEC, 60))
+
+
+@app.on_event("startup")
+async def start_housing_background_sync() -> None:
+    global _housing_sync_task
+    if not HOUSING_AUTO_SYNC_ENABLED:
+        logging.info("Housing auto-sync disabled (HOUSING_AUTO_SYNC_ENABLED=false)")
+        return
+    if not HOUSING_PROFILE_ID or not HOUSING_ENCRYPTION_KEY:
+        logging.warning("Housing auto-sync skipped — set HOUSING_PROFILE_ID and HOUSING_ENCRYPTION_KEY")
+        return
+    _housing_sync_task = asyncio.create_task(_housing_background_sync_loop())
+    logging.info(
+        "Housing auto-sync started — every %ss, initial window %ss",
+        HOUSING_AUTO_SYNC_INTERVAL_SEC,
+        HOUSING_POLL_INITIAL_WINDOW_SEC,
+    )
+
+
+@app.on_event("shutdown")
+async def stop_housing_background_sync() -> None:
+    global _housing_sync_task
+    if _housing_sync_task:
+        _housing_sync_task.cancel()
+        try:
+            await _housing_sync_task
+        except asyncio.CancelledError:
+            pass
+        _housing_sync_task = None

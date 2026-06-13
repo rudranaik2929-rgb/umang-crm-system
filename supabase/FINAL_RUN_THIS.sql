@@ -3,6 +3,7 @@
 -- =====================================================================
 -- Safe to re-run (idempotent). Covers everything in current production app:
 --   • Housing / Meta integrations
+--   • Housing auto-sync every 5 min (server background — no SQL needed; uses integration_events checkpoints)
 --   • Auto-assign + bulk assign (assigned_at, assigned_by)
 --   • Employee performance boxes (Active, Hot, Visited, etc.)
 --   • Follow-ups, call status, round-robin indexes

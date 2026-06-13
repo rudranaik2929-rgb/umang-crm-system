@@ -95,9 +95,8 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
-    load();
     const pollMs = 5 * 60 * 1000;
-    const interval = setInterval(async () => {
+    const syncIntegrations = async () => {
       try {
         await Promise.all([
           api.post('/integrations/housing/poll', {}).catch(() => {}),
@@ -106,7 +105,10 @@ export default function Dashboard() {
       } finally {
         load();
       }
-    }, pollMs);
+    };
+    load();
+    syncIntegrations();
+    const interval = setInterval(syncIntegrations, pollMs);
     return () => clearInterval(interval);
   }, [load]);
 

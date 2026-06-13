@@ -85,6 +85,22 @@ export default function MyDashboard() {
   }, []);
   useEffect(() => { load(); }, [load]);
 
+  // Manager/admin: pull Housing.com leads every 5 min (backup to server auto-sync)
+  useEffect(() => {
+    const role = user?.role;
+    if (role !== 'manager' && role !== 'admin') return;
+    const syncHousing = async () => {
+      try {
+        await api.post('/integrations/housing/poll', {}).catch(() => {});
+      } finally {
+        load();
+      }
+    };
+    syncHousing();
+    const id = setInterval(syncHousing, 5 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [user?.role, load]);
+
   // Auto-refresh every 30 seconds for live feel
   useEffect(() => {
     const interval = setInterval(() => { load(); }, 30000);
