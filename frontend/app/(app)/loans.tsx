@@ -44,7 +44,7 @@ export default function Loans() {
     try {
       const [lo, l] = await Promise.all([
         api.get('/loans'),
-        api.get('/leads', { params: { limit: 500 } }),
+        api.get('/leads/loan-queue', { params: { limit: 100 } }),
       ]);
       const allLoans = Array.isArray(lo.data) ? lo.data : [];
       let loanData = allLoans;

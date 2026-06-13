@@ -5,6 +5,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
+import threading
 import uuid, logging, random, os, httpx, csv, io, openpyxl
 import base64, hashlib, hmac, json, re, time
 from io import BytesIO
@@ -216,10 +217,13 @@ def sb_url(table: str) -> str:
 _http = httpx.Client(timeout=20, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
 
 # Short-lived caches — cut repeated full-table Supabase reads on dashboard/login.
-LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "25"))
+LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "60"))
 _USER_CACHE_TTL_SEC = int(os.environ.get("USER_CACHE_TTL_SEC", "300"))
 _leads_cache: Dict[str, Any] = {"ts": 0.0, "select": "", "data": []}
 _user_profile_cache: Dict[str, Dict[str, Any]] = {}
+_employees_cache: Dict[str, Any] = {"ts": 0.0, "data": []}
+_EMPLOYEES_CACHE_TTL = 60
+_leads_cache_lock = threading.Lock()
 
 def _b64url_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -489,21 +493,28 @@ def sb_select_all(table: str, params: Optional[dict] = None, page_size: int = 10
 
 
 def invalidate_leads_cache() -> None:
-    _leads_cache["ts"] = 0.0
+    with _leads_cache_lock:
+        _leads_cache["ts"] = 0.0
+
+
+def invalidate_employees_cache() -> None:
+    _employees_cache["ts"] = 0.0
 
 
 def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
     """Full leads table + session cache — cached briefly so dashboard endpoints share one fetch."""
     now = time.time()
-    if (
-        _leads_cache["ts"]
-        and (now - float(_leads_cache["ts"])) < LEADS_CACHE_TTL_SEC
-        and _leads_cache.get("select") == select
-    ):
-        return _leads_cache["data"]
+    with _leads_cache_lock:
+        if (
+            _leads_cache["ts"]
+            and (now - float(_leads_cache["ts"])) < LEADS_CACHE_TTL_SEC
+            and _leads_cache.get("select") == select
+        ):
+            return _leads_cache["data"]
     db_leads = sb_select_all("leads", {"select": select, "order": "created_at.desc"})
     merged = merge_leads_with_cache(db_leads)
-    _leads_cache.update({"ts": now, "select": select, "data": merged})
+    with _leads_cache_lock:
+        _leads_cache.update({"ts": now, "select": select, "data": merged})
     return merged
 
 
@@ -1015,6 +1026,7 @@ def issue_session(user: Dict[str, Any], response: Response):
         "email": user.get("email"),
         "role": user.get("role"),
         "name": user.get("name"),
+        "employee_id": user.get("employee_id"),
     })
     LOCAL_SESSIONS[token] = {"user": user, "expires_at": expires}
     sb_insert("sessions", {
@@ -1075,6 +1087,29 @@ def invalidate_sessions_for_user(user_id: str):
         if (sess.get("user") or {}).get("user_id") == user_id:
             LOCAL_SESSIONS.pop(tok, None)
 
+def user_from_jwt_payload(jwt_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Build session user from JWT claims — no Supabase round-trip."""
+    uid = jwt_payload.get("sub")
+    if not uid:
+        return None
+    if uid in HARDCODED_USERS:
+        return dict(HARDCODED_USERS[uid])
+    role = jwt_payload.get("role")
+    if not role:
+        return None
+    emp_id = jwt_payload.get("employee_id")
+    u: Dict[str, Any] = {
+        "user_id": uid,
+        "email": jwt_payload.get("email"),
+        "role": role,
+        "name": jwt_payload.get("name") or "User",
+        "employee_id": emp_id,
+    }
+    if emp_id and role != "admin":
+        u["acting_as_employee_id"] = emp_id
+    return u
+
+
 async def get_current_user(request: Request) -> User:
     token = await get_session_token(request)
     if not token: raise HTTPException(401, "Not authenticated")
@@ -1095,10 +1130,17 @@ async def get_current_user(request: Request) -> User:
             u["acting_as_employee_id"] = act_as
         return User(**u)
 
-    # 2. Valid JWT — skip sessions table (saves a Supabase round-trip on every API call)
+    # 2. Valid JWT — use token claims directly (fast path, no DB)
     if jwt_payload and jwt_payload.get("sub"):
-        uid = jwt_payload["sub"]
         exp = datetime.fromtimestamp(int(jwt_payload["exp"]), tz=timezone.utc).isoformat()
+        u = user_from_jwt_payload(jwt_payload)
+        if u:
+            LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
+            act_as = request.headers.get("X-Acting-As")
+            if act_as:
+                u = {**u, "acting_as_employee_id": act_as}
+            return User(**u)
+        uid = jwt_payload["sub"]
         u = _resolve_user_by_id(uid, exp)
         LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
         act_as = request.headers.get("X-Acting-As")
@@ -3405,6 +3447,51 @@ async def list_leads(
         return []
     return all_leads[offset:offset + limit]
 
+
+@api_router.get("/leads/booking-queue")
+async def list_booking_queue(limit: int = 100, cu: User = Depends(get_current_user)):
+    """Hot / handoff leads for New Booking — small payload, no full-table scan."""
+    limit = min(max(limit, 1), 200)
+    select = "lead_id,name,phone,source,stage,status,priority,assigned_to,created_at,budget,location"
+    rows = sb_select("leads", {
+        "select": select,
+        "status": "neq.negative",
+        "or": "(priority.eq.hot,priority.eq.handoff_booking,stage.eq.booking)",
+        "order": "created_at.desc",
+        "limit": str(limit + 30),
+    })
+    cache_slice = [l for l in SESSION_CACHE["leads"] if lead_ready_for_booking_queue(l)]
+    cache_ids = {l.get("lead_id") for l in cache_slice}
+    merged = cache_slice + [l for l in rows if l.get("lead_id") not in cache_ids]
+    booked = {b.get("lead_id") for b in sb_select("bookings", {"select": "lead_id"})}
+    booked |= {b.get("lead_id") for b in SESSION_CACHE["bookings"]}
+    queue = [l for l in merged if lead_ready_for_booking_queue(l) and l.get("lead_id") not in booked]
+    queue.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return queue[:limit]
+
+
+@api_router.get("/leads/loan-queue")
+async def list_loan_queue(limit: int = 100, cu: User = Depends(get_current_user)):
+    """Hot / handoff leads for New Loan Application."""
+    limit = min(max(limit, 1), 200)
+    select = "lead_id,name,phone,source,stage,status,priority,assigned_to,created_at,budget,location"
+    rows = sb_select("leads", {
+        "select": select,
+        "status": "neq.negative",
+        "or": "(priority.eq.hot,priority.eq.handoff_loan,stage.eq.loan)",
+        "order": "created_at.desc",
+        "limit": str(limit + 30),
+    })
+    cache_slice = [l for l in SESSION_CACHE["leads"] if lead_ready_for_loan_queue(l)]
+    cache_ids = {l.get("lead_id") for l in cache_slice}
+    merged = cache_slice + [l for l in rows if l.get("lead_id") not in cache_ids]
+    loaned = {ln.get("lead_id") for ln in sb_select("loans", {"select": "lead_id"})}
+    loaned |= {ln.get("lead_id") for ln in SESSION_CACHE["loans"]}
+    queue = [l for l in merged if lead_ready_for_loan_queue(l) and l.get("lead_id") not in loaned]
+    queue.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return queue[:limit]
+
+
 @api_router.get("/broker-leads")
 async def list_broker_leads(cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager", "marketing"])
@@ -3840,7 +3927,12 @@ async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user
 
 @api_router.get("/leads/{lead_id}")
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
-    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
+    lead_fields = (
+        "lead_id,name,phone,email,source,stage,status,lead_type,priority,call_status,"
+        "budget,location,property_type,notes,assigned_to,assigned_at,follow_up_at,"
+        "created_at,updated_at,external_lead_id,external_created_at,integration_uuid,raw_payload,brokerage_amount"
+    )
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": lead_fields})
     lead = None
     if leads:
         lead = leads[0]
@@ -3849,7 +3941,12 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
         if cache_match:
             lead = cache_match[0]
     if not lead: raise HTTPException(404, "Lead not found")
-    timeline = sb_select("activities", {"lead_id": f"eq.{lead_id}", "select": "*", "order": "created_at.desc"})
+    timeline = sb_select("activities", {
+        "lead_id": f"eq.{lead_id}",
+        "select": "activity_id,type,text,created_at,user_id,lead_id",
+        "order": "created_at.desc",
+        "limit": "40",
+    })
     cache_activities = [a for a in SESSION_CACHE["activities"] if a.get("lead_id") == lead_id]
     
     # Deduplicate activities
@@ -4689,13 +4786,22 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
     if not result:
         sb_delete("users", "user_id", user_id)
         raise HTTPException(status_code=500, detail="Could not create employee record.")
+    invalidate_employees_cache()
     return result
+
 
 @api_router.get("/employees")
 async def list_employees(cu: User=Depends(get_current_user)):
-    rows = sb_select("employees", {"select": "*", "order": "created_at.desc"})
+    now = time.time()
+    if _employees_cache["ts"] and (now - float(_employees_cache["ts"])) < _EMPLOYEES_CACHE_TTL:
+        return _employees_cache["data"]
+    rows = sb_select("employees", {
+        "select": "employee_id,name,email,phone,role,department,active,user_id,allowed_pages,created_at",
+        "order": "created_at.desc",
+    })
     for row in rows:
         row["allowed_pages"] = _employee_allowed_pages(row)
+    _employees_cache.update({"ts": now, "data": rows})
     return rows
 
 @api_router.patch("/employees/{eid}")
@@ -4797,6 +4903,7 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
     if not updated:
         raise HTTPException(500, "Could not update employee.")
     updated["allowed_pages"] = _employee_allowed_pages(updated)
+    invalidate_employees_cache()
     return updated
 
 @api_router.delete("/employees/{eid}")
@@ -4966,6 +5073,33 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         "stage_distribution": stage_dist,
         "lead_buckets": lead_buckets,
     }
+
+
+@api_router.get("/stats/dashboard-bundle")
+async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
+    """One round-trip for owner dashboard — shares cached leads fetch across sections."""
+    stats, graph, employees, recent, leads_page = await asyncio.gather(
+        stats_dashboard(cu),
+        stats_dashboard_graph(cu),
+        stats_employees(cu),
+        list_recent_leads(20, cu),
+        list_leads(limit=150, offset=0, cu=cu),
+    )
+    return {
+        "stats": stats,
+        "graph": graph,
+        "employees": employees,
+        "recent_leads": recent,
+        "leads": leads_page,
+    }
+
+
+@api_router.get("/stats/me-bundle")
+async def stats_me_bundle(cu: User = Depends(get_current_user)):
+    """One round-trip for My Dashboard."""
+    me, graph = await asyncio.gather(stats_me(cu), stats_dashboard_graph(cu))
+    return {"me": me, "graph": graph}
+
 
 @api_router.get("/stats/leads-by-source")
 async def stats_leads_by_source(cu: User=Depends(get_current_user)):
@@ -5240,7 +5374,11 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
         raise HTTPException(400, detail="No employee profile linked to this login.")
 
     activity_keys = actor_activity_keys(cu)
-    db_activities = sb_select_all("activities", {"select": "*", "order": "created_at.desc"})
+    db_activities = sb_select("activities", {
+        "select": "activity_id,user_id,created_at,type,text,lead_id",
+        "order": "created_at.desc",
+        "limit": "1500",
+    })
     cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     all_activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
     if cu.role == "admin" and not emp_id:

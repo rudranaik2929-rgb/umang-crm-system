@@ -77,7 +77,7 @@ export default function Bookings() {
     try {
       const [b, l] = await Promise.all([
         api.get('/bookings'),
-        api.get('/leads', { params: { limit: 500 } }),
+        api.get('/leads/booking-queue', { params: { limit: 100 } }),
       ]);
       const allBookings = Array.isArray(b.data) ? b.data : [];
       let bookingData = allBookings;

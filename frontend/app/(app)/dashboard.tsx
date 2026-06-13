@@ -54,16 +54,12 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const [s, g, l, e] = await Promise.allSettled([
-        api.get('/stats/dashboard'),
-        api.get('/stats/dashboard/graph'),
-        api.get('/leads', { params: { limit: 200 } }),
-        api.get('/stats/employees'),
-      ]);
-      const nextStats = s.status === 'fulfilled' ? (s.value.data || {}) : {};
-      const nextGraph = g.status === 'fulfilled' ? (g.value.data || {}) : {};
-      const nextLeads = l.status === 'fulfilled' && Array.isArray(l.value.data) ? l.value.data : [];
-      const nextEmployees = e.status === 'fulfilled' && Array.isArray(e.value.data) ? e.value.data : [];
+      const res = await api.get('/stats/dashboard-bundle');
+      const bundle = res.data || {};
+      const nextStats = bundle.stats || {};
+      const nextGraph = bundle.graph || {};
+      const nextLeads = Array.isArray(bundle.leads) ? bundle.leads : [];
+      const nextEmployees = Array.isArray(bundle.employees) ? bundle.employees : [];
       const nextBuckets = nextStats.lead_buckets || {};
       setStats(nextStats);
       setGraphData(nextGraph);

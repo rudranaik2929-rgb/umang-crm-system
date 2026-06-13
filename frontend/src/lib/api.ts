@@ -5,10 +5,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Default: Render URL until api.umanghometechllp.in custom domain is live on Render.
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-systemumang-home-tech.onrender.com').replace(/\/$/, '');
 
-// Render free-tier instances sleep after inactivity and can take 30-60s to wake.
-// A generous timeout + one automatic retry prevents the very first request after
-// login from failing/hanging forever with a "Network Error".
-const REQUEST_TIMEOUT_MS = 60000;
+// Render instances can be slow on first request after idle.
+const REQUEST_TIMEOUT_MS = 30000;
+const GET_CACHE_MS = 45000;
 
 export const api = axios.create({
     baseURL: `${BACKEND_URL}/api`,
@@ -16,10 +15,59 @@ export const api = axios.create({
     timeout: REQUEST_TIMEOUT_MS,
 });
 
+const _getCache = new Map<string, { ts: number; data: unknown }>();
+const _inflightGets = new Map<string, Promise<any>>();
+
+function getCacheKey(url: string, params?: Record<string, unknown>) {
+    return `${url}?${JSON.stringify(params || {})}`;
+}
+
+export function clearGetCache() {
+    _getCache.clear();
+    _inflightGets.clear();
+}
+
+const _axiosGet = api.get.bind(api);
+api.get = function getWithCache(url: string, config?: any) {
+    const key = getCacheKey(url, config?.params);
+    const hit = _getCache.get(key);
+    if (hit && Date.now() - hit.ts < GET_CACHE_MS) {
+        return Promise.resolve({
+            data: hit.data,
+            status: 200,
+            statusText: 'OK',
+            headers: {},
+            config: { ...(config || {}), url, method: 'get' },
+        });
+    }
+    const pending = _inflightGets.get(key);
+    if (pending) return pending;
+    const promise = _axiosGet(url, config)
+        .then((res) => {
+            _getCache.set(key, { ts: Date.now(), data: res.data });
+            _inflightGets.delete(key);
+            return res;
+        })
+        .catch((err) => {
+            _inflightGets.delete(key);
+            throw err;
+        });
+    _inflightGets.set(key, promise);
+    return promise;
+} as typeof api.get;
+
 // Retry once on cold-start style failures (timeout, network drop, 502/503/504).
 // Mutations (POST/PUT/PATCH/DELETE) are only retried when the request never
 // reached the server (no response), to stay idempotent-safe.
-api.interceptors.response.use(undefined, async (error) => {
+api.interceptors.response.use(
+    (response) => {
+        const method = String(response.config?.method || 'get').toLowerCase();
+        if (method !== 'get' && method !== 'head') {
+            clearGetCache();
+        }
+        return response;
+    },
+    async (error) => {
     const config: any = error?.config;
     if (!config || config.__isRetry) {
         return Promise.reject(error);
@@ -35,7 +83,7 @@ api.interceptors.response.use(undefined, async (error) => {
         return Promise.reject(error);
     }
     config.__isRetry = true;
-    await new Promise((r) => setTimeout(r, 1200));
+    await new Promise((r) => setTimeout(r, 500));
     return api(config);
 });
 
@@ -152,6 +200,7 @@ export function setSnapshot(key: string, value: any) {
 
 export function clearSnapshots() {
     _snapshotCache.clear();
+    clearGetCache();
 }
 
 export default api;

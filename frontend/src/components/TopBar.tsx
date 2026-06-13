@@ -68,10 +68,11 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   };
 
   const loadEmployees = useCallback(async () => {
+    if (!actAsOpen) return;
     try { const r = await api.get('/employees'); setEmployees(r.data || []); } catch {}
-  }, []);
+  }, [actAsOpen]);
 
-  useEffect(() => { loadEmployees(); }, [loadEmployees, user?.acting_as_employee_id]);
+  useEffect(() => { loadEmployees(); }, [loadEmployees]);
 
   useEffect(() => {
     if (user?.acting_as_employee_id) {

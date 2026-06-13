@@ -76,13 +76,11 @@ export default function MyDashboard() {
 
   const load = useCallback(async () => {
     try {
-      const [r, g] = await Promise.all([
-        api.get('/stats/me'),
-        api.get('/stats/dashboard/graph'),
-      ]);
-      setData(r.data);
-      setGraphData(g.data);
-      setSnapshot('my-dashboard', { data: r.data, graphData: g.data });
+      const res = await api.get('/stats/me-bundle');
+      const bundle = res.data || {};
+      setData(bundle.me);
+      setGraphData(bundle.graph);
+      setSnapshot('my-dashboard', { data: bundle.me, graphData: bundle.graph });
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
