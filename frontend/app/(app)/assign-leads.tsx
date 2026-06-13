@@ -23,6 +23,13 @@ const DEFAULT_FILTERS: AssignWorkspaceFilters = {
   q: '',
 };
 
+const UNASSIGNED_FILTERS: AssignWorkspaceFilters = {
+  inquiry_status: 'all',
+  source: 'all',
+  assigned_to: 'unassigned',
+  q: '',
+};
+
 function formatDt(iso?: string | null) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -140,7 +147,16 @@ export default function AssignLeads() {
   const applyFilters = (next: AssignWorkspaceFilters) => {
     setFilters(next);
     setShowAdvanced(false);
+    setLoading(true);
     load(next);
+  };
+
+  const showUnassignedLeads = () => {
+    applyFilters(UNASSIGNED_FILTERS);
+  };
+
+  const showAllLeads = () => {
+    applyFilters(DEFAULT_FILTERS);
   };
 
   const assignLead = async (leadId: string, employeeId: string) => {
@@ -188,20 +204,7 @@ export default function AssignLeads() {
     }
   };
 
-  const autoAssignAll = async () => {
-    setBulkBusy(true);
-    setMessage(null);
-    try {
-      const r = await api.post('/leads/assign-queue/auto', {});
-      const n = Number(r.data?.assigned_count ?? 0);
-      setMessage(n > 0 ? `Distributed ${n} unassigned lead(s).` : 'No unassigned leads.');
-      await load({ ...filters, inquiry_status: 'unassigned', assigned_to: 'unassigned' });
-    } catch (e: any) {
-      setMessage(e?.response?.data?.detail || 'Distribute failed.');
-    } finally {
-      setBulkBusy(false);
-    }
-  };
+  const isUnassignedView = filters.assigned_to === 'unassigned';
 
   return (
     <View style={{ flex: 1 }}>
@@ -228,14 +231,13 @@ export default function AssignLeads() {
                 <Ionicons name="options-outline" size={18} color={colors.primary} />
                 <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13 }}>Advanced Search</Text>
               </Pressable>
-              {unassignedCount > 0 ? (
+              {isUnassignedView ? (
                 <Pressable
-                  onPress={autoAssignAll}
-                  disabled={bulkBusy}
-                  style={[styles.distributeBtn, { borderColor: colors.positive, backgroundColor: colors.positive + '10' }]}
+                  onPress={showAllLeads}
+                  style={[styles.advancedBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
                 >
-                  <Ionicons name="flash-outline" size={16} color={colors.positive} />
-                  <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '700' }}>Distribute ({unassignedCount})</Text>
+                  <Ionicons name="close-circle-outline" size={16} color={colors.textMuted} />
+                  <Text style={{ color: colors.textMuted, fontWeight: '600', fontSize: 12 }}>Show all leads</Text>
                 </Pressable>
               ) : null}
             </View>
@@ -251,15 +253,35 @@ export default function AssignLeads() {
             ) : null}
 
             <View style={styles.summaryRow}>
-              <SummaryBox colors={colors} label="Showing" value={total} accent={colors.primary} icon="list-outline" />
-              <SummaryBox colors={colors} label="Unassigned" value={unassignedCount} accent="#6366F1" icon="time-outline" />
+              <SummaryBox
+                colors={colors}
+                label="Showing"
+                value={total}
+                accent={colors.primary}
+                icon="list-outline"
+                active={!isUnassignedView && filters.inquiry_status === 'all' && filters.source === 'all' && !filters.q.trim()}
+                onPress={showAllLeads}
+              />
+              <SummaryBox
+                colors={colors}
+                label="Unassigned"
+                value={unassignedCount}
+                accent="#6366F1"
+                icon="time-outline"
+                active={isUnassignedView}
+                onPress={showUnassignedLeads}
+              />
               <SummaryBox colors={colors} label="Team" value={employees.length} accent="#14B8A6" icon="people-outline" />
             </View>
 
             <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-              <Text style={[styles.panelTitle, { color: colors.text }]}>All leads</Text>
+              <Text style={[styles.panelTitle, { color: colors.text }]}>
+                {isUnassignedView ? 'Unassigned leads' : 'All leads'}
+              </Text>
               <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                Filter not-interested → select → assign to another telecaller. Manager can change status in bulk.
+                {isUnassignedView
+                  ? 'Leads with no employee assigned — pick telecaller from dropdown or use bulk assign below.'
+                  : 'Filter not-interested → select → assign to another telecaller. Manager can change status in bulk.'}
               </Text>
 
               {leads.length > 0 ? (
@@ -273,7 +295,9 @@ export default function AssignLeads() {
 
               {leads.length === 0 ? (
                 <Text style={{ color: colors.textMuted, paddingVertical: 24, textAlign: 'center' }}>
-                  No leads match these filters. Try Advanced Search or reset filters.
+                  {isUnassignedView
+                    ? 'No unassigned leads right now.'
+                    : 'No leads match these filters. Try Advanced Search or reset filters.'}
                 </Text>
               ) : (
                 <View style={{ gap: 10, marginTop: 8 }}>
@@ -418,13 +442,35 @@ export default function AssignLeads() {
   );
 }
 
-function SummaryBox({ label, value, accent, icon, colors }: any) {
-  return (
-    <View style={[styles.summaryBox, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+function SummaryBox({ label, value, accent, icon, colors, onPress, active }: any) {
+  const box = (
+    <>
       <Ionicons name={icon} size={16} color={accent} />
       <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 0.6, marginTop: 6 }}>{label.toUpperCase()}</Text>
       <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>{value}</Text>
-    </View>
+    </>
+  );
+  if (!onPress) {
+    return (
+      <View style={[styles.summaryBox, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+        {box}
+      </View>
+    );
+  }
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.summaryBox,
+        {
+          borderColor: active ? accent : colors.border,
+          backgroundColor: active ? accent + '12' : colors.surface,
+          opacity: pressed ? 0.85 : 1,
+        },
+      ]}
+    >
+      {box}
+    </Pressable>
   );
 }
 
@@ -433,7 +479,6 @@ const styles = StyleSheet.create({
   msgBanner: { padding: 12, borderRadius: 8, borderWidth: 1 },
   toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
   advancedBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
-  distributeBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   filterChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
   summaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
