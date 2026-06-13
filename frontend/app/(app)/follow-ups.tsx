@@ -33,7 +33,7 @@ export default function FollowUpsPage() {
       if (!managerView) {
         const myId = (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
         if (myId) {
-          const leadsRes = await api.get('/leads');
+          const leadsRes = await api.get('/leads', { params: { assigned_to: myId, limit: 300 } });
           const mine = new Set(
             (leadsRes.data || [])
               .filter((l: any) => l.assigned_to === myId)

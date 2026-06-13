@@ -33,7 +33,7 @@ function formatArrival(value?: string): string {
 // Polls for newly arrived leads (Housing / Meta / manual) and shows a stacked
 // toast for each one as it lands, with the platform and real arrival date-time.
 // Designed for the manager/admin dashboard.
-export function NewLeadPopup({ enabled = true, pollMs = 60000 }: { enabled?: boolean; pollMs?: number }) {
+export function NewLeadPopup({ enabled = true, pollMs = 120000 }: { enabled?: boolean; pollMs?: number }) {
   const { colors } = useTheme();
   const [queue, setQueue] = useState<RecentLead[]>([]);
   const seenRef = useRef<Set<string>>(new Set());
@@ -62,9 +62,11 @@ export function NewLeadPopup({ enabled = true, pollMs = 60000 }: { enabled?: boo
 
   useEffect(() => {
     if (!enabled) return;
-    poll();
+    const boot = setTimeout(() => {
+      poll();
+    }, 20000);
     const id = setInterval(poll, pollMs);
-    return () => clearInterval(id);
+    return () => { clearTimeout(boot); clearInterval(id); };
   }, [enabled, poll, pollMs]);
 
   const dismiss = (leadId: string) => setQueue((prev) => prev.filter((l) => l.lead_id !== leadId));

@@ -217,13 +217,23 @@ def sb_url(table: str) -> str:
 _http = httpx.Client(timeout=20, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
 
 # Short-lived caches — cut repeated full-table Supabase reads on dashboard/login.
-LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "60"))
+LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "120"))
 _USER_CACHE_TTL_SEC = int(os.environ.get("USER_CACHE_TTL_SEC", "300"))
 _leads_cache: Dict[str, Any] = {"ts": 0.0, "select": "", "data": []}
 _user_profile_cache: Dict[str, Dict[str, Any]] = {}
 _employees_cache: Dict[str, Any] = {"ts": 0.0, "data": []}
 _EMPLOYEES_CACHE_TTL = 60
+_assignment_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_employee_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "45"))
 _leads_cache_lock = threading.Lock()
+
+# One wide fetch shared by dashboard / assignment / employee stats (avoids 3× full-table reads).
+LEADS_CANONICAL_SELECT = (
+    "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,"
+    "priority,call_status,budget,location,property_type,assigned_to,assigned_at,"
+    "follow_up_at,created_at,updated_at,starred,brokerage_amount"
+)
 
 def _b64url_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
@@ -495,27 +505,41 @@ def sb_select_all(table: str, params: Optional[dict] = None, page_size: int = 10
 def invalidate_leads_cache() -> None:
     with _leads_cache_lock:
         _leads_cache["ts"] = 0.0
+    _assignment_stats_cache["ts"] = 0.0
+    _employee_stats_cache["ts"] = 0.0
 
 
 def invalidate_employees_cache() -> None:
     _employees_cache["ts"] = 0.0
 
 
+def _project_lead_fields(row: Dict[str, Any], select: str) -> Dict[str, Any]:
+    if select in ("*", LEADS_CANONICAL_SELECT):
+        return row
+    keys = [k.strip() for k in select.split(",") if k.strip()]
+    return {k: row.get(k) for k in keys}
+
+
 def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
-    """Full leads table + session cache — cached briefly so dashboard endpoints share one fetch."""
+    """Full leads table + session cache — one canonical fetch shared across dashboard endpoints."""
     now = time.time()
     with _leads_cache_lock:
         if (
             _leads_cache["ts"]
             and (now - float(_leads_cache["ts"])) < LEADS_CACHE_TTL_SEC
-            and _leads_cache.get("select") == select
+            and _leads_cache.get("select") == LEADS_CANONICAL_SELECT
         ):
-            return _leads_cache["data"]
-    db_leads = sb_select_all("leads", {"select": select, "order": "created_at.desc"})
+            cached = _leads_cache["data"]
+            if select in ("*", LEADS_CANONICAL_SELECT):
+                return cached
+            return [_project_lead_fields(l, select) for l in cached]
+    db_leads = sb_select_all("leads", {"select": LEADS_CANONICAL_SELECT, "order": "created_at.desc"})
     merged = merge_leads_with_cache(db_leads)
     with _leads_cache_lock:
-        _leads_cache.update({"ts": now, "select": select, "data": merged})
-    return merged
+        _leads_cache.update({"ts": now, "select": LEADS_CANONICAL_SELECT, "data": merged})
+    if select in ("*", LEADS_CANONICAL_SELECT):
+        return merged
+    return [_project_lead_fields(l, select) for l in merged]
 
 
 def clean_leads_for_platform_stats(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1060,12 +1084,18 @@ def issue_session(user: Dict[str, Any], response: Response):
         "dashboard_type": user.get("dashboard_type"),
     })
     LOCAL_SESSIONS[token] = {"user": user, "expires_at": expires}
-    sb_insert("sessions", {
-        "session_token": token,
-        "user_id": user["user_id"],
-        "created_at": now_utc().isoformat(),
-        "expires_at": expires,
-    })
+    # Persist session in background — login response returns immediately (JWT is authoritative).
+    def _persist_session():
+        try:
+            sb_insert("sessions", {
+                "session_token": token,
+                "user_id": user["user_id"],
+                "created_at": now_utc().isoformat(),
+                "expires_at": expires,
+            })
+        except Exception as exc:
+            logging.warning("session persist failed: %s", exc)
+    threading.Thread(target=_persist_session, daemon=True).start()
     response.set_cookie(
         key="session_token",
         value=token,
@@ -3891,6 +3921,9 @@ async def auto_assign_queue(cu: User = Depends(get_current_user)):
 async def stats_assignment(cu: User = Depends(get_current_user)):
     """Per-employee assigned / active / completed lead counts for manager dashboards."""
     ensure_roles(cu, ["admin", "manager"])
+    now = time.time()
+    if _assignment_stats_cache["data"] is not None and (now - float(_assignment_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
+        return _assignment_stats_cache["data"]
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "order": "name.asc"})
     all_leads = fetch_all_leads_merged(
         "lead_id,assigned_to,status,stage,priority,call_status,created_at,updated_at,follow_up_at"
@@ -3909,10 +3942,12 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
             **compute_employee_assignment_stats(emp_leads, e.get("role")),
         })
     unassigned = compute_unassigned_queue(all_leads)
-    return {
+    payload = {
         "unassigned_count": len(unassigned),
         "employees": rows,
     }
+    _assignment_stats_cache.update({"ts": now, "data": payload})
+    return payload
 
 
 @api_router.get("/leads/by-platform/{platform}")
@@ -5135,7 +5170,7 @@ async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
         stats_dashboard_graph(cu),
         stats_employees(cu),
         list_recent_leads(20, cu),
-        list_leads(limit=150, offset=0, cu=cu),
+        list_leads(limit=80, offset=0, cu=cu),
     )
     return {
         "stats": stats,
@@ -5496,6 +5531,9 @@ async def list_employee_metric_leads(
 
 @api_router.get("/stats/employees")
 async def stats_employees(cu: User=Depends(get_current_user)):
+    now = time.time()
+    if _employee_stats_cache["data"] is not None and (now - float(_employee_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
+        return _employee_stats_cache["data"]
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id"})
     db_activities = sb_select("activities", {
         "select": "user_id,created_at,type",
@@ -5536,6 +5574,7 @@ async def stats_employees(cu: User=Depends(get_current_user)):
             "closed_deals": assignment["assigned_completed"],
             "call_notes": sum(1 for a in emp_acts if "call" in str(a.get("type"))),
         })
+    _employee_stats_cache.update({"ts": now, "data": emp_stats})
     return emp_stats
 
 # ---- Health & Wiring ----

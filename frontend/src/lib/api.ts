@@ -7,7 +7,7 @@ const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-s
 
 // Render instances can be slow on first request after idle.
 const REQUEST_TIMEOUT_MS = 30000;
-const GET_CACHE_MS = 45000;
+const GET_CACHE_MS = 90000;
 
 export const api = axios.create({
     baseURL: `${BACKEND_URL}/api`,
@@ -94,12 +94,12 @@ let warmUpPromise: Promise<void> | null = null;
 // repeated calls during startup only hit the server once.
 export function warmUpBackend(): Promise<void> {
     if (warmUpPromise) return warmUpPromise;
-    warmUpPromise = axios
-        .get(`${BACKEND_URL}/`, { timeout: REQUEST_TIMEOUT_MS })
+    warmUpPromise = Promise.all([
+        axios.get(`${BACKEND_URL}/`, { timeout: 12000 }).catch(() => undefined),
+        axios.get(`${BACKEND_URL}/api/`, { timeout: 12000 }).catch(() => undefined),
+    ])
         .then(() => undefined)
-        .catch(() => undefined)
         .finally(() => {
-            // Allow a fresh warm-up later (e.g. after the app was backgrounded).
             setTimeout(() => { warmUpPromise = null; }, 5 * 60 * 1000);
         });
     return warmUpPromise;

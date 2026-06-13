@@ -14,17 +14,21 @@ export function AssignLeadsPanel({ compact = false }: Props) {
   const [stats, setStats] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await api.get('/stats/assignment');
       setStats(res.data);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    const id = setInterval(() => load(true), 90000);
+    return () => clearInterval(id);
+  }, [load]);
 
   if (loading) return <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />;
 

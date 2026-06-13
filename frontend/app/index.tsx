@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../src/theme/ThemeContext';
 import { useAuth } from '../src/auth/AuthContext';
 import { defaultRouteFor } from '../src/lib/constants';
+import { warmUpBackend } from '../src/lib/api';
 
 const HERO_IMG = 'https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82ba-422e-a9c5-02053dc9d61d/images/35dda4ad3fda80d98d3e686fde61d9fcf2b36147d133e43a32eed389dcf53913.png';
 
@@ -19,6 +20,12 @@ export default function Index() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [serverWarming, setServerWarming] = useState(false);
+
+  useEffect(() => {
+    setServerWarming(true);
+    warmUpBackend().finally(() => setServerWarming(false));
+  }, []);
 
   // Already signed in (valid session) → go to app; never show "Continue as …" bypass.
   useEffect(() => {
@@ -37,6 +44,7 @@ export default function Index() {
 
     setIsLoggingIn(true);
     try {
+      await warmUpBackend();
       const loggedInUser = await exchangeSession({
         email: trimmedEmail,
         password: trimmedPassword,
@@ -56,7 +64,8 @@ export default function Index() {
 
   const onEnquiry = () => router.push('/enquire' as any);
 
-  if (loading || user) {
+  // Redirect only when session exists — never block the login form while checking session.
+  if (user) {
     return (
       <View style={[styles.container, { backgroundColor: colors.background, alignItems: 'center', justifyContent: 'center' }]}>
         <ActivityIndicator color={colors.primary} size="large" />
@@ -127,6 +136,11 @@ export default function Index() {
           <Text style={[styles.subhead, { color: colors.textSecondary, marginBottom: 20 }]}>
             Enter the email and password provided by your manager. Each employee has a separate login.
           </Text>
+          {serverWarming ? (
+            <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 8 }}>
+              Connecting to server… first load may take up to a minute if the server was idle.
+            </Text>
+          ) : null}
 
           <View style={{ width: '100%', gap: 12, marginBottom: 12 }}>
             <TextInput

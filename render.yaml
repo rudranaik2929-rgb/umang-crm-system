@@ -36,3 +36,7 @@ services:
         value: "true"
       - key: HOUSING_AUTO_SYNC_INTERVAL_SEC
         value: "300"
+      - key: LEADS_CACHE_TTL_SEC
+        value: "120"
+      - key: STATS_CACHE_TTL_SEC
+        value: "45"

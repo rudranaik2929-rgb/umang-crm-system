@@ -18,7 +18,7 @@ export default function NegativeLeads() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads?status_=negative');
+      const r = await api.get('/leads', { params: { status_: 'negative', limit: 200 } });
       setLeads(r.data || []);
     } finally { setLoading(false); }
   }, []);

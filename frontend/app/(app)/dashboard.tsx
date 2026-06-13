@@ -98,18 +98,17 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!canLoadDashboard) return;
-    const pollMs = 5 * 60 * 1000;
     load();
-    // Housing/Meta sync runs in background — never block dashboard paint on it.
+    // Housing/Meta sync — delayed so dashboard paints first; never block initial load.
     const runBackgroundSync = () => {
       Promise.all([
         api.post('/integrations/housing/poll', {}).catch(() => {}),
         api.post('/integrations/facebook/poll', {}).catch(() => {}),
       ]).finally(() => { load(); });
     };
-    setTimeout(runBackgroundSync, 3000);
-    const interval = setInterval(runBackgroundSync, pollMs);
-    return () => clearInterval(interval);
+    const firstSync = setTimeout(runBackgroundSync, 45000);
+    const interval = setInterval(runBackgroundSync, 5 * 60 * 1000);
+    return () => { clearTimeout(firstSync); clearInterval(interval); };
   }, [load, canLoadDashboard]);
 
   const model = useMemo(() => {
