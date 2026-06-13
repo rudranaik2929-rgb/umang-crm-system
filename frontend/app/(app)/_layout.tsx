@@ -4,7 +4,7 @@ import { Slot, useRouter, usePathname } from 'expo-router';
 import { useAuth } from '../../src/auth/AuthContext';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { Sidebar } from '../../src/components/Sidebar';
-import { canAccess, canAccessOwnerDashboard, defaultRouteFor, pageKeyFromPathname } from '../../src/lib/constants';
+import { canAccess, defaultRouteFor, pageKeyFromPathname } from '../../src/lib/constants';
 
 export default function AppLayout() {
   const { user, loading } = useAuth();
@@ -27,15 +27,6 @@ export default function AppLayout() {
     const pageKey = pageKeyFromPathname(pathname);
     const home = defaultRouteFor(user.role, user.email, user.allowed_pages);
 
-    // Managers always use My Dashboard — block owner dashboard even via bookmark/direct URL.
-    if (user.role === 'manager' && pageKey === 'dashboard') {
-      router.replace('/(app)/my-dashboard' as any);
-      return;
-    }
-    if (pageKey === 'dashboard' && !canAccessOwnerDashboard(user.role, user.email)) {
-      router.replace(home as any);
-      return;
-    }
     if (pageKey && !canAccess(user.role, pageKey, user.email, user.allowed_pages)) {
       router.replace(home as any);
     }

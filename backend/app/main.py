@@ -1016,7 +1016,7 @@ HARDCODED_USERS = {
         "name": "Rohit Singh", "role": "manager",
         "dashboard_type": "manager",
         "allowed_pages": [
-            "my-dashboard", "pipeline", "assign-leads", "bookings", "loans",
+            "dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans",
             "integrations", "broker", "employees",
         ],
         "created_at": "2026-01-01T00:00:00+00:00",
@@ -1037,7 +1037,8 @@ def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
         pages = _coerce_allowed_pages(pages)
     if role == "manager":
         u["dashboard_type"] = "manager"
-        pages = [p for p in pages if p != "dashboard"]
+        if "dashboard" not in pages:
+            pages = ["dashboard", *pages]
         if "my-dashboard" not in pages:
             pages = ["my-dashboard", *pages]
     elif role == "admin":
@@ -1088,15 +1089,24 @@ def ensure_roles(cu: User, allowed: Iterable[str]):
 
 
 def ensure_owner_dashboard(cu: User) -> None:
-    """Owner Dashboard API — administrators only (not manager)."""
+    """Owner-only dashboard API (revenue + full admin controls)."""
     if cu.role == "manager":
         raise HTTPException(
             status_code=403,
-            detail="Owner dashboard is for administrators only. Managers use My Dashboard.",
+            detail="Owner dashboard is for administrators only. Managers use the team Dashboard.",
         )
     if cu.role == "admin" or cu.email in ("htshpatil13@gmail.com", "umang@admin"):
         return
-    raise HTTPException(status_code=403, detail="Owner dashboard is for administrators only. Managers use My Dashboard.")
+    raise HTTPException(status_code=403, detail="Owner dashboard is for administrators only.")
+
+
+def ensure_main_dashboard(cu: User) -> None:
+    """Main Dashboard bundle — administrators and managers."""
+    if cu.role in ("admin", "manager"):
+        return
+    if cu.email in ("htshpatil13@gmail.com", "umang@admin"):
+        return
+    raise HTTPException(status_code=403, detail="Dashboard access denied.")
 
 def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
     if uid in HARDCODED_USERS:
@@ -4738,7 +4748,7 @@ def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
         "admin": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "employees"],
+        "manager": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "employees"],
         "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
         "site_visit": ["my-dashboard", "sales-executive", "pipeline"],
         "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline"],
@@ -5021,12 +5031,8 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
     return {"ok": True}
 
 # ---- Stats / Dashboard ----
-@api_router.get("/stats/dashboard")
-async def stats_dashboard(cu: User=Depends(get_current_user)):
-    ensure_owner_dashboard(cu)
-    # Fetch all independent tables concurrently to cut dashboard latency.
-    # Leads only needs classification/count columns here — skip the heavy
-    # raw_payload JSON to keep the response small and fast.
+def _compute_dashboard_stats() -> Dict[str, Any]:
+    """Shared pipeline stats for admin + manager main Dashboard."""
     fetched = sb_select_parallel({
         "bookings": ("bookings", {"select": "booking_amount,status"}),
         "visits": ("visits", {"select": "visit_id,status"}),
@@ -5044,36 +5050,26 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     loans = fetched["loans"]
     customers = fetched["customers"]
     activities = fetched["activities"]
-    
-    # Deduplicate bookings
+
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
     bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
     bookings = [b for b in bookings if not is_legacy_skeleton_booking(b)]
-    
-    # Deduplicate visits
+
     cache_vis_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
     visits = SESSION_CACHE["visits"] + [v for v in visits if v.get("visit_id") not in cache_vis_ids]
 
-    # Full follow-up table for pending counts (parallel sb_select is capped at ~1000 rows).
     followups = sb_select_all("visit_followups", {"select": "followup_id,status"})
     cache_followup_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
     followups = SESSION_CACHE["followups"] + [f for f in followups if f.get("followup_id") not in cache_followup_ids]
 
     cache_activity_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     activities = SESSION_CACHE["activities"] + [a for a in activities if a.get("activity_id") not in cache_activity_ids]
-    
-    # Deduplicate loans
+
     cache_lon_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
     loans = SESSION_CACHE["loans"] + [ln for ln in loans if ln.get("loan_id") not in cache_lon_ids]
 
     cache_customer_ids = {c.get("customer_id") for c in SESSION_CACHE["customers"]}
     customers = SESSION_CACHE["customers"] + [c for c in customers if c.get("customer_id") not in cache_customer_ids]
-
-    # No demo data fallbacks
-    # if not leads: leads = DEMO_LEADS
-    # if not bookings: bookings = DEMO_BOOKINGS
-    # if not visits: visits = DEMO_VISITS
-    # if not loans: loans = DEMO_LOANS
 
     pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
     broker_pool = [l for l in leads if is_broker_pool_lead(l)]
@@ -5086,7 +5082,7 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
         if l.get("status") != "negative":
             st = l.get("stage", "new")
             stage_dist[st] = stage_dist.get(st, 0) + 1
-            
+
     employees = fetched["employees"]
     campaigns = fetched["campaigns"]
     rev = sum(booking_brokerage_amount(b) for b in bookings)
@@ -5124,12 +5120,18 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     }
 
 
+@api_router.get("/stats/dashboard")
+async def stats_dashboard(cu: User=Depends(get_current_user)):
+    ensure_owner_dashboard(cu)
+    return _compute_dashboard_stats()
+
+
 @api_router.get("/stats/dashboard-bundle")
 async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
-    """One round-trip for owner dashboard — administrators only."""
-    ensure_owner_dashboard(cu)
-    stats, graph, employees, recent, leads_page = await asyncio.gather(
-        stats_dashboard(cu),
+    """One round-trip for main Dashboard — admin (full) + manager (team, no revenue UI)."""
+    ensure_main_dashboard(cu)
+    stats = _compute_dashboard_stats()
+    graph, employees, recent, leads_page = await asyncio.gather(
         stats_dashboard_graph(cu),
         stats_employees(cu),
         list_recent_leads(20, cu),

@@ -6,14 +6,11 @@ import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
-import { LineChart } from '../../src/components/LineChart';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
-import { roleLabel, canAccessOwnerDashboard } from '../../src/lib/constants';
+import { roleLabel } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
-import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { MyActivityModal } from '../../src/components/MyActivityModal';
-import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -54,7 +51,7 @@ const MY_ACTIVITY_KPIS: Array<{
 ];
 
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
-  manager: { label: 'Assign leads to team', route: '/(app)/assign-leads' },
+  manager: { label: 'Open team dashboard', route: '/(app)/dashboard' },
   telecaller: { label: 'Open my telecaller queue', route: '/(app)/telecaller' },
   site_visit: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
   sales_executive: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
@@ -70,8 +67,6 @@ export default function MyDashboard() {
   const router = useRouter();
   const cached = getSnapshot<any>('my-dashboard');
   const [data, setData] = useState<any>(cached?.data ?? null);
-  const [graphData, setGraphData] = useState<any>(cached?.graphData ?? null);
-  const [employees, setEmployees] = useState<any[]>(cached?.employees ?? []);
   const [loading, setLoading] = useState(!cached);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [activityMetric, setActivityMetric] = useState<string | null>(null);
@@ -81,27 +76,10 @@ export default function MyDashboard() {
       const res = await api.get('/stats/me-bundle');
       const bundle = res.data || {};
       setData(bundle.me);
-      setGraphData(bundle.graph);
-      setEmployees(Array.isArray(bundle.employees) ? bundle.employees : []);
-      setSnapshot('my-dashboard', {
-        data: bundle.me,
-        graphData: bundle.graph,
-        employees: bundle.employees || [],
-      });
+      setSnapshot('my-dashboard', { data: bundle.me });
     } finally { setLoading(false); }
   }, []);
   useEffect(() => { load(); }, [load]);
-
-  // Manager: Housing sync in background (server also auto-syncs every 5 min)
-  useEffect(() => {
-    if (user?.role !== 'manager') return;
-    const syncHousing = () => {
-      api.post('/integrations/housing/poll', {}).catch(() => {}).finally(() => { load(); });
-    };
-    const t = setTimeout(syncHousing, 4000);
-    const id = setInterval(syncHousing, 5 * 60 * 1000);
-    return () => { clearTimeout(t); clearInterval(id); };
-  }, [user?.role, load]);
 
   // Auto-refresh every 30 seconds for live feel
   useEffect(() => {
@@ -129,7 +107,7 @@ export default function MyDashboard() {
 
   return (
     <View style={{ flex: 1 }}>
-      <NewLeadPopup enabled={role === 'manager'} />
+      <NewLeadPopup enabled={false} />
       <View style={{ flexDirection: 'row', alignItems: 'center' }}>
         <View style={{ flex: 1 }}>
           <TopBar title="My Dashboard" subtitle={`${roleLabel(role)} workspace`} />
@@ -152,7 +130,7 @@ export default function MyDashboard() {
               {role === 'admin'
                 ? 'You can see and control every department from the owner dashboard.'
                 : role === 'manager'
-                ? 'Monitor team movement, review department queues, and keep the pipeline moving.'
+                ? 'Your personal workspace. Use Dashboard in the sidebar for team pipeline, assignments and performance.'
                 : role === 'telecaller'
                 ? 'Use the Follow Ups tab inside Telecaller. Cold lead opens that tab automatically.'
                 : role === 'site_visit' || role === 'sales_executive'
@@ -223,38 +201,6 @@ export default function MyDashboard() {
             </View>
           </View>
         )}
-
-        {(role === 'manager') && (
-          <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16, marginTop: 8 }]}>
-            <Text style={[styles.section, { color: colors.textMuted, marginBottom: 10 }]}>TEAM ASSIGNMENTS</Text>
-            <AssignLeadsPanel compact />
-          </View>
-        )}
-
-        {role === 'manager' && (
-          <View style={{ marginTop: 16 }}>
-            <EmployeePerformance employees={employees} />
-          </View>
-        )}
-
-        {role === 'manager' && graphData?.leads_by_month?.length ? (
-          <View style={{ marginTop: 16 }}>
-            <LineChart
-              title="Team Leads per Month"
-              subtitle="New enquiries — last 12 months"
-              data={graphData.leads_by_month.map((d: any) => ({
-                label: d.month
-                  ? new Date(`${d.month}-01T12:00:00`).toLocaleString('en-IN', { month: 'short' })
-                  : '-',
-                value: Number(d.count || 0),
-              }))}
-              color={colors.primary}
-              unitLabel="leads"
-              defaultType="bar"
-              simple
-            />
-          </View>
-        ) : null}
 
         {(role === 'telecaller' || role === 'site_visit' || role === 'sales_executive') && (
           <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16 }]}>

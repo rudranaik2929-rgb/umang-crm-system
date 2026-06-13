@@ -1,6 +1,6 @@
 -- ============================================================================
 -- Manager dashboard fix — run once in Supabase SQL Editor
--- Ensures manager logins land on My Dashboard (not owner Dashboard).
+-- Manager gets BOTH: main Dashboard (team) + My Dashboard (personal).
 -- Safe to re-run.
 -- ============================================================================
 
@@ -9,24 +9,28 @@ update users
 set
   role = 'manager',
   dashboard_type = 'manager',
-  allowed_pages = '["my-dashboard","pipeline","assign-leads","bookings","loans","integrations","broker","employees"]'::jsonb,
+  allowed_pages = '["dashboard","my-dashboard","pipeline","assign-leads","bookings","loans","integrations","broker","employees"]'::jsonb,
   updated_at = now()
 where lower(email) = 'rohitsingh241993@gmail.com';
 
 update employees
 set
   role = 'manager',
-  allowed_pages = '["my-dashboard","pipeline","assign-leads","bookings","loans","integrations","broker","employees"]'::jsonb,
+  allowed_pages = '["dashboard","my-dashboard","pipeline","assign-leads","bookings","loans","integrations","broker","employees"]'::jsonb,
   updated_at = now()
 where lower(email) = 'rohitsingh241993@gmail.com';
 
--- 2. Strip owner Dashboard from every manager account
+-- 2. Ensure every manager has main Dashboard + My Dashboard in sidebar
 update users
 set
   allowed_pages = (
-    select coalesce(jsonb_agg(to_jsonb(p)), '[]'::jsonb)
-    from jsonb_array_elements_text(coalesce(allowed_pages, '[]'::jsonb)) as p
-    where p <> 'dashboard'
+    select coalesce(jsonb_agg(distinct to_jsonb(p)), '[]'::jsonb)
+    from (
+      select 'dashboard' as p
+      union select 'my-dashboard'
+      union select jsonb_array_elements_text(coalesce(allowed_pages, '[]'::jsonb))
+    ) s
+    where p <> 'tracking'
   ),
   dashboard_type = 'manager',
   updated_at = now()
@@ -35,9 +39,13 @@ where role = 'manager';
 update employees
 set
   allowed_pages = (
-    select coalesce(jsonb_agg(to_jsonb(p)), '[]'::jsonb)
-    from jsonb_array_elements_text(coalesce(allowed_pages, '[]'::jsonb)) as p
-    where p <> 'dashboard'
+    select coalesce(jsonb_agg(distinct to_jsonb(p)), '[]'::jsonb)
+    from (
+      select 'dashboard' as p
+      union select 'my-dashboard'
+      union select jsonb_array_elements_text(coalesce(allowed_pages, '[]'::jsonb))
+    ) s
+    where p <> 'tracking'
   ),
   updated_at = now()
 where role = 'manager';

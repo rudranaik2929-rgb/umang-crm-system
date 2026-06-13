@@ -14,7 +14,7 @@ import { LineChart } from '../../src/components/LineChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
-import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, stageLabel } from '../../src/lib/constants';
+import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel } from '../../src/lib/constants';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
 const COLD_STAGES = ['new'];
@@ -50,13 +50,8 @@ export default function Dashboard() {
   const [leadsBucket, setLeadsBucket] = useState<string | null>(null);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!user?.role) return;
-    if (!canAccessOwnerDashboard(user.role, user.email)) {
-      router.replace('/(app)/my-dashboard' as any);
-    }
-  }, [user?.role, user?.email, router]);
+  const isManager = user?.role === 'manager';
+  const canLoadDashboard = canAccessMainDashboard(user?.role, user?.email);
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -95,6 +90,14 @@ export default function Dashboard() {
   }, []);
 
   useEffect(() => {
+    if (!user?.role) return;
+    if (!canAccessMainDashboard(user.role, user.email)) {
+      router.replace('/(app)/my-dashboard' as any);
+    }
+  }, [user?.role, user?.email, router]);
+
+  useEffect(() => {
+    if (!canLoadDashboard) return;
     const pollMs = 5 * 60 * 1000;
     load();
     // Housing/Meta sync runs in background — never block dashboard paint on it.
@@ -107,7 +110,7 @@ export default function Dashboard() {
     setTimeout(runBackgroundSync, 3000);
     const interval = setInterval(runBackgroundSync, pollMs);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, canLoadDashboard]);
 
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
@@ -180,12 +183,16 @@ export default function Dashboard() {
     value: Number(d.revenue || 0),
   }));
 
-  const showLeadAlerts = canAccessOwnerDashboard(user?.role, user?.email);
+  const showLeadAlerts = isManager || canAccessOwnerDashboard(user?.role, user?.email);
+  const showAssignPanel = isManager || canAccessOwnerDashboard(user?.role, user?.email);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <NewLeadPopup enabled={showLeadAlerts} />
-      <TopBar title="Dashboard" subtitle="Pipeline, revenue and team performance snapshot" />
+      <TopBar
+        title="Dashboard"
+        subtitle={isManager ? 'Team pipeline, assignments and performance' : 'Pipeline, revenue and team performance snapshot'}
+      />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heroGrid}>
           <ScorePanel score={model.conversionScore} hot={model.hot} cold={model.cold} />
@@ -273,14 +280,18 @@ export default function Dashboard() {
 
         <EmployeePerformance employees={employees} />
 
-        {canAccessOwnerDashboard(user?.role, user?.email) && (
+        {showAssignPanel && (
           <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
             <View style={styles.panelHeader}>
               <View>
                 <Text style={[styles.panelTitle, { color: colors.text }]}>Assign Leads</Text>
-                <Text style={[styles.panelSub, { color: colors.textMuted }]}>Team assignment snapshot · open full workspace</Text>
+                <Text style={[styles.panelSub, { color: colors.textMuted }]}>
+                  {isManager ? 'Assign enquiries to your team · open full workspace' : 'Team assignment snapshot · open full workspace'}
+                </Text>
               </View>
-              <Ionicons name="person-add-outline" size={20} color={colors.primary} />
+              <Pressable onPress={() => router.push('/(app)/assign-leads' as any)}>
+                <Ionicons name="person-add-outline" size={20} color={colors.primary} />
+              </Pressable>
             </View>
             <AssignLeadsPanel compact />
           </View>

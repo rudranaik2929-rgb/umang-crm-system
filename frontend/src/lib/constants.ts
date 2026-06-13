@@ -63,7 +63,7 @@ export const NAV_ITEMS = [
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
   admin: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  manager: ['my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
+  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
   telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
   site_visit: ['my-dashboard', 'sales-executive', 'pipeline'],
   sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline'],
@@ -78,15 +78,20 @@ export function isOwner(role?: string | null, email?: string | null) {
   return role === 'admin' || (!!email && OWNER_EMAILS.includes(email.toLowerCase()));
 }
 
-/** Owner Dashboard (pipeline, revenue, full CRM) — admin/owner only, never manager. */
+/** Owner-only financial dashboard — admin/owner, not manager. */
 export function canAccessOwnerDashboard(role?: string | null, email?: string | null) {
   if (role === 'manager') return false;
   return role === 'admin' || isOwner(role, email);
 }
 
+/** Main team Dashboard — managers + administrators. */
+export function canAccessMainDashboard(role?: string | null, email?: string | null) {
+  return role === 'manager' || canAccessOwnerDashboard(role, email);
+}
+
 const DEFAULT_ROUTES: Record<string, string> = {
   admin: '/(app)/dashboard',
-  manager: '/(app)/my-dashboard',
+  manager: '/(app)/dashboard',
   telecaller: '/(app)/telecaller',
   site_visit: '/(app)/sales-executive',
   sales_executive: '/(app)/sales-executive',
@@ -115,9 +120,10 @@ export function effectivePages(role?: string | null, email?: string | null, allo
   } else {
     pages = strip(ROLE_ACCESS[role || 'admin'] || ROLE_ACCESS.admin);
   }
-  // Manager always uses My Dashboard — never the owner Dashboard nav item.
+  // Manager gets main Dashboard + My Dashboard (not owner revenue controls).
   if (role === 'manager') {
-    pages = pages.filter((k) => k !== 'dashboard');
+    if (!pages.includes('dashboard')) pages = ['dashboard', ...pages];
+    if (!pages.includes('my-dashboard')) pages = ['my-dashboard', ...pages];
   }
   return pages;
 }
@@ -153,7 +159,7 @@ export function canViewBookingFinance(role?: string | null, email?: string | nul
 }
 
 export function canAccess(role: string | null | undefined, page: string, email?: string | null, allowedPages?: string[] | null): boolean {
-  if (page === 'dashboard') return canAccessOwnerDashboard(role, email);
+  if (page === 'dashboard') return canAccessMainDashboard(role, email);
   return effectivePages(role, email, allowedPages).includes(page);
 }
 
@@ -164,8 +170,8 @@ export function pageKeyFromPathname(pathname?: string | null): string | null {
 }
 
 export function defaultRouteFor(role?: string | null, email?: string | null, allowedPages?: string[] | null): string {
-  if (canAccessOwnerDashboard(role, email) && role === 'admin') return DEFAULT_ROUTES.admin;
   if (role === 'manager') return DEFAULT_ROUTES.manager;
+  if (canAccessOwnerDashboard(role, email) && role === 'admin') return DEFAULT_ROUTES.admin;
   if (isOwner(role, email)) return DEFAULT_ROUTES.admin;
   // Prefer the role's natural landing if the employee has access to it,
   // otherwise land on the first granted service (always at least my-dashboard).
