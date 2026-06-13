@@ -1013,20 +1013,50 @@ HARDCODED_USERS = {
     },
     "user_manager001": {
         "user_id": "user_manager001", "email": "rohitsingh241993@gmail.com",
-        "name": "Rohit Singh", "role": "manager", "created_at": "2026-01-01T00:00:00+00:00",
+        "name": "Rohit Singh", "role": "manager",
+        "dashboard_type": "manager",
+        "allowed_pages": [
+            "my-dashboard", "pipeline", "assign-leads", "bookings", "loans",
+            "integrations", "broker", "employees",
+        ],
+        "created_at": "2026-01-01T00:00:00+00:00",
     },
 }
 
 def public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
-    return User(**user).model_dump(mode="json")
+    return User(**_finalize_user_session(dict(user))).model_dump(mode="json")
+
+def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
+    """Normalize role, sidebar pages, and dashboard landing for session/JWT payloads."""
+    role = (u.get("role") or "telecaller").strip()
+    u["role"] = role
+    pages = u.get("allowed_pages")
+    if pages is None:
+        pages = _default_pages_for_role(role)
+    else:
+        pages = _coerce_allowed_pages(pages)
+    if role == "manager":
+        u["dashboard_type"] = "manager"
+        pages = [p for p in pages if p != "dashboard"]
+        if "my-dashboard" not in pages:
+            pages = ["my-dashboard", *pages]
+    elif role == "admin":
+        u["dashboard_type"] = u.get("dashboard_type") or "admin"
+        if "dashboard" not in pages:
+            pages = ["dashboard", *pages]
+    u["allowed_pages"] = pages
+    return u
 
 def issue_session(user: Dict[str, Any], response: Response):
+    user = _finalize_user_session(dict(user))
     token, expires = create_jwt({
         "sub": user["user_id"],
         "email": user.get("email"),
         "role": user.get("role"),
         "name": user.get("name"),
         "employee_id": user.get("employee_id"),
+        "allowed_pages": user.get("allowed_pages"),
+        "dashboard_type": user.get("dashboard_type"),
     })
     LOCAL_SESSIONS[token] = {"user": user, "expires_at": expires}
     sb_insert("sessions", {
@@ -1059,6 +1089,11 @@ def ensure_roles(cu: User, allowed: Iterable[str]):
 
 def ensure_owner_dashboard(cu: User) -> None:
     """Owner Dashboard API — administrators only (not manager)."""
+    if cu.role == "manager":
+        raise HTTPException(
+            status_code=403,
+            detail="Owner dashboard is for administrators only. Managers use My Dashboard.",
+        )
     if cu.role == "admin" or cu.email in ("htshpatil13@gmail.com", "umang@admin"):
         return
     raise HTTPException(status_code=403, detail="Owner dashboard is for administrators only. Managers use My Dashboard.")
@@ -1069,7 +1104,7 @@ def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
     cached = _user_profile_cache.get(uid)
     if cached and (time.time() - float(cached.get("_cached_at", 0))) < _USER_CACHE_TTL_SEC:
         return {k: v for k, v in cached.items() if k != "_cached_at"}
-    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "user_id,email,name,role,employee_id,acting_as_employee_id,created_at"})
+    users = sb_select("users", {"user_id": f"eq.{uid}", "select": "user_id,email,name,role,employee_id,acting_as_employee_id,allowed_pages,dashboard_type,created_at"})
     if not users:
         raise HTTPException(401, "User not found")
     u = users[0]
@@ -1084,7 +1119,7 @@ def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
         if emps and emps[0].get("active") is False:
             raise HTTPException(401, "Account is disabled. Contact your manager.")
     _user_profile_cache[uid] = {**u, "_cached_at": time.time()}
-    return u
+    return _finalize_user_session(u)
 
 def invalidate_sessions_for_user(user_id: str):
     """Force re-login for one user (e.g. after password reset). Never clears all sessions."""
@@ -1111,10 +1146,12 @@ def user_from_jwt_payload(jwt_payload: Dict[str, Any]) -> Optional[Dict[str, Any
         "role": role,
         "name": jwt_payload.get("name") or "User",
         "employee_id": emp_id,
+        "allowed_pages": jwt_payload.get("allowed_pages"),
+        "dashboard_type": jwt_payload.get("dashboard_type"),
     }
     if emp_id and role != "admin":
         u["acting_as_employee_id"] = emp_id
-    return u
+    return _finalize_user_session(u)
 
 
 async def get_current_user(request: Request) -> User:
@@ -1131,7 +1168,7 @@ async def get_current_user(request: Request) -> User:
         if datetime.fromisoformat(sess["expires_at"].replace("Z","+00:00")) <= now_utc():
             del LOCAL_SESSIONS[token]
             raise HTTPException(401, "Session expired")
-        u = dict(sess["user"])
+        u = _finalize_user_session(dict(sess["user"]))
         act_as = request.headers.get("X-Acting-As")
         if act_as:
             u["acting_as_employee_id"] = act_as
@@ -1222,7 +1259,7 @@ async def auth_session(request: Request, response: Response):
     lookup_email = EMAIL_ALIASES.get(email, email)
     
     # Query real users table
-    users = sb_select("users", {"email": f"eq.{lookup_email}", "select": "user_id,email,name,role,employee_id,acting_as_employee_id,password_hash,password,created_at"})
+    users = sb_select("users", {"email": f"eq.{lookup_email}", "select": "user_id,email,name,role,employee_id,acting_as_employee_id,password_hash,password,allowed_pages,dashboard_type,created_at"})
     if not users:
         raise HTTPException(401, "Invalid email or password")
     
@@ -1265,9 +1302,13 @@ async def auth_logout(request: Request, response: Response):
 @api_router.post("/auth/set-role")
 async def auth_set_role(payload: RoleSet, cu: User = Depends(get_current_user)):
     if payload.role not in ROLES: raise HTTPException(400, "Invalid role")
-    updated = sb_update("users", "user_id", cu.user_id, {"role": payload.role})
+    patch: Dict[str, Any] = {"role": payload.role, "dashboard_type": payload.role}
+    if payload.role == "manager":
+        patch["allowed_pages"] = _default_pages_for_role("manager")
+    updated = sb_update("users", "user_id", cu.user_id, patch)
     if not updated: raise HTTPException(500, "Failed to update role")
-    return User(**updated).model_dump(mode="json")
+    merged = {**cu.model_dump(mode="json"), **updated}
+    return User(**_finalize_user_session(merged)).model_dump(mode="json")
 
 @api_router.post("/auth/ping-location")
 async def ping_location(request: Request, cu: User=Depends(get_current_user)):
@@ -5236,7 +5277,10 @@ async def stats_me(cu: User=Depends(get_current_user)):
 
     emp_id = cu.acting_as_employee_id or cu.employee_id
     lead_select = "lead_id,stage,status,assigned_to,follow_up_at,priority,call_status,created_at"
-    if cu.role != "admin" and emp_id:
+    if cu.role == "manager" and not emp_id:
+        # Manager workspace uses team panels — not company-wide personal KPI totals.
+        leads: List[Dict[str, Any]] = []
+    elif cu.role != "admin" and emp_id:
         db_leads = sb_select_all("leads", {
             "select": lead_select,
             "assigned_to": f"eq.{emp_id}",

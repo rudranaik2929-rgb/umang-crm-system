@@ -78,8 +78,9 @@ export function isOwner(role?: string | null, email?: string | null) {
   return role === 'admin' || (!!email && OWNER_EMAILS.includes(email.toLowerCase()));
 }
 
-/** Owner Dashboard (pipeline, revenue, full CRM) — admin/owner only, not manager. */
+/** Owner Dashboard (pipeline, revenue, full CRM) — admin/owner only, never manager. */
 export function canAccessOwnerDashboard(role?: string | null, email?: string | null) {
+  if (role === 'manager') return false;
   return role === 'admin' || isOwner(role, email);
 }
 

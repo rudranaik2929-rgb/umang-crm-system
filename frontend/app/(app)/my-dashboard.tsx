@@ -190,7 +190,7 @@ export default function MyDashboard() {
         </View>
 
         {/* Personal KPIs */}
-        {role !== 'admin' && (
+        {role !== 'admin' && role !== 'manager' && (
           <View>
             <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY — TAP A BOX FOR LIST</Text>
             <View style={styles.kpiGrid}>

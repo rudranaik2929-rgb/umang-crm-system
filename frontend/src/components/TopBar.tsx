@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, Modal, ScrollView } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
-import { ROLES, roleLabel } from '../lib/constants';
+import { ROLES, roleLabel, defaultRouteFor } from '../lib/constants';
 import { api, clearSnapshots } from '../lib/api';
 import { useRouter } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
@@ -85,6 +85,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const onChangeRole = async (r: string) => {
     setRoleOpen(false);
     await setRole(r);
+    router.replace(defaultRouteFor(r, user?.email, user?.allowed_pages) as any);
   };
 
   const onPickEmployee = async (eid: string | null) => {
