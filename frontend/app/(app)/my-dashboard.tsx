@@ -24,30 +24,28 @@ const ROLE_ACCENT: Record<string, string> = {
 };
 
 const ROLE_HIGHLIGHT: Record<string, string[]> = {
-  manager: ['actions_total', 'positives', 'visits', 'bookings_done', 'loans_done'],
-  telecaller: ['positives', 'negatives', 'followups', 'call_notes'],
-  site_visit: ['visits'],
-  booking: ['bookings_done'],
-  loan: ['loans_done', 'closed_deals'],
-  marketing: ['actions_total'],
+  telecaller: ['hot', 'ringing', 'not_interested'],
+  site_visit: ['visited', 'hot'],
+  sales_executive: ['visited', 'hot', 'booking_done'],
+  booking: ['booking_done'],
+  loan: ['booking_done'],
+  marketing: ['not_interested'],
 };
 
-const MY_ACTIVITY_KPIS: Array<{
+const MY_PERFORMANCE_KPIS: Array<{
   label: string;
   metric: string;
   icon: keyof typeof Ionicons.glyphMap;
-  color: string;
+  colorKey: string;
   valueKey: string;
-  highlight?: string;
 }> = [
-  { label: 'My Queue', metric: 'queue', icon: 'list-outline', color: 'primary', valueKey: 'assigned_queue', highlight: 'queue' },
-  { label: 'Follow-ups', metric: 'follow_ups', icon: 'time-outline', color: 'warning', valueKey: 'assigned_follow_ups', highlight: 'followups' },
-  { label: 'Completed', metric: 'completed', icon: 'checkmark-circle-outline', color: 'positive', valueKey: 'assigned_completed' },
-  { label: 'Positive', metric: 'positive', icon: 'thumbs-up-outline', color: 'positive', valueKey: 'positives', highlight: 'positives' },
-  { label: 'Call Notes', metric: 'call_notes', icon: 'document-text-outline', color: 'info', valueKey: 'call_notes', highlight: 'call_notes' },
-  { label: 'Bookings', metric: 'bookings_done', icon: 'document-text-outline', color: 'warning', valueKey: 'bookings_done', highlight: 'bookings_done' },
-  { label: 'Loans', metric: 'loans_done', icon: 'business-outline', color: 'loan', valueKey: 'loans_done', highlight: 'loans_done' },
-  { label: 'Closed Deals', metric: 'closed_deals', icon: 'trophy-outline', color: 'accent', valueKey: 'closed_deals', highlight: 'closed_deals' },
+  { label: 'My Queue', metric: 'total', icon: 'list-outline', colorKey: 'primary', valueKey: 'leads_total' },
+  { label: 'Hot', metric: 'hot', icon: 'flame', colorKey: 'warning', valueKey: 'emp_hot' },
+  { label: 'Visited', metric: 'visited', icon: 'location', colorKey: 'info', valueKey: 'emp_visited' },
+  { label: 'Not Interested', metric: 'not_interested', icon: 'close-circle', colorKey: 'negative', valueKey: 'emp_not_interested' },
+  { label: 'Booking Done', metric: 'booking_done', icon: 'checkmark-done', colorKey: 'positive', valueKey: 'emp_booking_done' },
+  { label: 'Low Budget', metric: 'low_budget', icon: 'wallet', colorKey: 'accent', valueKey: 'emp_low_budget' },
+  { label: 'Ringing', metric: 'ringing', icon: 'call', colorKey: 'warning', valueKey: 'emp_ringing' },
 ];
 
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
@@ -121,7 +119,6 @@ export default function MyDashboard() {
   const score = personal.score_10 || 0;
   const scorePct = (score / 10) * 100;
   const cta = ROLE_CTA[role] || ROLE_CTA.admin;
-  const highlight = ROLE_HIGHLIGHT[role] || [];
 
   return (
     <View style={{ flex: 1 }}>
@@ -188,20 +185,20 @@ export default function MyDashboard() {
         {/* Personal KPIs */}
         {role !== 'admin' && role !== 'manager' && (
           <View>
-            <Text style={[styles.section, { color: colors.textMuted }]}>MY ACTIVITY — TAP A BOX FOR LIST</Text>
+            <Text style={[styles.section, { color: colors.textMuted }]}>MY PERFORMANCE — TAP A BOX FOR LIST</Text>
             <View style={styles.kpiGrid}>
-              {MY_ACTIVITY_KPIS.map((kpi) => {
+              {MY_PERFORMANCE_KPIS.map((kpi) => {
                 const colorMap: Record<string, string> = {
                   primary: colors.primary,
                   warning: colors.warning,
                   positive: colors.positive,
                   info: colors.info,
                   accent: colors.accent,
-                  loan: '#7C3AED',
+                  negative: colors.negative,
                 };
-                const c = colorMap[kpi.color] || colors.primary;
-                const raw = personal[kpi.valueKey];
-                const value = kpi.valueKey === 'assigned_follow_ups' ? (raw ?? personal.followups ?? 0) : (raw ?? 0);
+                const c = colorMap[kpi.colorKey] || colors.primary;
+                const value = personal[kpi.valueKey] ?? 0;
+                const roleHighlights = ROLE_HIGHLIGHT[role] || [];
                 return (
                   <KPI
                     key={kpi.metric}
@@ -210,9 +207,9 @@ export default function MyDashboard() {
                     icon={kpi.icon}
                     color={c}
                     colors={colors}
-                    highlight={kpi.highlight ? highlight.includes(kpi.highlight) : false}
+                    highlight={roleHighlights.includes(kpi.metric)}
                     onPress={() => setActivityMetric(kpi.metric)}
-                    testID={`my-activity-${kpi.metric}`}
+                    testID={`my-performance-${kpi.metric}`}
                   />
                 );
               })}
@@ -397,7 +394,7 @@ const styles = StyleSheet.create({
   tempDesc: { fontSize: 11 },
 
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  kpiCard: { width: 180, padding: 14, borderRadius: 10, gap: 6 },
+  kpiCard: { width: 160, minWidth: 140, flexGrow: 1, maxWidth: 200, padding: 14, borderRadius: 10, gap: 6 },
   kpiLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
   kpiVal: { fontSize: 26, fontWeight: '700', letterSpacing: -0.5 },
   

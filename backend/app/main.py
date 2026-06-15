@@ -627,32 +627,35 @@ def lead_ready_for_loan_queue(lead: Dict[str, Any]) -> bool:
     return lead.get("stage") == "loan"
 
 
+def normalize_employee_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Assigned leads for performance stats — pipeline only, deduped."""
+    return dedupe_leads([l for l in emp_leads if is_pipeline_lead(l)])
+
+
+def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
+    """One bucket per lead — same priority as assign-workspace inquiry filters."""
+    if lead.get("status") == "negative":
+        return "not_interested"
+    if _lead_priority(lead) == "low_budget":
+        return "low_budget"
+    if clean_text(lead.get("call_status")):
+        return "ringing"
+    if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
+        return "booking_done"
+    if lead.get("stage") in ["site_visit", "positive"]:
+        return "visited"
+    if _lead_priority(lead) == "hot":
+        return "hot"
+    return None
+
+
 def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: str) -> List[Dict[str, Any]]:
     """Single source of truth for employee performance boxes + drill-down lists."""
-    rows = dedupe_leads(emp_leads)
-    if metric_key == "active":
+    rows = normalize_employee_leads(emp_leads)
+    key = (metric_key or "").strip().lower()
+    if key == "active":
         return [l for l in rows if l.get("status") != "negative" and l.get("stage") != "closed"]
-    if metric_key == "hot":
-        return [l for l in rows if _lead_priority(l) == "hot" and l.get("status") != "negative"]
-    if metric_key == "visited":
-        return [
-            l for l in rows
-            if l.get("status") != "negative"
-            and l.get("stage") in ["site_visit", "positive"]
-        ]
-    if metric_key == "not_interested":
-        return [l for l in rows if l.get("status") == "negative"]
-    if metric_key == "booking_done":
-        return [
-            l for l in rows
-            if l.get("stage") in ["booking", "loan", "registration"]
-            or _lead_priority(l) in [HANDOFF_BOOKING, HANDOFF_LOAN]
-        ]
-    if metric_key == "low_budget":
-        return [l for l in rows if _lead_priority(l) == "low_budget"]
-    if metric_key == "ringing":
-        return [l for l in rows if clean_text(l.get("call_status"))]
-    return rows
+    return [l for l in rows if classify_employee_performance_metric(l) == key]
 
 
 def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str, int]:
@@ -670,7 +673,7 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
 
 def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Optional[str] = None) -> Dict[str, int]:
     """Per-employee assignment counts — dedupe within this employee's leads only."""
-    rows = dedupe_leads(emp_leads)
+    rows = normalize_employee_leads(emp_leads)
     queue_rows = filter_employee_queue_leads(rows, role)
     follow_rows = filter_employee_follow_up_leads(rows)
     in_progress = sum(
@@ -5381,6 +5384,12 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "assigned_queue": assignment["assigned_queue"],
             "assigned_in_progress": assignment["assigned_in_progress"],
             "assigned_follow_ups": assignment["assigned_follow_ups"],
+            "emp_hot": assignment["emp_hot"],
+            "emp_visited": assignment["emp_visited"],
+            "emp_not_interested": assignment["emp_not_interested"],
+            "emp_booking_done": assignment["emp_booking_done"],
+            "emp_low_budget": assignment["emp_low_budget"],
+            "emp_ringing": assignment["emp_ringing"],
             "positives": positives,
             "negatives": negative,
             "followups": followups,
@@ -5399,12 +5408,13 @@ async def stats_me(cu: User=Depends(get_current_user)):
 EMPLOYEE_METRIC_KEYS = ["active", "hot", "visited", "not_interested", "booking_done", "low_budget", "ringing"]
 
 PERSONAL_ACTIVITY_METRICS = [
-    "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
+    "total", "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
     "call_notes", "bookings_done", "loans_done", "active", "hot", "visited",
     "not_interested", "booking_done", "low_budget", "ringing",
 ]
 
 PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
+    "total": "My Queue — All Leads",
     "queue": "My Queue",
     "follow_ups": "Follow-ups",
     "completed": "Completed",
@@ -5440,6 +5450,8 @@ def filter_personal_activity(
     """Drill-down lists for My Dashboard activity boxes — counts match stats_me."""
     key = (metric_key or "").strip().lower()
     rows = dedupe_leads(emp_leads)
+    if key in ("total", "all", "leads_total", "assigned_total"):
+        return {"kind": "leads", "items": rows}
     if key in ("queue", "assigned_queue"):
         items = filter_employee_queue_leads(rows, role)
         return {"kind": "leads", "items": items}
@@ -5540,7 +5552,9 @@ async def list_employee_metric_leads(
     if key not in EMPLOYEE_METRIC_KEYS:
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(EMPLOYEE_METRIC_KEYS)}")
     limit = min(max(limit, 1), 500)
-    all_leads = fetch_all_leads_merged("lead_id,name,phone,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at")
+    all_leads = fetch_all_leads_merged(
+        "lead_id,name,phone,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,lead_type"
+    )
     emp_leads = [l for l in all_leads if l.get("assigned_to") == employee_id]
     filtered = filter_employee_metric_leads(emp_leads, key)
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
@@ -5561,7 +5575,7 @@ async def stats_employees(cu: User=Depends(get_current_user)):
     cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
     all_leads = fetch_all_leads_merged(
-        "lead_id,assigned_to,status,stage,priority,call_status,follow_up_at"
+        "lead_id,assigned_to,status,stage,priority,call_status,follow_up_at,lead_type"
     )
 
     emp_stats = []

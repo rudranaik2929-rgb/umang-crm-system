@@ -1,10 +1,11 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 
 type EmployeePerformanceProps = {
   employees: any[];
+  onMetricPress?: (employee: any, metricKey: string) => void;
 };
 
 const ROLE_LABELS: Record<string, string> = {
@@ -19,16 +20,15 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const WORKFLOW_METRICS = [
-  { key: 'emp_active', label: 'Active', icon: 'flash' as const, colorKey: 'primary' },
-  { key: 'emp_hot', label: 'Hot', icon: 'flame' as const, colorKey: 'warning' },
-  { key: 'emp_visited', label: 'Visited', icon: 'location' as const, colorKey: 'info' },
-  { key: 'emp_not_interested', label: 'Not Interested', icon: 'close-circle' as const, colorKey: 'negative' },
-  { key: 'emp_booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },
-  { key: 'emp_low_budget', label: 'Low Budget', icon: 'wallet' as const, colorKey: 'accent' },
-  { key: 'emp_ringing', label: 'Ringing', icon: 'call' as const, colorKey: 'warning' },
+  { key: 'emp_hot', apiKey: 'hot', label: 'Hot', icon: 'flame' as const, colorKey: 'warning' },
+  { key: 'emp_visited', apiKey: 'visited', label: 'Visited', icon: 'location' as const, colorKey: 'info' },
+  { key: 'emp_not_interested', apiKey: 'not_interested', label: 'Not Interested', icon: 'close-circle' as const, colorKey: 'negative' },
+  { key: 'emp_booking_done', apiKey: 'booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },
+  { key: 'emp_low_budget', apiKey: 'low_budget', label: 'Low Budget', icon: 'wallet' as const, colorKey: 'accent' },
+  { key: 'emp_ringing', apiKey: 'ringing', label: 'Ringing', icon: 'call' as const, colorKey: 'warning' },
 ];
 
-export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
+export function EmployeePerformance({ employees, onMetricPress }: EmployeePerformanceProps) {
   const { colors } = useTheme();
 
   return (
@@ -36,7 +36,7 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
       <View style={styles.headerRow}>
         <View>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Employee Performance</Text>
-          <Text style={[styles.cardSub, { color: colors.textMuted }]}>Assigned leads by workflow stage — per employee</Text>
+          <Text style={[styles.cardSub, { color: colors.textMuted }]}>Assigned leads by workflow stage — tap any box for list</Text>
         </View>
         <Text style={[styles.cardSub, { color: colors.textMuted }]}>
           {employees.length} {employees.length === 1 ? 'employee' : 'employees'}
@@ -70,7 +70,6 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
             const score = (employee.emp_hot ?? 0) * 3
               + (employee.emp_visited ?? 0) * 2
               + (employee.emp_booking_done ?? 0) * 5
-              + (employee.emp_active ?? 0)
               - (employee.emp_not_interested ?? 0);
 
             return (
@@ -118,7 +117,7 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{score}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end' }}>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>ASSIGNED</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>TOTAL LEADS</Text>
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.assigned_total ?? employee.leads_total ?? 0}</Text>
                   </View>
                 </View>
@@ -148,6 +147,7 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
                         label={metric.label}
                         value={employee[metric.key] ?? 0}
                         color={pillColor}
+                        onPress={onMetricPress ? () => onMetricPress(employee, metric.apiKey) : undefined}
                       />
                     );
                   })}
@@ -161,15 +161,35 @@ export function EmployeePerformance({ employees }: EmployeePerformanceProps) {
   );
 }
 
-function MetricPill({ icon, label, value, color }: { icon: any; label: string; value: number; color: string }) {
-  return (
-    <View style={[styles.metricPill, { backgroundColor: color + '10', borderColor: color + '30' }]}>
+function MetricPill({ icon, label, value, color, onPress }: { icon: any; label: string; value: number; color: string; onPress?: () => void }) {
+  const inner = (
+    <>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
         <Ionicons name={icon} size={11} color={color} />
         <Text style={{ color, fontSize: 8, fontWeight: '700', letterSpacing: 0.4 }} numberOfLines={2}>{label.toUpperCase()}</Text>
       </View>
       <Text style={{ color, fontSize: 20, fontWeight: '700', letterSpacing: 0 }}>{value}</Text>
-    </View>
+      {onPress ? <Text style={{ color, fontSize: 8, opacity: 0.8 }}>Tap for list</Text> : null}
+    </>
+  );
+  if (!onPress) {
+    return (
+      <View style={[styles.metricPill, { backgroundColor: color + '10', borderColor: color + '30' }]}>
+        {inner}
+      </View>
+    );
+  }
+  return (
+    <Pressable
+      onPress={onPress}
+      testID={`emp-metric-pill-${label.replace(/\s+/g, '-').toLowerCase()}`}
+      style={({ pressed }) => [
+        styles.metricPill,
+        { backgroundColor: color + '10', borderColor: color + '30', opacity: pressed ? 0.85 : 1 },
+      ]}
+    >
+      {inner}
+    </Pressable>
   );
 }
 
@@ -207,7 +227,7 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 },
   metricPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
   metricPill: {
-    width: 100, paddingVertical: 10, paddingHorizontal: 8,
+    width: 108, paddingVertical: 10, paddingHorizontal: 8,
     borderRadius: 8, borderWidth: 1, gap: 4,
   },
 });

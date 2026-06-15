@@ -12,6 +12,7 @@ import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { LineChart } from '../../src/components/LineChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
+import { EmployeeMetricModal } from '../../src/components/EmployeeMetricModal';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
 import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel } from '../../src/lib/constants';
@@ -49,6 +50,7 @@ export default function Dashboard() {
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [leadsBucket, setLeadsBucket] = useState<string | null>(null);
   const [openLead, setOpenLead] = useState<string | null>(null);
+  const [empMetric, setEmpMetric] = useState<{ employeeId: string; employeeName: string; metric: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const isManager = user?.role === 'manager';
   const canLoadDashboard = canAccessMainDashboard(user?.role, user?.email);
@@ -280,7 +282,14 @@ export default function Dashboard() {
           <FollowUpsPanel compact maxItems={12} showEmployeeName onOpenLead={setOpenLead} />
         </Pressable>
 
-        <EmployeePerformance employees={employees} />
+        <EmployeePerformance
+          employees={employees}
+          onMetricPress={(employee, metricKey) => setEmpMetric({
+            employeeId: employee.employee_id,
+            employeeName: employee.name,
+            metric: metricKey,
+          })}
+        />
 
         {showAssignPanel && (
           <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -379,6 +388,15 @@ export default function Dashboard() {
         onClose={() => setOpenLead(null)}
         onChanged={load}
         userRole={user?.role}
+      />
+      <EmployeeMetricModal
+        visible={empMetric !== null}
+        employeeId={empMetric?.employeeId ?? null}
+        employeeName={empMetric?.employeeName}
+        metric={empMetric?.metric ?? null}
+        onClose={() => setEmpMetric(null)}
+        userRole={user?.role}
+        onChanged={load}
       />
     </View>
   );
