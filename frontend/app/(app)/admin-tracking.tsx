@@ -1,11 +1,13 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, useWindowDimensions } from 'react-native';
+import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
+import { useAuth } from '../../src/auth/AuthContext';
 import { api, clearGetCache, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmployeeMap } from '../../src/components/EmployeeMap';
 import { Ionicons } from '@expo/vector-icons';
-import { roleLabel } from '../../src/lib/constants';
+import { roleLabel, canAccess } from '../../src/lib/constants';
 
 function formatSeen(iso?: string | null) {
   if (!iso) return 'Never';
@@ -23,12 +25,21 @@ function isLive(iso?: string | null) {
 
 export default function AdminTracking() {
   const { colors } = useTheme();
+  const { user } = useAuth();
+  const router = useRouter();
   const { width } = useWindowDimensions();
   const isNarrow = width < 900;
   const cachedTracking = getSnapshot<any[]>('admin-tracking-page');
   const [employees, setEmployees] = useState<any[]>(cachedTracking ?? []);
   const [loading, setLoading] = useState(!cachedTracking);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!user) return;
+    if (!canAccess(user.role, 'tracking', user.email, user.allowed_pages)) {
+      router.replace('/(app)/my-dashboard' as any);
+    }
+  }, [user, router]);
 
   const load = useCallback(async (force = false) => {
     try {
@@ -47,10 +58,11 @@ export default function AdminTracking() {
   }, []);
 
   useEffect(() => {
+    if (!user || !canAccess(user.role, 'tracking', user.email, user.allowed_pages)) return;
     load();
     const interval = setInterval(() => load(true), 60_000);
     return () => clearInterval(interval);
-  }, [load]);
+  }, [load, user]);
 
   const withGps = employees.filter((e) => e.last_lat != null && e.last_lng != null);
   const liveCount = employees.filter((e) => isLive(e.last_seen_at)).length;

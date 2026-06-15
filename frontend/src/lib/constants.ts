@@ -63,7 +63,7 @@ export const NAV_ITEMS = [
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
   admin: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
+  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees'],
   telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
   site_visit: ['my-dashboard', 'sales-executive', 'pipeline'],
   sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline'],
@@ -103,7 +103,15 @@ const DEFAULT_ROUTES: Record<string, string> = {
 const ROUTE_ITEMS = NAV_ITEMS;
 
 // Services a manager can grant when adding an employee (checkbox list).
-export const ALL_SERVICES = NAV_ITEMS.filter((n) => n.key !== 'my-dashboard');
+// Employee Tracking is admin/manager only — never assignable per employee.
+export const EMPLOYEE_ASSIGNABLE_SERVICES = NAV_ITEMS.filter(
+  (n) => n.key !== 'my-dashboard' && n.key !== 'tracking',
+);
+
+/** @deprecated use EMPLOYEE_ASSIGNABLE_SERVICES */
+export const ALL_SERVICES = EMPLOYEE_ASSIGNABLE_SERVICES;
+
+const ADMIN_MANAGER_ONLY_PAGES = new Set(['tracking']);
 
 // Resolve the effective set of accessible page keys for a user. Per-employee
 // allowed_pages is the source of truth; owners always get everything; legacy
@@ -124,6 +132,11 @@ export function effectivePages(role?: string | null, email?: string | null, allo
   if (role === 'manager') {
     if (!pages.includes('dashboard')) pages = ['dashboard', ...pages];
     if (!pages.includes('my-dashboard')) pages = ['my-dashboard', ...pages];
+    if (!pages.includes('tracking')) pages = [...pages, 'tracking'];
+  }
+  // Employee Tracking — admin & manager only (never from per-employee grants).
+  if (role !== 'admin' && role !== 'manager') {
+    pages = pages.filter((p) => !ADMIN_MANAGER_ONLY_PAGES.has(p));
   }
   return pages;
 }
@@ -159,6 +172,9 @@ export function canViewBookingFinance(role?: string | null, email?: string | nul
 }
 
 export function canAccess(role: string | null | undefined, page: string, email?: string | null, allowedPages?: string[] | null): boolean {
+  if (ADMIN_MANAGER_ONLY_PAGES.has(page)) {
+    return role === 'admin' || role === 'manager';
+  }
   if (page === 'dashboard') return canAccessMainDashboard(role, email);
   return effectivePages(role, email, allowedPages).includes(page);
 }

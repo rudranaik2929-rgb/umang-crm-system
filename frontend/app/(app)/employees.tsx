@@ -5,7 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
-import { ROLES, roleLabel, ALL_SERVICES } from '../../src/lib/constants';
+import { ROLES, roleLabel, EMPLOYEE_ASSIGNABLE_SERVICES } from '../../src/lib/constants';
 import { getEmployeePassword, setEmployeePassword } from '../../src/lib/employeePasswordCache';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -26,7 +26,7 @@ function parseAllowedPages(value: unknown): string[] | null {
 }
 
 const ROLE_DEFAULT_SERVICES: Record<string, string[]> = {
-  admin: ALL_SERVICES.map((s) => s.key),
+  admin: EMPLOYEE_ASSIGNABLE_SERVICES.map((s) => s.key),
   manager: ['pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'employees'],
   telecaller: ['telecaller', 'pipeline', 'negative'],
   site_visit: ['sales-executive', 'telecaller', 'pipeline'],
@@ -247,8 +247,11 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
             </View>
 
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 16 }]}>SIDEBAR SERVICES (ACCESS AFTER LOGIN)</Text>
+            <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8 }}>
+              Employee Tracking is only for Admin/Manager — not listed here.
+            </Text>
             <View style={{ gap: 8 }}>
-              {ALL_SERVICES.map((svc) => {
+              {EMPLOYEE_ASSIGNABLE_SERVICES.map((svc) => {
                 const checked = pages.includes(svc.key);
                 return (
                   <Pressable key={svc.key} testID={`emp-page-${svc.key}`} onPress={() => togglePage(svc.key)}
@@ -310,21 +313,25 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
   }, []);
 
   const togglePage = (key: string) => {
-    setPages((prev) => (prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key]));
-    setSidebarSaved(false);
-    if (!sidebarReady.current || !employee?.employee_id) return;
-    if (sidebarTimer.current) clearTimeout(sidebarTimer.current);
-    sidebarTimer.current = setTimeout(() => saveSidebarOnly(true), 450);
+    setPages((prev) => {
+      const next = prev.includes(key) ? prev.filter((p) => p !== key) : [...prev, key];
+      setSidebarSaved(false);
+      if (sidebarReady.current && employee?.employee_id) {
+        if (sidebarTimer.current) clearTimeout(sidebarTimer.current);
+        sidebarTimer.current = setTimeout(() => saveSidebarPages(next, true), 450);
+      }
+      return next;
+    });
   };
 
-  const saveSidebarOnly = async (auto = false) => {
+  const saveSidebarPages = async (pageList: string[], auto = false) => {
     if (!employee?.employee_id) return;
     if (auto) setSidebarBusy(true);
     else setBusy(true);
     if (!auto) setError(null);
     setSidebarSaved(false);
     try {
-      const res = await api.patch(`/employees/${employee.employee_id}`, { allowed_pages: pages });
+      const res = await api.patch(`/employees/${employee.employee_id}`, { allowed_pages: pageList });
       const saved = parseAllowedPages(res.data?.allowed_pages);
       if (saved !== null) setPages(saved);
       setSidebarSaved(true);
@@ -335,6 +342,10 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
       if (auto) setSidebarBusy(false);
       else setBusy(false);
     }
+  };
+
+  const saveSidebarOnly = async (auto = false) => {
+    await saveSidebarPages(pages, auto);
   };
 
   const submit = async () => {
@@ -404,7 +415,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
               SIDEBAR SERVICES {sidebarBusy ? '(saving…)' : sidebarSaved ? '(saved)' : '(auto-saves)'}
             </Text>
             <View style={{ gap: 8 }}>
-              {ALL_SERVICES.map((svc) => {
+              {EMPLOYEE_ASSIGNABLE_SERVICES.map((svc) => {
                 const checked = pages.includes(svc.key);
                 return (
                   <Pressable key={svc.key} onPress={() => togglePage(svc.key)}

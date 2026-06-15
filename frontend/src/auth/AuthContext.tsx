@@ -69,6 +69,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     })();
   }, [refresh]);
 
+  useEffect(() => {
+    if (!user || typeof document === 'undefined') return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    const interval = setInterval(refresh, 120_000);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      clearInterval(interval);
+    };
+  }, [user?.user_id, refresh]);
+
   const logout = useCallback(async () => {
     try {
       await api.post('/auth/logout');

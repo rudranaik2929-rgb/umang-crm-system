@@ -1404,7 +1404,7 @@ def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
         if emps and emps[0].get("active") is False:
             raise HTTPException(401, "Account is disabled. Contact your manager.")
     _user_profile_cache[uid] = {**u, "_cached_at": time.time()}
-    return _finalize_user_session(u)
+    return _finalize_user_session(_hydrate_allowed_pages_from_employee(u))
 
 def invalidate_sessions_for_user(user_id: str):
     """Force re-login for one user (e.g. after password reset). Never clears all sessions."""
@@ -1436,7 +1436,8 @@ def user_from_jwt_payload(jwt_payload: Dict[str, Any]) -> Optional[Dict[str, Any
     }
     if emp_id and role != "admin":
         u["acting_as_employee_id"] = emp_id
-    return _finalize_user_session(u)
+    hydrated = _hydrate_allowed_pages_from_employee(u)
+    return _finalize_user_session(hydrated)
 
 
 async def get_current_user(request: Request) -> User:
@@ -1454,6 +1455,7 @@ async def get_current_user(request: Request) -> User:
             del LOCAL_SESSIONS[token]
             raise HTTPException(401, "Session expired")
         u = _finalize_user_session(dict(sess["user"]))
+        u = _hydrate_allowed_pages_from_employee(u)
         act_as = request.headers.get("X-Acting-As")
         if act_as:
             u["acting_as_employee_id"] = act_as
@@ -1464,6 +1466,7 @@ async def get_current_user(request: Request) -> User:
         exp = datetime.fromtimestamp(int(jwt_payload["exp"]), tz=timezone.utc).isoformat()
         u = user_from_jwt_payload(jwt_payload)
         if u:
+            u = _hydrate_allowed_pages_from_employee(u)
             LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
             act_as = request.headers.get("X-Acting-As")
             if act_as:
@@ -5350,13 +5353,38 @@ def _coerce_allowed_pages(value: Any) -> List[str]:
         try:
             parsed = json.loads(value)
             if isinstance(parsed, list):
-                return [str(x) for x in parsed if x]
+                return _sanitize_assignable_pages([str(x) for x in parsed if x])
         except (json.JSONDecodeError, TypeError):
             return []
         return []
     if isinstance(value, list):
-        return [str(x) for x in value if x]
+        return _sanitize_assignable_pages([str(x) for x in value if x])
     return []
+
+
+def _sanitize_assignable_pages(pages: List[str]) -> List[str]:
+    """Per-employee sidebar grants — never include admin-only items."""
+    blocked = {"tracking", "my-dashboard", "dashboard"}
+    return [p for p in pages if p and p not in blocked]
+
+
+def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
+    """Employee row is the source of truth for sidebar access after login."""
+    role = (u.get("role") or "").strip()
+    if role == "admin":
+        return u
+    emp_id = u.get("employee_id")
+    if not emp_id:
+        return u
+    emps = sb_select("employees", {
+        "employee_id": f"eq.{emp_id}",
+        "select": "allowed_pages,active",
+        "limit": "1",
+    })
+    if not emps:
+        return u
+    u["allowed_pages"] = _employee_allowed_pages(emps[0])
+    return u
 
 
 def _employee_allowed_pages(employee: Dict[str, Any]) -> List[str]:
@@ -5418,10 +5446,14 @@ def _insert_login_or_raise(user_row: Dict[str, Any], plain_password: str) -> Dic
 
 
 def _update_user_login(user_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if "allowed_pages" in patch:
+        patch = {**patch, "allowed_pages": _sanitize_assignable_pages(_coerce_allowed_pages(patch["allowed_pages"]))}
     updated = sb_update("users", "user_id", user_id, patch)
     if not updated and "password" in patch:
         slim = {k: v for k, v in patch.items() if k != "password"}
         updated = sb_update("users", "user_id", user_id, slim)
+    if updated:
+        _user_profile_cache.pop(user_id, None)
     return updated
 
 
@@ -5438,7 +5470,9 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
         raise HTTPException(status_code=400, detail="Valid login email is required.")
 
     department = p.department or f"{p.role.title()} Department"
-    allowed_pages = p.allowed_pages if p.allowed_pages else _default_pages_for_role(p.role)
+    allowed_pages = _sanitize_assignable_pages(
+        p.allowed_pages if p.allowed_pages else _default_pages_for_role(p.role)
+    )
     eid = gen_id("emp")
 
     existing_user = sb_select("users", {"email": f"eq.{email}", "select": "user_id", "limit": "1"})
@@ -5543,6 +5577,11 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
             "allowed_pages": data["allowed_pages"],
             "updated_at": now_utc().isoformat(),
         })
+        _user_profile_cache.pop(linked_user_id, None)
+        for tok, sess in list(LOCAL_SESSIONS.items()):
+            if (sess.get("user") or {}).get("user_id") == linked_user_id:
+                merged = {**(sess.get("user") or {}), "allowed_pages": data["allowed_pages"]}
+                LOCAL_SESSIONS[tok] = {**sess, "user": _finalize_user_session(_hydrate_allowed_pages_from_employee(merged))}
 
     if login_fields_changed:
         if not linked_user_id:
