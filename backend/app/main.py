@@ -1596,19 +1596,25 @@ async def auth_set_role(payload: RoleSet, cu: User = Depends(get_current_user)):
     return User(**_finalize_user_session(merged)).model_dump(mode="json")
 
 @api_router.post("/auth/ping-location")
-async def ping_location(request: Request, cu: User=Depends(get_current_user)):
+async def ping_location(request: Request, cu: User = Depends(get_current_user)):
     body = await request.json()
     lat, lng = body.get("lat"), body.get("lng")
-    if lat is None or lng is None: return {"ok": False}
-    
-    # Update employee record if linked
-    if cu.employee_id:
-        sb_update("employees", "employee_id", cu.employee_id, {
-            "last_lat": lat,
-            "last_lng": lng,
-            "last_seen_at": now_utc().isoformat()
-        })
-    return {"ok": True}
+    if lat is None or lng is None:
+        return {"ok": False, "reason": "missing_coordinates"}
+
+    emp_id = cu.acting_as_employee_id or cu.employee_id
+    if not emp_id:
+        return {"ok": False, "reason": "no_employee_linked"}
+
+    update: Dict[str, Any] = {
+        "last_lat": float(lat),
+        "last_lng": float(lng),
+        "last_seen_at": now_utc().isoformat(),
+    }
+
+    sb_update("employees", "employee_id", emp_id, update)
+    invalidate_employees_cache()
+    return {"ok": True, "employee_id": emp_id}
 
 @api_router.post("/auth/act-as")
 async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
@@ -5470,7 +5476,10 @@ async def list_employees(cu: User=Depends(get_current_user)):
     if _employees_cache["ts"] and (now - float(_employees_cache["ts"])) < _EMPLOYEES_CACHE_TTL:
         return _employees_cache["data"]
     rows = sb_select("employees", {
-        "select": "employee_id,name,email,phone,role,department,active,user_id,allowed_pages,created_at",
+        "select": (
+            "employee_id,name,email,phone,role,department,active,user_id,allowed_pages,created_at,"
+            "last_lat,last_lng,last_seen_at"
+        ),
         "order": "created_at.desc",
     })
     for row in rows:

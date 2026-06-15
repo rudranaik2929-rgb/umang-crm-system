@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots, getSnapshot, setSnapshot, USER_SNAPSHOT_KEY } from '../lib/api';
+import { useEmployeeLocation } from '../hooks/useEmployeeLocation';
 
 export interface User {
   user_id: string;
@@ -15,7 +16,8 @@ export interface User {
 interface AuthContextType {
   user: User | null;
   loading: boolean;
-  locationStatus: 'checking' | 'granted' | 'denied';
+  locationStatus: 'idle' | 'checking' | 'granted' | 'denied' | 'unsupported';
+  requestLocationAccess: () => void;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
   exchangeSession: (credentials: any) => Promise<User | null>;
@@ -26,7 +28,8 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType>({
   user: null,
   loading: true,
-  locationStatus: 'granted',
+  locationStatus: 'idle',
+  requestLocationAccess: () => {},
   refresh: async () => {},
   logout: async () => {},
   exchangeSession: async () => null,
@@ -38,7 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const cachedUser = getSnapshot<User>(USER_SNAPSHOT_KEY);
   const [user, setUser] = useState<User | null>(cachedUser ?? null);
   const [loading, setLoading] = useState(!cachedUser);
-  const [locationStatus] = useState<'checking' | 'granted' | 'denied'>('granted');
+  const { status: locationStatus, requestAccess: requestLocationAccess } = useEmployeeLocation(user);
 
   const refresh = useCallback(async () => {
     try {
@@ -117,7 +120,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading, locationStatus, refresh, logout, exchangeSession, setRole: setRoleFn, actAs }}>
+    <AuthContext.Provider value={{
+      user, loading, locationStatus, requestLocationAccess, refresh, logout, exchangeSession, setRole: setRoleFn, actAs,
+    }}>
       {children}
     </AuthContext.Provider>
   );

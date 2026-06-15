@@ -4,11 +4,13 @@ import { Slot, useRouter, usePathname } from 'expo-router';
 import { useAuth } from '../../src/auth/AuthContext';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { Sidebar } from '../../src/components/Sidebar';
+import { LocationPermissionBanner } from '../../src/components/LocationPermissionBanner';
+import { shouldTrackEmployeeLocation } from '../../src/hooks/useEmployeeLocation';
 import { hasSessionToken } from '../../src/lib/api';
 import { canAccess, defaultRouteFor, pageKeyFromPathname } from '../../src/lib/constants';
 
 export default function AppLayout() {
-  const { user, loading } = useAuth();
+  const { user, loading, locationStatus, requestLocationAccess } = useAuth();
   const { colors } = useTheme();
   const router = useRouter();
   const pathname = usePathname();
@@ -55,6 +57,9 @@ export default function AppLayout() {
     <View style={[styles.shell, { backgroundColor: colors.background }]}>
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       <View style={{ flex: 1, height: '100%' }}>
+        {shouldTrackEmployeeLocation(user) ? (
+          <LocationPermissionBanner status={locationStatus} onRequest={requestLocationAccess} />
+        ) : null}
         <Slot />
       </View>
     </View>

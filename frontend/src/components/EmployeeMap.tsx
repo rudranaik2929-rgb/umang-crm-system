@@ -14,19 +14,47 @@ interface Employee {
 
 interface Props {
   employees: Employee[];
+  selectedId?: string | null;
 }
 
-export function EmployeeMap({ employees }: Props) {
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+export function EmployeeMap({ employees, selectedId }: Props) {
   const { colors } = useTheme();
 
+  const located = useMemo(
+    () => employees.filter((e) => e.last_lat != null && e.last_lng != null),
+    [employees],
+  );
+
   const html = useMemo(() => {
-    const markers = employees
-      .filter(e => e.last_lat && e.last_lng)
-      .map(e => `
-        L.marker([${e.last_lat}, ${e.last_lng}])
+    const markers = located.map((e) => {
+      const name = escapeHtml(e.name || 'Employee');
+      const role = escapeHtml(e.role || '');
+      const seen = e.last_seen_at
+        ? escapeHtml(new Date(e.last_seen_at).toLocaleString('en-IN'))
+        : '—';
+      const highlight = selectedId === e.employee_id;
+      return `
+        L.marker([${e.last_lat}, ${e.last_lng}], {
+          title: '${name}',
+        })
           .addTo(map)
-          .bindPopup('<b>${e.name}</b><br>${e.role}<br>Seen: ${new Date(e.last_seen_at!).toLocaleTimeString()}');
-      `).join('\n');
+          .bindPopup('<b>${name}</b><br>${role}<br>Last seen: ${seen}');
+        ${highlight ? `map.setView([${e.last_lat}, ${e.last_lng}], 14);` : ''}
+      `;
+    }).join('\n');
+
+    const fitBounds = located.length > 0
+      ? `var group = L.featureGroup([${located.map((e) => `L.marker([${e.last_lat}, ${e.last_lng}])`).join(',')}]);
+         map.fitBounds(group.getBounds().pad(0.15));`
+      : '';
 
     return `
       <!DOCTYPE html>
@@ -44,25 +72,32 @@ export function EmployeeMap({ employees }: Props) {
       <body>
         <div id="map"></div>
         <script>
-          var map = L.map('map').setView([18.5204, 73.8567], 12); // Default to Pune
+          var map = L.map('map').setView([19.47, 72.8], 10);
           L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
             attribution: '&copy; OpenStreetMap'
           }).addTo(map);
           ${markers}
-          
-          if (${employees.length} > 0) {
-            var group = new L.featureGroup([${employees.filter(e => e.last_lat).map(e => `L.marker([${e.last_lat}, ${e.last_lng}])`).join(',')}]);
-            map.fitBounds(group.getBounds().pad(0.1));
-          }
+          ${fitBounds}
         </script>
       </body>
       </html>
     `;
-  }, [employees]);
+  }, [located, selectedId]);
+
+  if (located.length === 0) {
+    return (
+      <View style={[styles.empty, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+        <Text style={{ color: colors.textMuted, fontSize: 14, fontWeight: '600' }}>No GPS data yet</Text>
+        <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 18 }}>
+          Employees must log in on mobile/laptop and allow location access. Their position will appear here on the map.
+        </Text>
+      </View>
+    );
+  }
 
   if (Platform.OS === 'web') {
     return (
-      <View style={[styles.container, { backgroundColor: colors.surfaceAlt }]}>
+      <View style={[styles.container, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
         <iframe
           srcDoc={html}
           style={{ width: '100%', height: '100%', border: 'none', borderRadius: 12 }}
@@ -73,17 +108,21 @@ export function EmployeeMap({ employees }: Props) {
   }
 
   return (
-    <View style={[styles.container, { backgroundColor: colors.surfaceAlt }]}>
-      <WebView
-        originWhitelist={['*']}
-        source={{ html }}
-        style={styles.map}
-      />
+    <View style={[styles.container, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+      <WebView originWhitelist={['*']} source={{ html }} style={styles.map} />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, borderRadius: 12, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.05)' },
+  container: { flex: 1, borderRadius: 12, overflow: 'hidden', borderWidth: 1 },
   map: { flex: 1 },
+  empty: {
+    flex: 1,
+    borderRadius: 12,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
 });

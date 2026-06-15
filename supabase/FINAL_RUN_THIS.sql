@@ -69,6 +69,11 @@ alter table employees add column if not exists leads_assigned integer not null d
 alter table employees add column if not exists leads_closed integer not null default 0;
 alter table employees add column if not exists performance integer not null default 0;
 alter table employees add column if not exists active boolean default true;
+alter table employees add column if not exists last_lat numeric;
+alter table employees add column if not exists last_lng numeric;
+alter table employees add column if not exists last_seen_at timestamptz;
+
+create index if not exists idx_employees_last_seen on employees(last_seen_at desc) where last_seen_at is not null;
 
 -- ---------------------------------------------------------------------
 -- 3. VISIT FOLLOW-UPS

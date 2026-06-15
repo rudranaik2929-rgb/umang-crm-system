@@ -100,15 +100,49 @@ export function ScheduleFollowUpModal({
   };
 
   const openDatePicker = () => {
-    if (Platform.OS === 'web' && dateInputRef.current) {
-      try {
-        dateInputRef.current.showPicker?.();
-      } catch {
-        dateInputRef.current.click();
-      }
-      return;
-    }
     setTimePickerOpen(false);
+    if (Platform.OS !== 'web') return;
+    const input = dateInputRef.current;
+    if (!input) return;
+
+    const restore = () => {
+      input.style.position = 'fixed';
+      input.style.top = '50%';
+      input.style.left = '50%';
+      input.style.width = '1px';
+      input.style.height = '1px';
+      input.style.opacity = '0.01';
+      input.style.pointerEvents = 'none';
+      input.style.zIndex = '-1';
+    };
+
+    input.style.position = 'fixed';
+    input.style.top = '0';
+    input.style.left = '0';
+    input.style.width = '100%';
+    input.style.height = '100%';
+    input.style.opacity = '0.01';
+    input.style.pointerEvents = 'auto';
+    input.style.zIndex = '2147483647';
+
+    const onDone = () => {
+      restore();
+      input.removeEventListener('blur', onDone);
+      input.removeEventListener('change', onDone);
+    };
+    input.addEventListener('blur', onDone, { once: true });
+    input.addEventListener('change', onDone, { once: true });
+
+    try {
+      if (typeof input.showPicker === 'function') {
+        input.showPicker();
+        return;
+      }
+    } catch {
+      /* fall through */
+    }
+    input.focus();
+    input.click();
   };
 
   const handleSubmit = async () => {
@@ -156,43 +190,17 @@ export function ScheduleFollowUpModal({
 
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
           <Field label="Follow-up date" colors={colors}>
-            <View style={styles.pickerWrap}>
-              <View style={[styles.pickerBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
-                <Ionicons name="calendar-outline" size={18} color="#F97316" />
-                <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600', flex: 1 }}>
-                  {formatDateDisplay(form.follow_up_date)}
-                </Text>
-                <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
-              </View>
-              {Platform.OS === 'web' ? (
-                <input
-                  ref={dateInputRef as any}
-                  type="date"
-                  value={form.follow_up_date}
-                  min={new Date().toISOString().slice(0, 10)}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setForm((f) => ({
-                      ...f,
-                      follow_up_date: v,
-                      follow_up_day: dayNameFromIso(v),
-                    }));
-                  }}
-                  style={{
-                    position: 'absolute',
-                    top: 0,
-                    left: 0,
-                    width: '100%',
-                    height: '100%',
-                    opacity: 0,
-                    cursor: 'pointer',
-                    border: 'none',
-                  }}
-                />
-              ) : (
-                <Pressable style={StyleSheet.absoluteFill} onPress={openDatePicker} />
-              )}
-            </View>
+            <Pressable
+              onPress={openDatePicker}
+              style={[styles.pickerBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+              accessibilityRole="button"
+            >
+              <Ionicons name="calendar-outline" size={18} color="#F97316" />
+              <Text style={{ color: colors.text, fontSize: 14, fontWeight: '600', flex: 1 }}>
+                {formatDateDisplay(form.follow_up_date)}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
+            </Pressable>
             {Platform.OS !== 'web' ? (
               <TextInput
                 value={form.follow_up_date}
@@ -368,9 +376,44 @@ export function ScheduleFollowUpModal({
     </Pressable>
   );
 
+  const webDateInput = Platform.OS === 'web' ? (
+    <input
+      ref={dateInputRef as any}
+      type="date"
+      value={form.follow_up_date}
+      min={new Date().toISOString().slice(0, 10)}
+      aria-hidden
+      tabIndex={-1}
+      onChange={(e) => {
+        const v = e.target.value;
+        setForm((f) => ({
+          ...f,
+          follow_up_date: v,
+          follow_up_day: dayNameFromIso(v),
+        }));
+      }}
+      style={{
+        position: 'fixed',
+        top: '50%',
+        left: '50%',
+        width: 1,
+        height: 1,
+        opacity: 0.01,
+        pointerEvents: 'none',
+        border: 'none',
+        padding: 0,
+        margin: 0,
+        zIndex: -1,
+      }}
+    />
+  ) : null;
+
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
     return createPortal(
-      <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>,
+      <>
+        <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>
+        {webDateInput}
+      </>,
       document.body,
     );
   }
@@ -419,7 +462,6 @@ const styles = StyleSheet.create({
   label: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 },
   input: { borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 10, fontSize: 14 },
   hiddenInput: { marginTop: 6, borderWidth: 1, borderRadius: 8, paddingHorizontal: 12, paddingVertical: 8, fontSize: 13 },
-  pickerWrap: { position: 'relative' },
   pickerBtn: {
     flexDirection: 'row',
     alignItems: 'center',
