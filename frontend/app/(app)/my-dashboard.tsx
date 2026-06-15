@@ -24,9 +24,9 @@ const ROLE_ACCENT: Record<string, string> = {
 };
 
 const ROLE_HIGHLIGHT: Record<string, string[]> = {
-  telecaller: ['hot', 'ringing', 'not_interested'],
-  site_visit: ['visited', 'hot'],
-  sales_executive: ['visited', 'hot', 'booking_done'],
+  telecaller: ['hot', 'follow_ups', 'ringing', 'not_interested'],
+  site_visit: ['visited', 'hot', 'follow_ups'],
+  sales_executive: ['visited', 'hot', 'booking_done', 'follow_ups'],
   booking: ['booking_done'],
   loan: ['booking_done'],
   marketing: ['not_interested'],
@@ -45,6 +45,7 @@ const MY_PERFORMANCE_KPIS: Array<{
   { label: 'Not Interested', metric: 'not_interested', icon: 'close-circle', colorKey: 'negative', valueKey: 'emp_not_interested' },
   { label: 'Booking Done', metric: 'booking_done', icon: 'checkmark-done', colorKey: 'positive', valueKey: 'emp_booking_done' },
   { label: 'Low Budget', metric: 'low_budget', icon: 'wallet', colorKey: 'accent', valueKey: 'emp_low_budget' },
+  { label: 'Follow Up', metric: 'follow_ups', icon: 'calendar', colorKey: 'warning', valueKey: 'emp_follow_ups' },
   { label: 'Ringing', metric: 'ringing', icon: 'call', colorKey: 'warning', valueKey: 'emp_ringing' },
 ];
 

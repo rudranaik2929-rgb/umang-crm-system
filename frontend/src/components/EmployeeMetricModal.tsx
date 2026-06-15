@@ -13,6 +13,7 @@ const METRIC_LABELS: Record<string, string> = {
   booking_done: 'Booking Done',
   low_budget: 'Low Budget',
   ringing: 'Ringing',
+  follow_ups: 'Follow Up',
 };
 
 type Props = {

@@ -172,7 +172,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     });
   };
 
-  const updateLead = async (payload: any, action: string) => {
+  const updateLead = async (payload: any, action: string, opts?: { closeAfter?: boolean }) => {
     if (!leadId) return;
     setBusy(action);
     try {
@@ -180,8 +180,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       if (payload.stage === 'closed') {
         triggerConfetti();
       }
-      await load(true);
       onChanged?.();
+      if (opts?.closeAfter) {
+        onClose();
+        return;
+      }
+      await load(true);
     } finally {
       setBusy(null);
     }
@@ -745,10 +749,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             <SubActionBtn
                               key={opt.key}
                               label={opt.label}
-                              sub={lead.call_status === opt.key ? 'Currently selected' : undefined}
+                              sub={lead.call_status === opt.key ? 'Currently selected' : 'Open Ringing on My Dashboard'}
                               onPress={async () => {
-                                await updateLead({ call_status: opt.key }, opt.key);
-                                setActiveCategory(null);
+                                await updateLead({ call_status: opt.key }, opt.key, { closeAfter: true });
                               }}
                               busy={busy === opt.key}
                               color={colors.warning}

@@ -618,16 +618,20 @@ def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[
     stages = workspace_queue_stages(role)
     return dedupe_leads([
         l for l in emp_leads
-        if l.get("status") == "active" and l.get("stage") in stages
+        if l.get("status") == "active"
+        and l.get("stage") in stages
+        and not clean_text(l.get("call_status"))
+        and not l.get("follow_up_at")
     ])
 
 
 def filter_employee_follow_up_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Exact filter used by Follow Ups tab + employee follow-up KPI."""
-    return dedupe_leads([
-        l for l in emp_leads
+    rows = normalize_employee_leads(emp_leads)
+    return [
+        l for l in rows
         if l.get("follow_up_at") and l.get("status") != "negative"
-    ])
+    ]
 
 
 def _lead_priority(lead: Dict[str, Any]) -> str:
@@ -687,6 +691,13 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
     key = (metric_key or "").strip().lower()
     if key == "active":
         return [l for l in rows if l.get("status") != "negative" and l.get("stage") != "closed"]
+    if key in ("follow_ups", "follow_up", "assigned_follow_ups"):
+        return filter_employee_follow_up_leads(emp_leads)
+    if key == "ringing":
+        return [
+            l for l in rows
+            if l.get("status") != "negative" and clean_text(l.get("call_status"))
+        ]
     return [l for l in rows if classify_employee_performance_metric(l) == key]
 
 
@@ -700,6 +711,7 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
         "emp_booking_done": len(filter_employee_metric_leads(emp_leads, "booking_done")),
         "emp_low_budget": len(filter_employee_metric_leads(emp_leads, "low_budget")),
         "emp_ringing": len(filter_employee_metric_leads(emp_leads, "ringing")),
+        "emp_follow_ups": len(filter_employee_follow_up_leads(emp_leads)),
     }
 
 
@@ -1168,6 +1180,73 @@ def ensure_roles(cu: User, allowed: Iterable[str]):
         raise HTTPException(status_code=403, detail="You do not have permission for this action.")
 
 
+def _can_manage_all_leads(cu: User) -> bool:
+    return cu.role in ("admin", "manager") or cu.email in ("htshpatil13@gmail.com", "umang@admin")
+
+
+def _can_reactivate_negative_lead(cu: User) -> bool:
+    return _can_manage_all_leads(cu) or cu.role == "marketing"
+
+
+def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
+    """Employees may only edit leads assigned to them; managers/admins edit any."""
+    if _can_manage_all_leads(cu):
+        return
+    if cu.role == "marketing" and lead.get("status") == "negative":
+        return
+    emp_id = cu.acting_as_employee_id or cu.employee_id
+    if not emp_id or lead.get("assigned_to") != emp_id:
+        raise HTTPException(status_code=403, detail="You can only update leads assigned to you.")
+
+
+def fresh_lead_reset_fields(stage: str = "new") -> Dict[str, Any]:
+    """Manager reset — e.g. not-interested from Emp1 → new for Emp2."""
+    return {
+        "status": "active",
+        "stage": stage,
+        "priority": None,
+        "call_status": None,
+        "follow_up_at": None,
+    }
+
+
+def inquiry_preset_to_patch(preset: Dict[str, Any], inquiry_action: Optional[str] = None) -> Dict[str, Any]:
+    """Map manager bulk status action to lead patch (includes field clears for reset)."""
+    action = (inquiry_action or "").strip().lower()
+    if action == "new":
+        return fresh_lead_reset_fields("new")
+    patch: Dict[str, Any] = {}
+    for key in ("stage", "status", "priority", "call_status", "follow_up_at"):
+        if key in preset and preset[key] is not None:
+            patch[key] = preset[key]
+    if action == "active":
+        patch.setdefault("status", "active")
+        patch["call_status"] = None
+        patch["follow_up_at"] = None
+    elif action == "ringing":
+        patch.setdefault("status", "active")
+        patch.setdefault("call_status", "ringing")
+        if patch.get("stage") is None:
+            patch["stage"] = "assigned"
+    elif action == "not_interested":
+        patch.setdefault("status", "negative")
+        patch["call_status"] = None
+        patch["follow_up_at"] = None
+    return patch
+
+
+def apply_call_status_workflow(old_lead: Dict[str, Any], call_status: str) -> Dict[str, Any]:
+    """Employee marks ringing / call-back — lead leaves queue and appears in Ringing box."""
+    data: Dict[str, Any] = {
+        "call_status": call_status,
+        "status": "active",
+        "updated_at": now_utc().isoformat(),
+    }
+    if old_lead.get("stage") in (None, "new"):
+        data["stage"] = "assigned"
+    return data
+
+
 def ensure_owner_dashboard(cu: User) -> None:
     """Owner-only dashboard API (revenue + full admin controls)."""
     if cu.role == "manager":
@@ -1187,6 +1266,7 @@ def ensure_main_dashboard(cu: User) -> None:
     if cu.email in ("htshpatil13@gmail.com", "umang@admin"):
         return
     raise HTTPException(status_code=403, detail="Dashboard access denied.")
+
 
 def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
     if uid in HARDCODED_USERS:
@@ -1558,9 +1638,7 @@ def assign_lead_to_employee(
         actor_id = actor.acting_as_employee_id or actor.user_id
     data = stamp_lead_assignment(employee_id, assigned_by=actor_id, current_stage=old_lead.get("stage"))
     if reactivate and old_lead.get("status") == "negative":
-        data["status"] = "active"
-        if old_lead.get("stage") in (None, "closed", "new"):
-            data["stage"] = "assigned"
+        data.update(fresh_lead_reset_fields("assigned"))
     updated = sb_update("leads", "lead_id", lead_id, data) or {**old_lead, **data}
     update_cached_lead(lead_id, data)
     log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
@@ -3916,14 +3994,24 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
             old_lead = {**old_lead, "assigned_to": body.assigned_to.strip(), "status": "active"}
 
         patch: Dict[str, Any] = {"updated_at": now_utc().isoformat()}
+        if preset or body.inquiry_action:
+            patch.update(inquiry_preset_to_patch(preset, body.inquiry_action))
         for key in ("stage", "status", "priority", "call_status"):
-            val = preset.get(key) if key in preset else getattr(body, key, None)
+            val = getattr(body, key, None)
             if val is not None:
                 patch[key] = val
+        if body.reactivate and old_lead.get("status") == "negative" and "status" not in patch:
+            patch.update(fresh_lead_reset_fields("assigned"))
         if patch.keys() - {"updated_at"}:
             sb_update("leads", "lead_id", lead_id, patch)
             update_cached_lead(lead_id, patch)
-            log_activity(cu, "manager_bulk_update", f"Manager updated lead inquiry/status ({body.inquiry_action or 'custom'})", lead_id=lead_id)
+            log_activity(
+                cu,
+                "manager_bulk_update",
+                f"Manager updated lead ({body.inquiry_action or 'custom'})"
+                + (f" → assigned {body.assigned_to}" if body.assigned_to else ""),
+                lead_id=lead_id,
+            )
         updated.append(lead_id)
 
     if body.assigned_to:
@@ -4189,6 +4277,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             old_lead = cache_match[0]
             
     if not old_lead: raise HTTPException(404, "Lead not found")
+    ensure_lead_edit_access(cu, old_lead)
     if p.assigned_to is not None:
         ensure_roles(cu, ["admin", "manager"])
     
@@ -4197,6 +4286,23 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     valid_call_statuses = {"ringing", "out_of_service", "call_back", "disconnect"}
     if data.get("call_status") and data["call_status"] not in valid_call_statuses:
         raise HTTPException(status_code=400, detail="Invalid call status")
+
+    if p.status == "active" and old_lead.get("status") == "negative" and not _can_reactivate_negative_lead(cu):
+        raise HTTPException(
+            status_code=403,
+            detail="Only manager can re-activate not-interested leads. Ask your manager to reset and reassign.",
+        )
+
+    if not _can_manage_all_leads(cu) and p.stage in ("new",) and old_lead.get("stage") not in (None, "new", "assigned"):
+        raise HTTPException(status_code=403, detail="Only manager can reset lead stage. Ask your manager.")
+
+    if data.get("call_status"):
+        workflow = apply_call_status_workflow(old_lead, data["call_status"])
+        data.update(workflow)
+    
+    if p.status == "negative" and old_lead.get("status") != "negative":
+        data["call_status"] = None
+        data["follow_up_at"] = None
     
     if p.assigned_to and p.assigned_to != old_lead.get("assigned_to"):
         stamp = stamp_lead_assignment(
@@ -4236,6 +4342,14 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         act_type = f"status_change_{p.status}"
         if p.status == "negative": act_type = "negative_response"
         log_activity(cu, act_type, f"Changed lead status from {old_lead.get('status')} to {p.status}", lead_id=lead_id)
+
+    if data.get("call_status") and data.get("call_status") != old_lead.get("call_status"):
+        log_activity(
+            cu,
+            "call_status_update",
+            f"Call status → {data['call_status'].replace('_', ' ')} (moved to {data['call_status'].replace('_', ' ')} section)",
+            lead_id=lead_id,
+        )
 
     # Auto-create related records when lead enters a new department stage
     if p.stage and p.stage != old_lead.get("stage"):
@@ -5492,6 +5606,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "emp_booking_done": assignment["emp_booking_done"],
             "emp_low_budget": assignment["emp_low_budget"],
             "emp_ringing": assignment["emp_ringing"],
+            "emp_follow_ups": assignment["emp_follow_ups"],
             "positives": positives,
             "negatives": negative,
             "followups": followups,
@@ -5507,7 +5622,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
         "recent_activities": activities[:15],
     }
 
-EMPLOYEE_METRIC_KEYS = ["active", "hot", "visited", "not_interested", "booking_done", "low_budget", "ringing"]
+EMPLOYEE_METRIC_KEYS = ["active", "hot", "visited", "not_interested", "booking_done", "low_budget", "ringing", "follow_ups"]
 
 PERSONAL_ACTIVITY_METRICS = [
     "total", "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",

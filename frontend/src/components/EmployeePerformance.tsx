@@ -25,6 +25,7 @@ const WORKFLOW_METRICS = [
   { key: 'emp_not_interested', apiKey: 'not_interested', label: 'Not Interested', icon: 'close-circle' as const, colorKey: 'negative' },
   { key: 'emp_booking_done', apiKey: 'booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },
   { key: 'emp_low_budget', apiKey: 'low_budget', label: 'Low Budget', icon: 'wallet' as const, colorKey: 'accent' },
+  { key: 'emp_follow_ups', apiKey: 'follow_ups', label: 'Follow Up', icon: 'calendar' as const, colorKey: 'warning' },
   { key: 'emp_ringing', apiKey: 'ringing', label: 'Ringing', icon: 'call' as const, colorKey: 'warning' },
 ];
 
@@ -227,7 +228,7 @@ const styles = StyleSheet.create({
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 12 },
   metricPills: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 14 },
   metricPill: {
-    width: 108, paddingVertical: 10, paddingHorizontal: 8,
+    width: 104, paddingVertical: 10, paddingHorizontal: 8,
     borderRadius: 8, borderWidth: 1, gap: 4,
   },
 });

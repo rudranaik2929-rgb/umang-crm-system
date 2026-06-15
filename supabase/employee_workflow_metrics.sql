@@ -1,4 +1,4 @@
--- Employee Performance workflow boxes (Active, Hot, Visited, Not Interested, Booking Done, Low Budget, Ringing)
+-- Employee Performance workflow boxes (Hot, Visited, Not Interested, Booking Done, Low Budget, Follow Up, Ringing)
 -- Run in Supabase SQL Editor. Safe to run multiple times.
 
 -- Ensure lead fields used for per-employee counts exist
@@ -12,6 +12,8 @@ create index if not exists idx_leads_assigned_to on leads(assigned_to) where ass
 create index if not exists idx_leads_assigned_stage_status on leads(assigned_to, stage, status) where assigned_to is not null;
 create index if not exists idx_leads_assigned_priority on leads(assigned_to, priority) where assigned_to is not null and priority is not null;
 create index if not exists idx_leads_assigned_call_status on leads(assigned_to, call_status) where assigned_to is not null and call_status is not null;
+create index if not exists idx_leads_assigned_follow_up on leads(assigned_to, follow_up_at desc) where assigned_to is not null and follow_up_at is not null;
+create index if not exists idx_leads_follow_up_at on leads(follow_up_at desc) where follow_up_at is not null;
 
 -- Optional: normalize empty strings to null so Ringing count is accurate
 update leads set call_status = null where call_status is not null and trim(call_status) = '';
