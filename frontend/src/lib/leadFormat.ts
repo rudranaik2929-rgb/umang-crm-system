@@ -21,6 +21,7 @@ const NEGATIVE_PRIORITY_LABELS: Record<string, string> = {
 };
 
 const WORKFLOW_STATUS_COLORS: Record<string, string> = {
+  missed_lead: '#DC2626',
   ringing: '#F59E0B',
   not_interested: '#E11D48',
   low_budget: '#E11D48',
@@ -39,9 +40,27 @@ function leadPriority(lead: any): string {
   return String(lead?.priority || '').trim().toLowerCase();
 }
 
+const MISSED_LEAD_HOURS = 24;
+
+export function isMissedLead(lead: any, hours = MISSED_LEAD_HOURS): boolean {
+  if (!lead?.assigned_to || lead?.status !== 'active') return false;
+  if (!['new', 'assigned'].includes(lead?.stage)) return false;
+  if (String(lead?.call_status || '').trim()) return false;
+  if (lead?.follow_up_at) return false;
+  const assignedAt = lead?.assigned_at ? new Date(lead.assigned_at).getTime() : NaN;
+  if (!Number.isFinite(assignedAt)) return false;
+  const lastAction = lead?.last_employee_action_at
+    ? new Date(lead.last_employee_action_at).getTime()
+    : NaN;
+  if (Number.isFinite(lastAction) && lastAction >= assignedAt) return false;
+  const cutoff = Date.now() - hours * 60 * 60 * 1000;
+  return assignedAt <= cutoff;
+}
+
 /** Matches backend workflow_status_label / performance box buckets. */
 export function workflowStatusLabel(lead: any): string {
   if (lead?.workflow_status_label) return lead.workflow_status_label;
+  if (isMissedLead(lead)) return 'Missed Lead';
   if (lead?.status === 'negative') {
     return NEGATIVE_PRIORITY_LABELS[leadPriority(lead)] || 'Not Interested';
   }
@@ -64,6 +83,7 @@ export function workflowStatusLabel(lead: any): string {
 }
 
 export function workflowStatusColor(lead: any): string {
+  if (isMissedLead(lead)) return WORKFLOW_STATUS_COLORS.missed_lead;
   const label = workflowStatusLabel(lead);
   if (lead?.call_status) return WORKFLOW_STATUS_COLORS.ringing;
   if (label === 'Not Interested' || label in NEGATIVE_PRIORITY_LABELS) return WORKFLOW_STATUS_COLORS.not_interested;

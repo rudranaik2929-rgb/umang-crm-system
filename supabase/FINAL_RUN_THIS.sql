@@ -21,6 +21,7 @@
 alter table leads add column if not exists assigned_to text;
 alter table leads add column if not exists assigned_at timestamptz;
 alter table leads add column if not exists assigned_by text;
+alter table leads add column if not exists last_employee_action_at timestamptz;
 alter table leads add column if not exists follow_up_at timestamptz;
 alter table leads add column if not exists priority text;
 alter table leads add column if not exists call_status text;
@@ -76,6 +77,13 @@ create index if not exists idx_leads_unassigned on leads(stage, status) where as
 create index if not exists idx_leads_assigned_stage_status on leads(assigned_to, stage, status) where assigned_to is not null;
 create index if not exists idx_leads_assigned_priority on leads(assigned_to, priority) where assigned_to is not null and priority is not null;
 create index if not exists idx_leads_assigned_call_status on leads(assigned_to, call_status) where assigned_to is not null and call_status is not null;
+create index if not exists idx_leads_missed_candidates
+  on leads(assigned_to, assigned_at desc)
+  where assigned_to is not null
+    and status = 'active'
+    and stage in ('new', 'assigned')
+    and (call_status is null or trim(call_status) = '')
+    and follow_up_at is null;
 create index if not exists idx_leads_assigned_follow_up on leads(assigned_to, follow_up_at desc) where follow_up_at is not null;
 create index if not exists idx_leads_follow_up_at on leads(follow_up_at desc) where follow_up_at is not null;
 create index if not exists idx_leads_call_status on leads(call_status) where call_status is not null;
@@ -197,6 +205,7 @@ where not exists (select 1 from leads l where l.assigned_to = e.employee_id);
 -- ---------------------------------------------------------------------
 comment on column leads.assigned_at is 'When manager assigned this lead to an employee (not set on intake)';
 comment on column leads.assigned_by is 'user_id or employee_id of manager who assigned';
+comment on column leads.last_employee_action_at is 'Last employee workflow touch — Missed Lead if null 24h after assigned_at';
 comment on column leads.external_created_at is 'Real submission time from Housing lead_date or Meta created_time';
 
 -- ---------------------------------------------------------------------
@@ -214,6 +223,16 @@ union all
 select 'meta_leads', count(*)::text from leads where source ilike '%facebook%'
 union all
 select 'follow_ups', count(*)::text from leads where follow_up_at is not null and status <> 'negative'
+union all
+select 'missed_leads_24h', count(*)::text from leads
+  where assigned_to is not null
+    and status = 'active'
+    and stage in ('new', 'assigned')
+    and (call_status is null or trim(call_status) = '')
+    and follow_up_at is null
+    and assigned_at is not null
+    and assigned_at <= now() - interval '24 hours'
+    and (last_employee_action_at is null or last_employee_action_at < assigned_at)
 union all
 select 'integration_events', count(*)::text from integration_events;
 

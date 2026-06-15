@@ -233,7 +233,7 @@ _leads_cache_loading = threading.Event()
 # One wide fetch shared by dashboard / assignment / employee stats (avoids 3× full-table reads).
 LEADS_CANONICAL_SELECT = (
     "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,"
-    "priority,call_status,budget,location,property_type,assigned_to,assigned_at,"
+    "priority,call_status,budget,location,property_type,assigned_to,assigned_at,last_employee_action_at,"
     "follow_up_at,created_at,updated_at,starred,brokerage_amount"
 )
 
@@ -613,6 +613,54 @@ def workspace_queue_stages(role: Optional[str]) -> List[str]:
     return WORKSPACE_QUEUE_STAGES.get(key, WORKSPACE_QUEUE_STAGES["telecaller"])
 
 
+MISSED_LEAD_HOURS = 24
+
+
+def parse_lead_ts(value: Any) -> Optional[datetime]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    s = str(value).strip()
+    if not s:
+        return None
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except ValueError:
+        return None
+
+
+def is_missed_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool:
+    """Assigned lead with no employee workflow action within N hours."""
+    if not lead.get("assigned_to"):
+        return False
+    if lead.get("status") != "active":
+        return False
+    if lead.get("stage") not in ("new", "assigned"):
+        return False
+    if clean_text(lead.get("call_status")):
+        return False
+    if lead.get("follow_up_at"):
+        return False
+    assigned_at = parse_lead_ts(lead.get("assigned_at"))
+    if not assigned_at:
+        return False
+    last_action = parse_lead_ts(lead.get("last_employee_action_at"))
+    if last_action and last_action >= assigned_at:
+        return False
+    cutoff = now_utc() - timedelta(hours=hours)
+    return assigned_at <= cutoff
+
+
+def filter_employee_missed_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Leads assigned 24h+ ago with no employee status update — My Dashboard Missed Lead box."""
+    rows = normalize_employee_leads(emp_leads)
+    return dedupe_leads([l for l in rows if is_missed_lead(l)])
+
+
 def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[str]) -> List[Dict[str, Any]]:
     """Exact filter used by Telecaller / Sales Executive queue tabs."""
     stages = workspace_queue_stages(role)
@@ -622,6 +670,7 @@ def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[
         and l.get("stage") in stages
         and not clean_text(l.get("call_status"))
         and not l.get("follow_up_at")
+        and not is_missed_lead(l)
     ])
 
 
@@ -712,6 +761,7 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
         "emp_low_budget": len(filter_employee_metric_leads(emp_leads, "low_budget")),
         "emp_ringing": len(filter_employee_metric_leads(emp_leads, "ringing")),
         "emp_follow_ups": len(filter_employee_follow_up_leads(emp_leads)),
+        "emp_missed_leads": len(filter_employee_missed_leads(emp_leads)),
     }
 
 
@@ -761,6 +811,8 @@ NEGATIVE_PRIORITY_LABELS: Dict[str, str] = {
 
 def workflow_status_label(lead: Dict[str, Any]) -> str:
     """Human-readable status for lists — matches performance box buckets."""
+    if is_missed_lead(lead):
+        return "Missed Lead"
     if lead.get("status") == "negative":
         return NEGATIVE_PRIORITY_LABELS.get(_lead_priority(lead), "Not Interested")
     if _lead_priority(lead) == "low_budget":
@@ -791,6 +843,7 @@ def enrich_lead_display_fields(lead: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(lead)
     row["inquiry_status"] = classify_inquiry_status(lead)
     row["workflow_status"] = row["inquiry_status"]
+    row["is_missed"] = is_missed_lead(lead)
     row["workflow_status_label"] = workflow_status_label(lead)
     return row
 
@@ -1260,6 +1313,7 @@ def fresh_lead_reset_fields(stage: str = "new") -> Dict[str, Any]:
         "priority": None,
         "call_status": None,
         "follow_up_at": None,
+        "last_employee_action_at": None,
     }
 
 
@@ -1667,6 +1721,7 @@ def stamp_lead_assignment(
     data: Dict[str, Any] = {
         "assigned_to": assigned_to,
         "assigned_at": now,
+        "last_employee_action_at": None,
         "updated_at": now,
     }
     if assigned_by:
@@ -4238,7 +4293,7 @@ async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user
 async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     lead_fields = (
         "lead_id,name,phone,email,source,stage,status,lead_type,priority,call_status,"
-        "budget,location,property_type,notes,assigned_to,assigned_at,follow_up_at,"
+        "budget,location,property_type,notes,assigned_to,assigned_at,last_employee_action_at,follow_up_at,"
         "created_at,updated_at,external_lead_id,external_created_at,integration_uuid,raw_payload,brokerage_amount"
     )
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": lead_fields})
@@ -4361,6 +4416,17 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     if p.status == "negative" and old_lead.get("status") != "negative":
         data["call_status"] = None
         data["follow_up_at"] = None
+
+    if p.stage in ("site_visit", "positive") and p.stage and p.stage != old_lead.get("stage"):
+        data["call_status"] = None
+
+    if not _can_manage_all_leads(cu):
+        workflow_touched = any(
+            getattr(p, key) is not None
+            for key in ("stage", "status", "priority", "call_status", "follow_up_at")
+        )
+        if workflow_touched:
+            data["last_employee_action_at"] = now_utc().isoformat()
     
     if p.assigned_to and p.assigned_to != old_lead.get("assigned_to"):
         stamp = stamp_lead_assignment(
@@ -4377,18 +4443,16 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     
     updated = sb_update("leads", "lead_id", lead_id, data)
     
-    # Always update cache for immediate UI feedback
+    # Always update cache for immediate UI feedback (with workflow display fields)
+    new_lead = enrich_lead_display_fields({**old_lead, **data})
     if leads:
-        # If it was in DB, we still want it in cache if DB update is unreliable
-        new_lead = {**old_lead, **data}
         SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
         if not any(l.get("lead_id") == lead_id for l in SESSION_CACHE["leads"]):
             SESSION_CACHE["leads"].insert(0, new_lead)
     else:
-        # Update existing cache entry
-        new_lead = {**old_lead, **data}
         SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
-        updated = new_lead
+    update_cached_lead(lead_id, data)
+    updated = new_lead
     
     # Log activity for stage/status changes
     if p.stage and p.stage != old_lead.get("stage"):
@@ -4621,7 +4685,11 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
     followup_record = result or followup
     SESSION_CACHE["followups"].insert(0, followup_record)
 
-    lead_update = {"follow_up_at": follow_up_at.isoformat(), "updated_at": now_utc().isoformat()}
+    lead_update = {
+        "follow_up_at": follow_up_at.isoformat(),
+        "updated_at": now_utc().isoformat(),
+        "last_employee_action_at": now_utc().isoformat(),
+    }
     sb_update("leads", "lead_id", lead_id, lead_update)
     update_cached_lead(lead_id, lead_update)
     detail = f"Follow-up scheduled for {parts['follow_up_day']} {parts['follow_up_date']} at {parts['follow_up_time']}."
@@ -4671,7 +4739,11 @@ async def create_visit_followup(p: SiteVisitFollowUpCreate, cu: User=Depends(get
             break
 
     if followup.get("lead_id"):
-        lead_update = {"follow_up_at": follow_up_at.isoformat(), "updated_at": now_utc().isoformat()}
+        lead_update = {
+            "follow_up_at": follow_up_at.isoformat(),
+            "updated_at": now_utc().isoformat(),
+            "last_employee_action_at": now_utc().isoformat(),
+        }
         sb_update("leads", "lead_id", followup["lead_id"], lead_update)
         update_cached_lead(followup["lead_id"], lead_update)
         activity = log_activity(
@@ -5608,7 +5680,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
         activities = [a for a in all_activities if a.get("user_id") in activity_keys]
 
     emp_id = cu.acting_as_employee_id or cu.employee_id
-    lead_select = "lead_id,stage,status,assigned_to,follow_up_at,priority,call_status,created_at"
+    lead_select = "lead_id,stage,status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,priority,call_status,created_at"
     if cu.role == "manager" and not emp_id:
         # Manager workspace uses team panels — not company-wide personal KPI totals.
         leads: List[Dict[str, Any]] = []
@@ -5665,6 +5737,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "emp_low_budget": assignment["emp_low_budget"],
             "emp_ringing": assignment["emp_ringing"],
             "emp_follow_ups": assignment["emp_follow_ups"],
+            "emp_missed_leads": assignment["emp_missed_leads"],
             "positives": positives,
             "negatives": negative,
             "followups": followups,
@@ -5685,7 +5758,7 @@ EMPLOYEE_METRIC_KEYS = ["active", "hot", "visited", "not_interested", "booking_d
 PERSONAL_ACTIVITY_METRICS = [
     "total", "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
     "call_notes", "bookings_done", "loans_done", "active", "hot", "visited",
-    "not_interested", "booking_done", "low_budget", "ringing",
+    "not_interested", "booking_done", "low_budget", "ringing", "missed_leads",
 ]
 
 PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
@@ -5706,6 +5779,7 @@ PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
     "booking_done": "Booking Done",
     "low_budget": "Low Budget",
     "ringing": "Ringing",
+    "missed_leads": "Missed Lead",
 }
 
 
@@ -5757,6 +5831,8 @@ def filter_personal_activity(
         return {"kind": "activities", "items": items}
     if key in EMPLOYEE_METRIC_KEYS:
         return {"kind": "leads", "items": filter_employee_metric_leads(rows, key)}
+    if key in ("missed_leads", "missed"):
+        return {"kind": "leads", "items": filter_employee_missed_leads(rows)}
     raise HTTPException(400, detail=f"Unknown activity metric: {key}")
 
 
@@ -5782,13 +5858,13 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
     if cu.role == "admin" and not emp_id:
         activities = all_activities
         all_leads = fetch_all_leads_merged(
-            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,budget,location"
+            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,created_at,budget,location"
         )
         emp_leads = all_leads
     else:
         activities = [a for a in all_activities if a.get("user_id") in activity_keys]
         all_leads = fetch_all_leads_merged(
-            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,budget,location"
+            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,created_at,budget,location"
         )
         emp_leads = [l for l in all_leads if l.get("assigned_to") == emp_id]
 

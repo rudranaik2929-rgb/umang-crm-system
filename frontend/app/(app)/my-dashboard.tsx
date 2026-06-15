@@ -24,9 +24,9 @@ const ROLE_ACCENT: Record<string, string> = {
 };
 
 const ROLE_HIGHLIGHT: Record<string, string[]> = {
-  telecaller: ['hot', 'follow_ups', 'ringing', 'not_interested'],
-  site_visit: ['visited', 'hot', 'follow_ups'],
-  sales_executive: ['visited', 'hot', 'booking_done', 'follow_ups'],
+  telecaller: ['missed_leads', 'hot', 'follow_ups', 'ringing', 'not_interested'],
+  site_visit: ['missed_leads', 'visited', 'hot', 'follow_ups'],
+  sales_executive: ['missed_leads', 'visited', 'hot', 'booking_done', 'follow_ups'],
   booking: ['booking_done'],
   loan: ['booking_done'],
   marketing: ['not_interested'],
@@ -40,6 +40,7 @@ const MY_PERFORMANCE_KPIS: Array<{
   valueKey: string;
 }> = [
   { label: 'My Queue', metric: 'total', icon: 'list-outline', colorKey: 'primary', valueKey: 'leads_total' },
+  { label: 'Missed Lead', metric: 'missed_leads', icon: 'alert-circle', colorKey: 'negative', valueKey: 'emp_missed_leads' },
   { label: 'Hot', metric: 'hot', icon: 'flame', colorKey: 'warning', valueKey: 'emp_hot' },
   { label: 'Visited', metric: 'visited', icon: 'location', colorKey: 'info', valueKey: 'emp_visited' },
   { label: 'Not Interested', metric: 'not_interested', icon: 'close-circle', colorKey: 'negative', valueKey: 'emp_not_interested' },

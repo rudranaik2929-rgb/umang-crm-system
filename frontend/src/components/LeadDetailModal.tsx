@@ -735,6 +735,15 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                               />
                             </>
                           ) : null}
+                          <SubActionBtn
+                            label="Mark Visited"
+                            sub="Moves lead to Visited on My Dashboard"
+                            onPress={async () => {
+                              await updateLead({ stage: 'site_visit', status: 'active' }, 'mark_visited', { closeAfter: true });
+                            }}
+                            busy={busy === 'mark_visited'}
+                            color={colors.info}
+                          />
                         </View>
                       )}
 
