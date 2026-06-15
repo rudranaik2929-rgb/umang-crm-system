@@ -147,7 +147,7 @@ export default function AssignLeads() {
   const applyFilters = (next: AssignWorkspaceFilters) => {
     setFilters(next);
     setShowAdvanced(false);
-    setLoading(true);
+    if (leads.length === 0) setLoading(true);
     load(next);
   };
 
@@ -212,7 +212,7 @@ export default function AssignLeads() {
         title="Assign Leads"
         subtitle="Advanced search · all leads · reassign not-interested · bulk status change"
       />
-      {loading ? (
+      {loading && leads.length === 0 ? (
         <View style={{ padding: 48 }}><ActivityIndicator color={colors.primary} /></View>
       ) : (
         <View style={{ flex: 1 }}>

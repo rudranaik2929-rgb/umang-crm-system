@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
-import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots } from '../lib/api';
+import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots, getSnapshot, setSnapshot, USER_SNAPSHOT_KEY } from '../lib/api';
 
 export interface User {
   user_id: string;
@@ -35,33 +35,35 @@ const AuthContext = createContext<AuthContextType>({
 });
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [loading, setLoading] = useState(true);
+  const cachedUser = getSnapshot<User>(USER_SNAPSHOT_KEY);
+  const [user, setUser] = useState<User | null>(cachedUser ?? null);
+  const [loading, setLoading] = useState(!cachedUser);
   const [locationStatus] = useState<'checking' | 'granted' | 'denied'>('granted');
 
   const refresh = useCallback(async () => {
     try {
       const r = await api.get('/auth/me');
       setUser(r.data);
+      setSnapshot(USER_SNAPSHOT_KEY, r.data);
     } catch {
       setUser(null);
+      setSnapshot(USER_SNAPSHOT_KEY, null);
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    // Wake a sleeping (cold) backend immediately so the first auth/dashboard
-    // request doesn't pay the full cold-start penalty.
-    warmUpBackend();
-    // One-time cleanup: remove old localStorage tokens that cause cross-tab bleeding
-    try {
-      if (typeof window !== 'undefined') {
-        window.localStorage.removeItem('umang_session_token');
-        window.localStorage.removeItem('umang_acting_as_id');
-      }
-    } catch {}
-    refresh();
+    (async () => {
+      await warmUpBackend();
+      try {
+        if (typeof window !== 'undefined') {
+          window.localStorage.removeItem('umang_session_token');
+          window.localStorage.removeItem('umang_acting_as_id');
+        }
+      } catch {}
+      await refresh();
+    })();
   }, [refresh]);
 
   const logout = useCallback(async () => {
@@ -71,6 +73,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearSnapshots();
     await setToken(null);
     setUser(null);
+    setSnapshot(USER_SNAPSHOT_KEY, null);
   }, []);
 
   const exchangeSession = useCallback(async (credentials: { email: string; password: string }): Promise<User | null> => {
@@ -80,6 +83,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await setToken(r.data.session_token);
       }
       setUser(r.data.user);
+      setSnapshot(USER_SNAPSHOT_KEY, r.data.user);
       return r.data.user as User;
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
@@ -102,13 +106,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const setRoleFn = useCallback(async (role: string) => {
     const r = await api.post('/auth/set-role', { role });
     setUser(r.data);
+    setSnapshot(USER_SNAPSHOT_KEY, r.data);
   }, []);
 
   const actAs = useCallback(async (employeeId: string | null) => {
-    // We save this locally to support multiple people on one account
     await setActAsId(employeeId);
     const r = await api.post('/auth/act-as', { employee_id: employeeId });
     setUser(r.data);
+    setSnapshot(USER_SNAPSHOT_KEY, r.data);
   }, []);
 
   return (

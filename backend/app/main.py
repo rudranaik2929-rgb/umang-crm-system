@@ -217,7 +217,7 @@ def sb_url(table: str) -> str:
 _http = httpx.Client(timeout=20, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
 
 # Short-lived caches — cut repeated full-table Supabase reads on dashboard/login.
-LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "120"))
+LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "300"))
 _USER_CACHE_TTL_SEC = int(os.environ.get("USER_CACHE_TTL_SEC", "300"))
 _leads_cache: Dict[str, Any] = {"ts": 0.0, "select": "", "data": []}
 _user_profile_cache: Dict[str, Dict[str, Any]] = {}
@@ -225,8 +225,10 @@ _employees_cache: Dict[str, Any] = {"ts": 0.0, "data": []}
 _EMPLOYEES_CACHE_TTL = 60
 _assignment_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _employee_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
-_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "45"))
+_dashboard_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "120"))
 _leads_cache_lock = threading.Lock()
+_leads_cache_loading = threading.Event()
 
 # One wide fetch shared by dashboard / assignment / employee stats (avoids 3× full-table reads).
 LEADS_CANONICAL_SELECT = (
@@ -522,6 +524,7 @@ def invalidate_leads_cache() -> None:
         _leads_cache["ts"] = 0.0
     _assignment_stats_cache["ts"] = 0.0
     _employee_stats_cache["ts"] = 0.0
+    _dashboard_stats_cache["ts"] = 0.0
 
 
 def invalidate_employees_cache() -> None:
@@ -538,23 +541,52 @@ def _project_lead_fields(row: Dict[str, Any], select: str) -> Dict[str, Any]:
 def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
     """Full leads table + session cache — one canonical fetch shared across dashboard endpoints."""
     now = time.time()
+
+    def _from_cache() -> Optional[List[Dict[str, Any]]]:
+        with _leads_cache_lock:
+            if (
+                _leads_cache["ts"]
+                and (now - float(_leads_cache["ts"])) < LEADS_CACHE_TTL_SEC
+                and _leads_cache.get("select") == LEADS_CANONICAL_SELECT
+            ):
+                cached = _leads_cache["data"]
+                if select in ("*", LEADS_CANONICAL_SELECT):
+                    return cached
+                return [_project_lead_fields(l, select) for l in cached]
+        return None
+
+    hit = _from_cache()
+    if hit is not None:
+        return hit
+
+    is_loader = False
     with _leads_cache_lock:
-        if (
-            _leads_cache["ts"]
-            and (now - float(_leads_cache["ts"])) < LEADS_CACHE_TTL_SEC
-            and _leads_cache.get("select") == LEADS_CANONICAL_SELECT
-        ):
-            cached = _leads_cache["data"]
-            if select in ("*", LEADS_CANONICAL_SELECT):
-                return cached
-            return [_project_lead_fields(l, select) for l in cached]
-    db_leads = sb_select_all("leads", {"select": LEADS_CANONICAL_SELECT, "order": "created_at.desc"})
-    merged = merge_leads_with_cache(db_leads)
-    with _leads_cache_lock:
-        _leads_cache.update({"ts": now, "select": LEADS_CANONICAL_SELECT, "data": merged})
-    if select in ("*", LEADS_CANONICAL_SELECT):
-        return merged
-    return [_project_lead_fields(l, select) for l in merged]
+        if not _leads_cache_loading.is_set() and not _leads_cache.get("_loading"):
+            _leads_cache["_loading"] = True
+            _leads_cache_loading.clear()
+            is_loader = True
+
+    if not is_loader:
+        _leads_cache_loading.wait(timeout=90)
+        hit = _from_cache()
+        if hit is not None:
+            return hit
+
+    try:
+        db_leads = sb_select_all("leads", {"select": LEADS_CANONICAL_SELECT, "order": "created_at.desc"})
+        merged = merge_leads_with_cache(db_leads)
+        with _leads_cache_lock:
+            _leads_cache.update({"ts": time.time(), "select": LEADS_CANONICAL_SELECT, "data": merged})
+            _leads_cache.pop("_loading", None)
+        _leads_cache_loading.set()
+        if select in ("*", LEADS_CANONICAL_SELECT):
+            return merged
+        return [_project_lead_fields(l, select) for l in merged]
+    except Exception:
+        with _leads_cache_lock:
+            _leads_cache.pop("_loading", None)
+        _leads_cache_loading.set()
+        raise
 
 
 def clean_leads_for_platform_stats(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1573,6 +1605,24 @@ def update_cached_lead(lead_id: str, data: dict):
         ({**l, **data} if l.get("lead_id") == lead_id else l)
         for l in SESSION_CACHE["leads"]
     ]
+    patched = False
+    with _leads_cache_lock:
+        cached_rows = _leads_cache.get("data") or []
+        if _leads_cache.get("ts") and cached_rows:
+            next_rows = []
+            for row in cached_rows:
+                if row.get("lead_id") == lead_id:
+                    next_rows.append({**row, **data})
+                    patched = True
+                else:
+                    next_rows.append(row)
+            if patched:
+                _leads_cache["data"] = next_rows
+    if patched:
+        _assignment_stats_cache["ts"] = 0.0
+        _employee_stats_cache["ts"] = 0.0
+        _dashboard_stats_cache["ts"] = 0.0
+        return
     invalidate_leads_cache()
 
 def first_related_record(table: str, cache_key: str, lead_id: str):
@@ -5176,20 +5226,123 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     }
 
 
+def _get_dashboard_stats_cached() -> Dict[str, Any]:
+    now = time.time()
+    if _dashboard_stats_cache["data"] is not None and (now - float(_dashboard_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
+        return _dashboard_stats_cache["data"]
+    data = _compute_dashboard_stats()
+    _dashboard_stats_cache.update({"ts": now, "data": data})
+    return data
+
+
+def _compute_dashboard_graph_sync() -> Dict[str, Any]:
+    now = now_utc()
+    graph_data = sb_select_parallel({
+        "leads": ("leads", {"select": "lead_id,created_at,source,status,stage", "created_at": f"gte.{(now - timedelta(days=400)).isoformat()}"}),
+        "bookings": ("bookings", {"select": "booking_id,brokerage_amount,agreement_status,created_at"}),
+        "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
+    })
+    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
+    leads = SESSION_CACHE["leads"] + [l for l in graph_data["leads"] if l.get("lead_id") not in cache_lead_ids]
+    pipeline_leads = [l for l in dedupe_leads(leads) if is_pipeline_lead(l)]
+
+    days_map = {(now - timedelta(days=29 - i)).strftime("%Y-%m-%d"): 0 for i in range(30)}
+    for l in pipeline_leads:
+        d = (l.get("created_at") or "")[:10]
+        if d in days_map:
+            days_map[d] += 1
+    leads_by_day = [{"date": d, "count": cnt} for d, cnt in sorted(days_map.items())]
+
+    months_map = {k: 0 for k in _last_n_month_keys(12)}
+    for l in pipeline_leads:
+        mk = (l.get("created_at") or "")[:7]
+        if mk in months_map:
+            months_map[mk] += 1
+    leads_by_month = [{"month": mk, "count": months_map[mk]} for mk in sorted(months_map.keys())]
+
+    bookings = graph_data["bookings"]
+    cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
+    bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
+
+    rev_months_map = {k: 0.0 for k in _last_n_month_keys(12)}
+    for b in bookings:
+        if is_legacy_skeleton_booking(b):
+            continue
+        d = b.get("created_at", "")[:7]
+        if d in rev_months_map:
+            rev_months_map[d] += booking_brokerage_amount(b)
+    rev_by_month = [{"month": d, "revenue": rev} for d, rev in sorted(rev_months_map.items())]
+
+    return {
+        "leads_by_day": leads_by_day,
+        "leads_by_month": leads_by_month,
+        "revenue_by_month": rev_by_month,
+        "total_leads_in_chart": sum(months_map.values()),
+    }
+
+
+def _stats_employees_sync() -> List[Dict[str, Any]]:
+    now = time.time()
+    if _employee_stats_cache["data"] is not None and (now - float(_employee_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
+        return _employee_stats_cache["data"]
+    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id"})
+    db_activities = sb_select("activities", {
+        "select": "user_id,created_at,type",
+        "order": "created_at.desc",
+        "limit": "2000",
+    })
+    cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+    activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
+    all_leads = fetch_all_leads_merged(
+        "lead_id,assigned_to,status,stage,priority,call_status,follow_up_at,lead_type"
+    )
+
+    emp_stats = []
+    for e in employees:
+        eid = e["employee_id"]
+        emp_acts = [a for a in activities if a.get("user_id") in {eid, e.get("user_id")}]
+        emp_leads = [l for l in all_leads if l.get("assigned_to") == eid]
+        assignment = compute_employee_assignment_stats(emp_leads, e.get("role"))
+        last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
+
+        emp_stats.append({
+            "employee_id": eid,
+            "name": e["name"],
+            "email": e["email"],
+            "role": e["role"],
+            "department": e.get("department", ""),
+            "active": e.get("active", True),
+            "actions_total": len(emp_acts),
+            "leads_total": assignment["assigned_total"],
+            "last_activity": last_activity,
+            **assignment,
+            "positives": assignment["assigned_positive"],
+            "negatives": assignment["assigned_not_interested"],
+            "followups": assignment["assigned_follow_ups"],
+            "visits": assignment["emp_visited"],
+            "bookings_done": assignment["emp_booking_done"],
+            "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
+            "closed_deals": assignment["assigned_completed"],
+            "call_notes": sum(1 for a in emp_acts if "call" in str(a.get("type"))),
+        })
+    _employee_stats_cache.update({"ts": now, "data": emp_stats})
+    return emp_stats
+
+
 @api_router.get("/stats/dashboard")
 async def stats_dashboard(cu: User=Depends(get_current_user)):
     ensure_owner_dashboard(cu)
-    return _compute_dashboard_stats()
+    return await asyncio.to_thread(_get_dashboard_stats_cached)
 
 
 @api_router.get("/stats/dashboard-bundle")
 async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
     """One round-trip for main Dashboard — admin (full) + manager (team, no revenue UI)."""
     ensure_main_dashboard(cu)
-    stats = _compute_dashboard_stats()
-    graph, employees, recent, leads_page = await asyncio.gather(
-        stats_dashboard_graph(cu),
-        stats_employees(cu),
+    stats, graph, employees, recent, leads_page = await asyncio.gather(
+        asyncio.to_thread(_get_dashboard_stats_cached),
+        asyncio.to_thread(_compute_dashboard_graph_sync),
+        asyncio.to_thread(_stats_employees_sync),
         list_recent_leads(20, cu),
         list_leads(limit=80, offset=0, cu=cu),
     )
@@ -5205,10 +5358,13 @@ async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
 @api_router.get("/stats/me-bundle")
 async def stats_me_bundle(cu: User = Depends(get_current_user)):
     """One round-trip for My Dashboard (manager gets team performance too)."""
-    me, graph = await asyncio.gather(stats_me(cu), stats_dashboard_graph(cu))
+    me, graph = await asyncio.gather(
+        stats_me(cu),
+        asyncio.to_thread(_compute_dashboard_graph_sync),
+    )
     payload: Dict[str, Any] = {"me": me, "graph": graph}
     if cu.role == "manager":
-        payload["employees"] = await stats_employees(cu)
+        payload["employees"] = await asyncio.to_thread(_stats_employees_sync)
     return payload
 
 
@@ -5255,61 +5411,7 @@ def _last_n_month_keys(n: int = 12) -> List[str]:
 
 @api_router.get("/stats/dashboard/graph")
 async def stats_dashboard_graph(cu: User=Depends(get_current_user)):
-    now = now_utc()
-    start_date = (now - timedelta(days=30)).isoformat()
-    graph_data = sb_select_parallel({
-        "leads": ("leads", {"select": "lead_id,created_at,source,status,stage", "created_at": f"gte.{(now - timedelta(days=400)).isoformat()}"}),
-        "bookings": ("bookings", {"select": "booking_id,brokerage_amount,agreement_status,created_at"}),
-        "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
-    })
-    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
-    leads = SESSION_CACHE["leads"] + [l for l in graph_data["leads"] if l.get("lead_id") not in cache_lead_ids]
-    pipeline_leads = [l for l in dedupe_leads(leads) if is_pipeline_lead(l)]
-
-    leads_by_day = []
-    days_map = { (now - timedelta(days=29 - i)).strftime("%Y-%m-%d"): 0 for i in range(30) }
-    for l in pipeline_leads:
-        d = (l.get("created_at") or "")[:10]
-        if d in days_map:
-            days_map[d] += 1
-    for d, cnt in sorted(days_map.items()):
-        leads_by_day.append({"date": d, "count": cnt})
-
-    months_map = {k: 0 for k in _last_n_month_keys(12)}
-    for l in pipeline_leads:
-        mk = (l.get("created_at") or "")[:7]
-        if mk in months_map:
-            months_map[mk] += 1
-    leads_by_month = [{"month": mk, "count": months_map[mk]} for mk in sorted(months_map.keys())]
-
-    # Real revenue by month (last 12 calendar months)
-    bookings = graph_data["bookings"]
-    # Deduplicate
-    cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
-    bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
-    # if not bookings: bookings = DEMO_BOOKINGS
-
-    loans = graph_data["loans"]
-    cache_lon_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
-    loans = SESSION_CACHE["loans"] + [ln for ln in loans if ln.get("loan_id") not in cache_lon_ids]
-    
-    rev_by_month = []
-    rev_months_map = {k: 0.0 for k in _last_n_month_keys(12)}
-    for b in bookings:
-        if is_legacy_skeleton_booking(b):
-            continue
-        d = b.get("created_at", "")[:7]
-        if d in rev_months_map:
-            rev_months_map[d] += booking_brokerage_amount(b)
-    for d, rev in sorted(rev_months_map.items()):
-        rev_by_month.append({"month": d, "revenue": rev})
-
-    return {
-        "leads_by_day": leads_by_day,
-        "leads_by_month": leads_by_month,
-        "revenue_by_month": rev_by_month,
-        "total_leads_in_chart": sum(months_map.values()),
-    }
+    return await asyncio.to_thread(_compute_dashboard_graph_sync)
 
 @api_router.get("/activities")
 async def list_activities(limit: int = 50, cu: User=Depends(get_current_user)):
@@ -5563,51 +5665,7 @@ async def list_employee_metric_leads(
 
 @api_router.get("/stats/employees")
 async def stats_employees(cu: User=Depends(get_current_user)):
-    now = time.time()
-    if _employee_stats_cache["data"] is not None and (now - float(_employee_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
-        return _employee_stats_cache["data"]
-    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id"})
-    db_activities = sb_select("activities", {
-        "select": "user_id,created_at,type",
-        "order": "created_at.desc",
-        "limit": "2000",
-    })
-    cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
-    activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
-    all_leads = fetch_all_leads_merged(
-        "lead_id,assigned_to,status,stage,priority,call_status,follow_up_at,lead_type"
-    )
-
-    emp_stats = []
-    for e in employees:
-        eid = e["employee_id"]
-        emp_acts = [a for a in activities if a.get("user_id") in {eid, e.get("user_id")}]
-        emp_leads = [l for l in all_leads if l.get("assigned_to") == eid]
-        assignment = compute_employee_assignment_stats(emp_leads, e.get("role"))
-        last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
-
-        emp_stats.append({
-            "employee_id": eid,
-            "name": e["name"],
-            "email": e["email"],
-            "role": e["role"],
-            "department": e.get("department", ""),
-            "active": e.get("active", True),
-            "actions_total": len(emp_acts),
-            "leads_total": assignment["assigned_total"],
-            "last_activity": last_activity,
-            **assignment,
-            "positives": assignment["assigned_positive"],
-            "negatives": assignment["assigned_not_interested"],
-            "followups": assignment["assigned_follow_ups"],
-            "visits": assignment["emp_visited"],
-            "bookings_done": assignment["emp_booking_done"],
-            "loans_done": sum(1 for a in emp_acts if "loan" in str(a.get("type"))),
-            "closed_deals": assignment["assigned_completed"],
-            "call_notes": sum(1 for a in emp_acts if "call" in str(a.get("type"))),
-        })
-    _employee_stats_cache.update({"ts": now, "data": emp_stats})
-    return emp_stats
+    return await asyncio.to_thread(_stats_employees_sync)
 
 # ---- Health & Wiring ----
 @api_router.get("/")
@@ -5642,6 +5700,18 @@ async def _housing_background_sync_loop() -> None:
 @app.on_event("startup")
 async def start_housing_background_sync() -> None:
     global _housing_sync_task
+
+    async def _warm_caches() -> None:
+        await asyncio.sleep(2)
+        try:
+            await asyncio.to_thread(fetch_all_leads_merged, LEADS_CANONICAL_SELECT)
+            await asyncio.to_thread(_get_dashboard_stats_cached)
+            logging.info("Startup cache warm completed")
+        except Exception:
+            logging.exception("Startup cache warm failed")
+
+    asyncio.create_task(_warm_caches())
+
     if not HOUSING_AUTO_SYNC_ENABLED:
         logging.info("Housing auto-sync disabled (HOUSING_AUTO_SYNC_ENABLED=false)")
         return

@@ -51,7 +51,7 @@ export default function Pipeline() {
   return (
     <View style={{ flex: 1 }}>
       <TopBar title="Lead Pipeline" subtitle="Kanban view of every active lead by stage" />
-      {loading ? (
+      {loading && leads.length === 0 ? (
         <View style={{ padding: 48 }}><ActivityIndicator color={colors.primary} /></View>
       ) : leads.length === 0 ? (
         <View style={{ padding: 24, flex: 1 }}>

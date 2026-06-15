@@ -5,9 +5,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 // Default: Render URL until api.umanghometechllp.in custom domain is live on Render.
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-systemumang-home-tech.onrender.com').replace(/\/$/, '');
 
-// Render instances can be slow on first request after idle.
-const REQUEST_TIMEOUT_MS = 30000;
-const GET_CACHE_MS = 90000;
+const REQUEST_TIMEOUT_MS = 15000;
+const GET_CACHE_MS = 120000;
+const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
+const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v1';
+const GET_STORAGE_KEY = 'umang_get_cache_v1';
+const USER_SNAPSHOT_KEY = 'auth-user';
 
 export const api = axios.create({
     baseURL: `${BACKEND_URL}/api`,
@@ -22,9 +25,54 @@ function getCacheKey(url: string, params?: Record<string, unknown>) {
     return `${url}?${JSON.stringify(params || {})}`;
 }
 
+function readPersistedMap(key: string): Record<string, { ts: number; data: unknown }> {
+    try {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            const raw = window.sessionStorage.getItem(key);
+            return raw ? JSON.parse(raw) : {};
+        }
+    } catch {}
+    return {};
+}
+
+function writePersistedMap(key: string, value: Record<string, { ts: number; data: unknown }>) {
+    try {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            window.sessionStorage.setItem(key, JSON.stringify(value));
+        }
+    } catch {}
+}
+
+function hydrateGetCacheFromStorage() {
+    const stored = readPersistedMap(GET_STORAGE_KEY);
+    const now = Date.now();
+    for (const [k, v] of Object.entries(stored)) {
+        if (v?.ts && now - v.ts < GET_CACHE_MS) {
+            _getCache.set(k, v);
+        }
+    }
+}
+
+function persistGetCacheEntry(key: string, entry: { ts: number; data: unknown }) {
+    const stored = readPersistedMap(GET_STORAGE_KEY);
+    stored[key] = entry;
+    const now = Date.now();
+    for (const k of Object.keys(stored)) {
+        if (!stored[k]?.ts || now - stored[k].ts >= GET_CACHE_MS) delete stored[k];
+    }
+    writePersistedMap(GET_STORAGE_KEY, stored);
+}
+
+hydrateGetCacheFromStorage();
+
 export function clearGetCache() {
     _getCache.clear();
     _inflightGets.clear();
+    try {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            window.sessionStorage.removeItem(GET_STORAGE_KEY);
+        }
+    } catch {}
 }
 
 const _axiosGet = api.get.bind(api);
@@ -44,7 +92,9 @@ api.get = function getWithCache(url: string, config?: any) {
     if (pending) return pending;
     const promise = _axiosGet(url, config)
         .then((res) => {
-            _getCache.set(key, { ts: Date.now(), data: res.data });
+            const entry = { ts: Date.now(), data: res.data };
+            _getCache.set(key, entry);
+            persistGetCacheEntry(key, entry);
             _inflightGets.delete(key);
             return res;
         })
@@ -56,9 +106,6 @@ api.get = function getWithCache(url: string, config?: any) {
     return promise;
 } as typeof api.get;
 
-// Retry once on cold-start style failures (timeout, network drop, 502/503/504).
-// Mutations (POST/PUT/PATCH/DELETE) are only retried when the request never
-// reached the server (no response), to stay idempotent-safe.
 api.interceptors.response.use(
     (response) => {
         const method = String(response.config?.method || 'get').toLowerCase();
@@ -83,15 +130,13 @@ api.interceptors.response.use(
         return Promise.reject(error);
     }
     config.__isRetry = true;
-    await new Promise((r) => setTimeout(r, 500));
+    config.timeout = 30000;
+    await new Promise((r) => setTimeout(r, 600));
     return api(config);
 });
 
 let warmUpPromise: Promise<void> | null = null;
 
-// Fire-and-forget ping that wakes a sleeping backend so the first real request
-// (login / dashboard) doesn't pay the full cold-start penalty. Deduplicated so
-// repeated calls during startup only hit the server once.
 export function warmUpBackend(): Promise<void> {
     if (warmUpPromise) return warmUpPromise;
     warmUpPromise = Promise.all([
@@ -105,17 +150,12 @@ export function warmUpBackend(): Promise<void> {
     return warmUpPromise;
 }
 
+if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    warmUpBackend();
+}
+
 const TOKEN_KEY = 'umang_session_token';
 const ACT_AS_KEY = 'umang_acting_as_id';
-
-// ============================================================
-// MULTI-USER SESSION ISOLATION
-// ============================================================
-// sessionStorage is PER-TAB — each browser tab has its own.
-// This means Tab1=Admin and Tab2=Manager will NEVER conflict.
-// Each tab requires its own login. This is the correct behavior
-// for a CRM used by 100+ employees.
-// ============================================================
 
 async function getToken(): Promise<string | null> {
     try {
@@ -126,6 +166,15 @@ async function getToken(): Promise<string | null> {
     } catch {
           return null;
     }
+}
+
+export function hasSessionToken(): boolean {
+    try {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            return !!window.sessionStorage.getItem(TOKEN_KEY);
+        }
+    } catch {}
+    return false;
 }
 
 async function getActAsId(): Promise<string | null> {
@@ -182,13 +231,29 @@ api.interceptors.request.use(async (config) => {
 
 export const BACKEND = BACKEND_URL;
 
-// ============================================================
-// LIGHTWEIGHT STALE-WHILE-REVALIDATE CACHE
-// ============================================================
-// Keeps the last successful payload per key in memory so screens can render
-// instantly on re-navigation while they refresh in the background. Cleared on
-// logout to avoid leaking data across sessions/tabs.
 const _snapshotCache = new Map<string, any>();
+
+function hydrateSnapshotsFromStorage() {
+    const stored = readPersistedMap(SNAPSHOT_STORAGE_KEY);
+    const now = Date.now();
+    for (const [k, v] of Object.entries(stored)) {
+        if (v?.ts && now - v.ts < SNAPSHOT_TTL_MS && v.data !== undefined) {
+            _snapshotCache.set(k, v.data);
+        }
+    }
+}
+
+function persistSnapshot(key: string, value: any) {
+    const stored = readPersistedMap(SNAPSHOT_STORAGE_KEY);
+    stored[key] = { ts: Date.now(), data: value };
+    const now = Date.now();
+    for (const k of Object.keys(stored)) {
+        if (!stored[k]?.ts || now - stored[k].ts >= SNAPSHOT_TTL_MS) delete stored[k];
+    }
+    writePersistedMap(SNAPSHOT_STORAGE_KEY, stored);
+}
+
+hydrateSnapshotsFromStorage();
 
 export function getSnapshot<T = any>(key: string): T | undefined {
     return _snapshotCache.get(key);
@@ -196,11 +261,19 @@ export function getSnapshot<T = any>(key: string): T | undefined {
 
 export function setSnapshot(key: string, value: any) {
     _snapshotCache.set(key, value);
+    persistSnapshot(key, value);
 }
 
 export function clearSnapshots() {
     _snapshotCache.clear();
     clearGetCache();
+    try {
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+            window.sessionStorage.removeItem(SNAPSHOT_STORAGE_KEY);
+        }
+    } catch {}
 }
+
+export { USER_SNAPSHOT_KEY };
 
 export default api;

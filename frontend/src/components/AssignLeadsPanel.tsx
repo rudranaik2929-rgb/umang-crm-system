@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, ActivityIndicator } from 'react-nati
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api } from '../lib/api';
+import { api, getSnapshot, setSnapshot } from '../lib/api';
 import { roleLabel } from '../lib/constants';
 
 type Props = { compact?: boolean };
@@ -11,18 +11,20 @@ type Props = { compact?: boolean };
 export function AssignLeadsPanel({ compact = false }: Props) {
   const { colors } = useTheme();
   const router = useRouter();
-  const [stats, setStats] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+  const cached = getSnapshot<any>('assign-leads-panel');
+  const [stats, setStats] = useState<any>(cached ?? null);
+  const [loading, setLoading] = useState(!cached);
 
   const load = useCallback(async (silent = false) => {
-    if (!silent) setLoading(true);
+    if (!silent && !stats) setLoading(true);
     try {
       const res = await api.get('/stats/assignment');
       setStats(res.data);
+      setSnapshot('assign-leads-panel', res.data);
     } finally {
       if (!silent) setLoading(false);
     }
-  }, []);
+  }, [stats]);
 
   useEffect(() => {
     load();
@@ -30,7 +32,7 @@ export function AssignLeadsPanel({ compact = false }: Props) {
     return () => clearInterval(id);
   }, [load]);
 
-  if (loading) return <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />;
+  if (loading && !stats) return <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />;
 
   const employees = stats?.employees || [];
   const unassigned = Number(stats?.unassigned_count || 0);

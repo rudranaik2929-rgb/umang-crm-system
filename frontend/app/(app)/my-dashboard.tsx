@@ -103,7 +103,7 @@ export default function MyDashboard() {
     };
   }, [load]);
 
-  if (loading || !data) {
+  if (loading && !data) {
     return (
       <View style={{ flex: 1 }}>
         <TopBar title="My Dashboard" />

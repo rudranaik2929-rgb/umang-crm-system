@@ -221,7 +221,7 @@ export default function Integrations() {
   return (
     <View style={{ flex: 1 }}>
       <TopBar title="Integrations" subtitle="Portal lead intake and source health" />
-      {loading ? (
+      {loading && !status ? (
         <View style={styles.loading}><ActivityIndicator color={colors.primary} /></View>
       ) : (
         <ScrollView contentContainerStyle={styles.content}>

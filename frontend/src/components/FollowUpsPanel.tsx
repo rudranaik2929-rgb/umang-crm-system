@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
-import { api } from '../lib/api';
+import { api, getSnapshot, setSnapshot } from '../lib/api';
 import { isAdmin } from '../lib/constants';
 import { leadToFollowUpCard } from '../lib/leadFollowUp';
 
@@ -27,14 +27,15 @@ type Props = {
 export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, assignedTo, onOpenLead }: Props) {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const [items, setItems] = useState<any[]>([]);
-  const [total, setTotal] = useState(0);
-  const [loading, setLoading] = useState(true);
+  const cached = getSnapshot<any>('follow-ups-panel');
+  const [items, setItems] = useState<any[]>(cached?.items ?? []);
+  const [total, setTotal] = useState(cached?.total ?? 0);
+  const [loading, setLoading] = useState(!cached);
 
   const managerView = showEmployeeName ?? (isAdmin(user?.role) || user?.role === 'manager');
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (silent = false) => {
+    if (!silent && items.length === 0) setLoading(true);
     try {
       const myId = assignedTo || (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
       const params: Record<string, any> = { bucket: 'follow_up', limit: 500 };
@@ -43,18 +44,21 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, as
       }
       const res = await api.get('/leads/filtered', { params });
       const leads = Array.isArray(res.data?.leads) ? res.data.leads : [];
-      setTotal(Number(res.data?.total ?? leads.length));
-      setItems(leads.map(leadToFollowUpCard));
+      const nextTotal = Number(res.data?.total ?? leads.length);
+      const nextItems = leads.map(leadToFollowUpCard);
+      setTotal(nextTotal);
+      setItems(nextItems);
+      setSnapshot('follow-ups-panel', { items: nextItems, total: nextTotal });
     } finally {
       setLoading(false);
     }
-  }, [managerView, user, assignedTo]);
+  }, [managerView, user, assignedTo, items.length]);
 
   useEffect(() => { load(); }, [load]);
 
   const shown = maxItems ? items.slice(0, maxItems) : items;
 
-  if (loading) {
+  if (loading && items.length === 0) {
     return <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />;
   }
 

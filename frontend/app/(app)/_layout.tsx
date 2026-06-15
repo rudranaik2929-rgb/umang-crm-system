@@ -4,6 +4,7 @@ import { Slot, useRouter, usePathname } from 'expo-router';
 import { useAuth } from '../../src/auth/AuthContext';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { Sidebar } from '../../src/components/Sidebar';
+import { hasSessionToken } from '../../src/lib/api';
 import { canAccess, defaultRouteFor, pageKeyFromPathname } from '../../src/lib/constants';
 
 export default function AppLayout() {
@@ -32,7 +33,17 @@ export default function AppLayout() {
     }
   }, [user, loading, router, pathname]);
 
-  if (loading || !user) {
+  const sessionKnown = !!user || hasSessionToken();
+
+  if (!sessionKnown && (loading || !user)) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
+        <ActivityIndicator color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (!user) {
     return (
       <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.background }}>
         <ActivityIndicator color={colors.primary} />

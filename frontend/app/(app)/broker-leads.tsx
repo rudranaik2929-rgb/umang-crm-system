@@ -33,7 +33,7 @@ export default function BrokerLeads() {
         title="Broker Pool"
         subtitle="Brokerage leads stored for future — not auto-assigned to telecallers"
       />
-      {loading ? (
+      {loading && leads.length === 0 ? (
         <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
       ) : (
         <ScrollView contentContainerStyle={styles.content}>
