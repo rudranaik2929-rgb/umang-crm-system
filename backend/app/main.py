@@ -3451,8 +3451,14 @@ def _normalize_person_name(value: Any) -> str:
     return re.sub(r"\s+", " ", text.strip().lower())
 
 
+_NAME_HONORIFICS = frozenset({"mr", "mrs", "ms", "miss", "dr", "shri", "smt", "sir", "madam"})
+
+
 def _name_tokens(value: str) -> List[str]:
-    return [t for t in _normalize_person_name(value).split() if len(t) > 1]
+    tokens = [t for t in _normalize_person_name(value).split() if len(t) > 1]
+    while tokens and tokens[0] in _NAME_HONORIFICS:
+        tokens = tokens[1:]
+    return tokens
 
 
 def map_import_headers(headers: List[Any]) -> Dict[str, int]:
@@ -3502,10 +3508,10 @@ def map_import_headers(headers: List[Any]) -> Dict[str, int]:
 
 def build_employee_assign_lookup() -> Tuple[Dict[str, str], List[Dict[str, str]]]:
     """Name/email → employee_id lookup (includes inactive=null as active)."""
-    emps = sb_select("employees", {"select": "employee_id,name,email,active"})
+    emps = sb_select_all("employees", {"select": "employee_id,name,email,active", "order": "name.asc"})
     emps = [e for e in emps if e.get("active", True) is not False]
     if not emps:
-        emps = sb_select("employees", {"select": "employee_id,name,email,active"})
+        emps = sb_select_all("employees", {"select": "employee_id,name,email,active", "order": "name.asc"})
 
     exact: Dict[str, str] = {}
     roster: List[Dict[str, str]] = []
@@ -3536,7 +3542,13 @@ def resolve_import_assignee(
     roster: List[Dict[str, str]],
 ) -> Tuple[Optional[str], str]:
     """Return (employee_id, cleaned_assignee_label)."""
-    raw = str(assignee_raw or "").strip()
+    raw = import_cell_text(assignee_raw)
+    if not raw:
+        return None, raw
+    roster_ids = {r["employee_id"] for r in roster}
+    if raw.startswith("emp_") and raw in roster_ids:
+        name = next((r["name"] for r in roster if r["employee_id"] == raw), raw)
+        return raw, name
     key = _normalize_person_name(raw)
     if not key:
         return None, raw
@@ -3560,16 +3572,53 @@ def resolve_import_assignee(
             continue
         if norm == key or norm in key or key in norm:
             return emp["employee_id"], emp["name"]
-        emp_tokens = norm.split()
+        emp_tokens = _name_tokens(emp["name"])
+        if not emp_tokens:
+            continue
         overlap = sum(1 for t in emp_tokens if t in key_tokens)
-        if overlap >= max(2, len(emp_tokens)) or (len(emp_tokens) == 1 and overlap == 1):
+        if overlap >= len(emp_tokens) or (len(emp_tokens) == 1 and overlap == 1):
             if overlap > best_score:
                 best_score = overlap
+                best_id = emp["employee_id"]
+        elif len(key_tokens) == 1 and key_tokens[0] in emp_tokens:
+            if 1 > best_score:
+                best_score = 1
                 best_id = emp["employee_id"]
     if best_id:
         name = next((r["name"] for r in roster if r["employee_id"] == best_id), raw)
         return best_id, name
     return None, raw
+
+
+def import_cell_text(val: Any) -> str:
+    """Normalize Excel/CSV cell to plain text (handles numbers, dates)."""
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%d/%m/%Y")
+    if isinstance(val, float):
+        if val == int(val) and abs(val) < 1e15:
+            return str(int(val))
+    if isinstance(val, int):
+        return str(val)
+    return str(val).strip()
+
+
+def locate_import_header(rows: List[Any]) -> Tuple[int, Dict[str, int]]:
+    """Find header row — supports files with title rows above column names."""
+    for i, row in enumerate(rows[:20]):
+        if not row:
+            continue
+        row_list = list(row) if not isinstance(row, list) else row
+        if all(c is None or str(c).strip() == "" for c in row_list):
+            continue
+        header_map = map_import_headers(row_list)
+        if "name" in header_map and "phone" in header_map:
+            return i, header_map
+    raise HTTPException(
+        status_code=400,
+        detail="Could not find header row with 'Lead Name' and 'Phone Number' columns.",
+    )
 
 
 def parse_import_lead_date(value: Any) -> Optional[str]:
@@ -3609,12 +3658,7 @@ def import_row_to_record(row: List[Any], header_map: Dict[str, int]) -> Dict[str
         return row[header_map[key]]
 
     def text_val(key: str) -> str:
-        val = raw_val(key)
-        if val is None:
-            return ""
-        if isinstance(val, datetime):
-            return val.strftime("%d/%m/%Y")
-        return str(val).strip()
+        return import_cell_text(raw_val(key))
 
     lead_date_raw = raw_val("lead_date") if "lead_date" in header_map else None
     parsed_date = parse_import_lead_date(lead_date_raw) if lead_date_raw not in (None, "") else None
@@ -3652,15 +3696,9 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             if not rows:
                 raise HTTPException(status_code=400, detail="CSV file is empty.")
             
-            header_map = map_import_headers(rows[0])
-            
-            if "name" not in header_map or "phone" not in header_map:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="CSV must contain 'Lead Name' (or Name) and 'Phone Number' columns.",
-                )
+            header_idx, header_map = locate_import_header(rows)
                 
-            for row in rows[1:]:
+            for row in rows[header_idx + 1:]:
                 if not row or all(not str(c or "").strip() for c in row):
                     continue
                 records.append(import_row_to_record(row, header_map))
@@ -3677,15 +3715,9 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             if not rows:
                 raise HTTPException(status_code=400, detail="Excel file is empty.")
             
-            header_map = map_import_headers(list(rows[0]))
-            
-            if "name" not in header_map or "phone" not in header_map:
-                raise HTTPException(
-                    status_code=400, 
-                    detail="Excel must contain 'Lead Name' (or Name) and 'Phone Number' columns.",
-                )
+            header_idx, header_map = locate_import_header(rows)
                 
-            for row in rows[1:]:
+            for row in rows[header_idx + 1:]:
                 if not row or all(c is None or str(c).strip() == "" for c in row):
                     continue
                 records.append(import_row_to_record(list(row), header_map))
@@ -3746,30 +3778,44 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             "external_created_at": r.get("lead_date") or None,
             "updated_at": now,
         }
-        
+
+        if emp_id:
+            lead.update(stamp_lead_assignment(emp_id, assigned_by=actor_id, current_stage="new"))
+
         result = sb_insert("leads", lead)
-        saved = enrich_lead_display_fields(result or lead)
+        if not result:
+            skipped_count += 1
+            if assignee_name and not emp_id:
+                assign_failed.append({
+                    "name": name,
+                    "assign_to": assignee_name,
+                    "reason": "insert_failed",
+                })
+            continue
+
+        saved = enrich_lead_display_fields(result)
         SESSION_CACHE["leads"].insert(0, saved)
 
         if emp_id:
-            saved = assign_lead_to_employee(lid, saved, emp_id, cu, reactivate=False)
-            saved = enrich_lead_display_fields(saved)
-            update_cached_lead(lid, {
-                "assigned_to": emp_id,
-                "stage": saved.get("stage", "assigned"),
-                "assigned_at": saved.get("assigned_at"),
-                "created_at": lead_created,
-                "external_created_at": r.get("lead_date") or None,
-            })
-            log_activity(cu, "bulk_import_assign", f"Excel import assigned {name} → {matched_emp_name}", lead_id=lid)
-            employees_touched.add(emp_id)
-            assigned_count += 1
-            bucket = assignment_breakdown.setdefault(emp_id, {
-                "employee_id": emp_id,
-                "employee_name": matched_emp_name,
-                "count": 0,
-            })
-            bucket["count"] += 1
+            if saved.get("assigned_to") != emp_id:
+                saved = assign_lead_to_employee(lid, saved, emp_id, cu, reactivate=False)
+                saved = enrich_lead_display_fields(saved)
+            if saved.get("assigned_to") == emp_id:
+                log_activity(cu, "bulk_import_assign", f"Excel import assigned {name} → {matched_emp_name}", lead_id=lid)
+                employees_touched.add(emp_id)
+                assigned_count += 1
+                bucket = assignment_breakdown.setdefault(emp_id, {
+                    "employee_id": emp_id,
+                    "employee_name": matched_emp_name,
+                    "count": 0,
+                })
+                bucket["count"] += 1
+            else:
+                assign_failed.append({
+                    "name": name,
+                    "assign_to": assignee_name,
+                    "reason": "assign_failed",
+                })
         elif assignee_name:
             assign_failed.append({
                 "name": name,
@@ -3785,6 +3831,7 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         sb_update("employees", "employee_id", eid, {"last_assigned_at": now_utc().isoformat()})
 
     invalidate_leads_cache()
+    invalidate_employees_cache()
 
     breakdown_list = sorted(
         assignment_breakdown.values(),

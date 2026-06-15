@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel, defaultRouteFor } from '../lib/constants';
-import { api, clearSnapshots } from '../lib/api';
+import { api, clearSnapshots, clearGetCache } from '../lib/api';
 import { useRouter } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
 import { ImportLeadsModal } from './ImportLeadsModal';
@@ -391,7 +391,8 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         visible={importLeadsVisible}
         onClose={() => setImportLeadsVisible(false)}
         onSuccess={() => {
-          // Refresh page to load bulk data
+          clearGetCache();
+          clearSnapshots();
           if (typeof window !== 'undefined') {
             window.location.reload();
           }
