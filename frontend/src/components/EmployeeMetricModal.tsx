@@ -7,6 +7,7 @@ import { LeadDetailModal } from './LeadDetailModal';
 import { WorkflowStatusBadge } from './Badge';
 
 const METRIC_LABELS: Record<string, string> = {
+  missed_leads: 'Missed Lead',
   hot: 'Hot',
   visited: 'Visited',
   not_interested: 'Not Interested',

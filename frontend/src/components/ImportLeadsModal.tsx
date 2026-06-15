@@ -15,7 +15,12 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
   const [loading, setLoading] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [result, setResult] = useState<{ imported: number; skipped: number } | null>(null);
+  const [result, setResult] = useState<{
+    imported: number;
+    skipped: number;
+    assigned: number;
+    assignFailed: number;
+  } | null>(null);
 
   const pickFile = () => {
     if (typeof document !== 'undefined') {
@@ -59,6 +64,8 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
         setResult({
           imported: res.data.imported_count,
           skipped: res.data.skipped_count,
+          assigned: res.data.assigned_count ?? 0,
+          assignFailed: res.data.assign_failed_count ?? 0,
         });
         setSelectedFile(null);
         onSuccess();
@@ -97,20 +104,21 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
 
           <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
             <Text style={[styles.desc, { color: colors.textSecondary }]}>
-              Quickly upload leads from an Excel spreadsheet (.xlsx) or CSV file.
+              Upload your Excel (.xlsx) or CSV. Leads are created and auto-assigned when the
+              &quot;Assigne to&quot; column matches an employee name in the system.
             </Text>
 
-            {/* Template Info Card */}
             <View style={[styles.infoCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
-              <Text style={[styles.infoTitle, { color: colors.text }]}>Required Header Columns</Text>
+              <Text style={[styles.infoTitle, { color: colors.text }]}>Your Excel columns (row 1 headers)</Text>
               <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                • <Text style={{ fontWeight: 'bold' }}>Name</Text> (or Full Name, Lead Name)
+                Lead Date · Lead Name · Phone Number · Locality · Configuration · Price · Building/Project Name · Assigne to
               </Text>
-              <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                • <Text style={{ fontWeight: 'bold' }}>Phone</Text> (or Contact, Mobile)
+              <Text style={[styles.infoText, { color: colors.textMuted, marginTop: 8, fontStyle: 'italic' }]}>
+                Example: 30/12/2025 · Shastri Ramnarayan mishra · (+91)-9869122319 · Nalasopara West · 1 BHK · 31.5 Lac-37.0 Lac · Vimal Classic · Khyati Shah
               </Text>
-              <Text style={[styles.infoText, { color: colors.textSecondary, marginTop: 4 }]}>
-                Optional: <Text style={{ fontStyle: 'italic' }}>Email, Location, Budget, Property Type, Notes</Text>
+              <Text style={[styles.infoText, { color: colors.textSecondary, marginTop: 8 }]}>
+                Required: <Text style={{ fontWeight: 'bold' }}>Lead Name</Text> and <Text style={{ fontWeight: 'bold' }}>Phone Number</Text>.
+                Assigne to must match employee name exactly (e.g. Khyati Shah).
               </Text>
             </View>
 
@@ -131,8 +139,16 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
                     Import Successful!
                   </Text>
                   <Text style={[styles.alertSubtext, { color: colors.text }]}>
-                    • {result.imported} leads successfully imported and assigned.
+                    • {result.imported} lead(s) imported
                   </Text>
+                  <Text style={[styles.alertSubtext, { color: colors.text }]}>
+                    • {result.assigned} auto-assigned to employees
+                  </Text>
+                  {result.assignFailed > 0 && (
+                    <Text style={[styles.alertSubtext, { color: colors.warning }]}>
+                      • {result.assignFailed} row(s): employee name in &quot;Assigne to&quot; not found — lead imported but unassigned
+                    </Text>
+                  )}
                   {result.skipped > 0 && (
                     <Text style={[styles.alertSubtext, { color: colors.textSecondary }]}>
                       • {result.skipped} rows skipped (missing Name or Phone).

@@ -237,6 +237,12 @@ LEADS_CANONICAL_SELECT = (
     "follow_up_at,created_at,updated_at,starred,brokerage_amount"
 )
 
+# Fields required for employee performance + missed-lead counts on team dashboard.
+EMPLOYEE_WORKFLOW_LEAD_SELECT = (
+    "lead_id,name,phone,assigned_to,status,stage,priority,call_status,"
+    "follow_up_at,assigned_at,last_employee_action_at,created_at,lead_type"
+)
+
 def _b64url_encode(raw: bytes) -> str:
     return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
 
@@ -747,6 +753,8 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
             l for l in rows
             if l.get("status") != "negative" and clean_text(l.get("call_status"))
         ]
+    if key in ("missed_leads", "missed"):
+        return filter_employee_missed_leads(emp_leads)
     return [l for l in rows if classify_employee_performance_metric(l) == key]
 
 
@@ -3437,6 +3445,142 @@ async def inbound_whatsapp_reply(request: Request):
     # TEMPORARY: WhatsApp Webhook Automation is temporarily disabled
     return {"status": "disabled", "message": "WhatsApp Automation is temporarily disabled"}
 
+
+def _normalize_person_name(value: Any) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def parse_import_lead_date(value: Any) -> Optional[str]:
+    """Parse Excel/CSV dates — e.g. 30/12/2025, ISO, or Excel datetime."""
+    if value is None or str(value).strip() == "":
+        return None
+    if isinstance(value, datetime):
+        dt = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    if isinstance(value, (int, float)):
+        try:
+            from openpyxl.utils.datetime import from_excel
+            dt = from_excel(value)
+            if isinstance(dt, datetime):
+                return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).isoformat()
+        except Exception:
+            pass
+    s = str(value).strip()
+    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y"):
+        try:
+            return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).isoformat()
+        except ValueError:
+            continue
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except ValueError:
+        return None
+
+
+def map_import_headers(headers: List[Any]) -> Dict[str, int]:
+    """Map spreadsheet headers — supports Umang Excel template + legacy columns."""
+    header_mapping: Dict[str, int] = {}
+    for idx, h in enumerate(headers):
+        if h is None or str(h).strip() == "":
+            continue
+        h_clean = re.sub(r"\s+", " ", str(h).strip().lower().replace("_", " "))
+
+        if any(term in h_clean for term in (
+            "assigne to", "assign to", "assigned to", "assignee", "employee name", "telecaller",
+        )):
+            header_mapping["assign_to"] = idx
+        elif any(term in h_clean for term in ("lead date", "enquiry date", "inquiry date")) or h_clean == "date":
+            header_mapping["lead_date"] = idx
+        elif "lead name" in h_clean or h_clean in ("name", "full name", "customer name"):
+            header_mapping["name"] = idx
+        elif any(term in h_clean for term in ("phone", "mobile", "contact")):
+            header_mapping["phone"] = idx
+        elif any(term in h_clean for term in ("email", "mail")):
+            header_mapping["email"] = idx
+        elif any(term in h_clean for term in ("price", "budget", "amount")):
+            header_mapping["budget"] = idx
+        elif any(term in h_clean for term in ("locality", "location", "address", "area")):
+            header_mapping["location"] = idx
+        elif any(term in h_clean for term in ("configuration", "config", "bhk", "property type", "requirement")):
+            header_mapping["property_type"] = idx
+        elif any(term in h_clean for term in (
+            "building/project", "building project", "project name", "building name", "society", "tower",
+        )) or (("building" in h_clean or "project" in h_clean) and "name" in h_clean):
+            header_mapping["preferred_property"] = idx
+        elif any(term in h_clean for term in ("notes", "remarks", "comments")):
+            header_mapping["notes"] = idx
+        elif "name" in h_clean and not any(
+            term in h_clean for term in ("building", "project", "property", "assign", "employee")
+        ):
+            header_mapping.setdefault("name", idx)
+    return header_mapping
+
+
+def build_employee_assign_lookup() -> Tuple[Dict[str, str], List[Tuple[str, str]]]:
+    """Exact name/email → employee_id, plus list for fuzzy name match."""
+    emps = sb_select("employees", {"active": "eq.true", "select": "employee_id,name,email"})
+    exact: Dict[str, str] = {}
+    names: List[Tuple[str, str]] = []
+    for emp in emps:
+        eid = emp.get("employee_id")
+        if not eid:
+            continue
+        norm = _normalize_person_name(emp.get("name"))
+        if norm:
+            exact[norm] = eid
+            names.append((norm, eid))
+        email = (emp.get("email") or "").strip().lower()
+        if email:
+            exact[email] = eid
+    return exact, names
+
+
+def resolve_import_assignee(assignee_raw: str, exact: Dict[str, str], names: List[Tuple[str, str]]) -> Optional[str]:
+    key = _normalize_person_name(assignee_raw)
+    if not key:
+        return None
+    if key in exact:
+        return exact[key]
+    for norm_name, eid in names:
+        if norm_name == key or norm_name in key or key in norm_name:
+            return eid
+    return None
+
+
+def import_row_to_record(row: List[Any], header_map: Dict[str, int]) -> Dict[str, str]:
+    def raw_val(key: str) -> Any:
+        if key not in header_map or header_map[key] >= len(row):
+            return ""
+        return row[header_map[key]]
+
+    def text_val(key: str) -> str:
+        val = raw_val(key)
+        if val is None:
+            return ""
+        if isinstance(val, datetime):
+            return val.strftime("%d/%m/%Y")
+        return str(val).strip()
+
+    lead_date_raw = raw_val("lead_date") if "lead_date" in header_map else None
+    parsed_date = parse_import_lead_date(lead_date_raw) if lead_date_raw not in (None, "") else None
+
+    return {
+        "name": text_val("name"),
+        "phone": text_val("phone"),
+        "email": text_val("email"),
+        "budget": text_val("budget"),
+        "location": text_val("location"),
+        "property_type": text_val("property_type"),
+        "preferred_property": text_val("preferred_property"),
+        "notes": text_val("notes"),
+        "assign_to": text_val("assign_to"),
+        "lead_date": parsed_date or "",
+    }
+
+
 @api_router.post("/leads/import")
 async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_current_user)):
     filename = file.filename.lower()
@@ -3446,64 +3590,28 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         raise HTTPException(status_code=400, detail="Only CSV and Excel files (.xlsx, .xls) are supported.")
     
     contents = await file.read()
-    records = []
-
-    # Helper function to normalize headers and find indexes
-    def map_headers(headers):
-        header_mapping = {}
-        for idx, h in enumerate(headers):
-            if not h:
-                continue
-            h_clean = str(h).strip().lower()
-            if any(term in h_clean for term in ["phone", "mobile", "contact"]):
-                header_mapping["phone"] = idx
-            elif any(term in h_clean for term in ["email", "mail"]):
-                header_mapping["email"] = idx
-            elif any(term in h_clean for term in ["budget", "price"]):
-                header_mapping["budget"] = idx
-            elif any(term in h_clean for term in ["location", "locality", "address"]):
-                header_mapping["location"] = idx
-            elif any(term in h_clean for term in ["property type", "configuration", "config", "requirement"]):
-                header_mapping["property_type"] = idx
-            elif any(term in h_clean for term in ["property", "project", "society", "building", "apartment", "flat"]):
-                header_mapping["preferred_property"] = idx
-            elif any(term in h_clean for term in ["notes", "remarks", "comments"]):
-                header_mapping["notes"] = idx
-            elif any(term in h_clean for term in ["name", "full name", "customer name", "lead name"]):
-                if not any(prop in h_clean for prop in ["property", "project", "society", "building", "flat", "apartment"]):
-                    header_mapping["name"] = idx
-        return header_mapping
+    records: List[Dict[str, str]] = []
 
     if filename.endswith(".csv"):
         try:
-            text = contents.decode("utf-8")
+            text = contents.decode("utf-8-sig")
             csv_reader = csv.reader(io.StringIO(text))
             rows = list(csv_reader)
             if not rows:
                 raise HTTPException(status_code=400, detail="CSV file is empty.")
             
-            headers = rows[0]
-            header_map = map_headers(headers)
+            header_map = map_import_headers(rows[0])
             
             if "name" not in header_map or "phone" not in header_map:
                 raise HTTPException(
                     status_code=400, 
-                    detail="CSV must contain at least 'Name' and 'Phone Number' columns."
+                    detail="CSV must contain 'Lead Name' (or Name) and 'Phone Number' columns.",
                 )
                 
             for row in rows[1:]:
-                if not row or len(row) <= max(header_map.values(), default=0):
+                if not row or all(not str(c or "").strip() for c in row):
                     continue
-                records.append({
-                    "name": row[header_map["name"]],
-                    "phone": row[header_map["phone"]],
-                    "email": row[header_map["email"]] if "email" in header_map else "",
-                    "budget": row[header_map["budget"]] if "budget" in header_map else "",
-                    "location": row[header_map["location"]] if "location" in header_map else "",
-                    "property_type": row[header_map["property_type"]] if "property_type" in header_map else "",
-                    "preferred_property": row[header_map["preferred_property"]] if "preferred_property" in header_map else "",
-                    "notes": row[header_map["notes"]] if "notes" in header_map else ""
-                })
+                records.append(import_row_to_record(row, header_map))
         except HTTPException as he:
             raise he
         except Exception as e:
@@ -3517,47 +3625,36 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             if not rows:
                 raise HTTPException(status_code=400, detail="Excel file is empty.")
             
-            headers = rows[0]
-            header_map = map_headers(headers)
+            header_map = map_import_headers(list(rows[0]))
             
             if "name" not in header_map or "phone" not in header_map:
                 raise HTTPException(
                     status_code=400, 
-                    detail="Excel sheet must contain at least 'Name' and 'Phone Number' columns."
+                    detail="Excel must contain 'Lead Name' (or Name) and 'Phone Number' columns.",
                 )
                 
             for row in rows[1:]:
-                if not row or all(c is None for c in row):
+                if not row or all(c is None or str(c).strip() == "" for c in row):
                     continue
-                
-                def get_val(key):
-                    if key in header_map and header_map[key] < len(row):
-                        val = row[header_map[key]]
-                        return str(val).strip() if val is not None else ""
-                    return ""
-
-                records.append({
-                    "name": get_val("name"),
-                    "phone": get_val("phone"),
-                    "email": get_val("email"),
-                    "budget": get_val("budget"),
-                    "location": get_val("location"),
-                    "property_type": get_val("property_type"),
-                    "preferred_property": get_val("preferred_property"),
-                    "notes": get_val("notes")
-                })
+                records.append(import_row_to_record(list(row), header_map))
         except HTTPException as he:
             raise he
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse Excel: {str(e)}")
 
+    employee_exact, employee_names = build_employee_assign_lookup()
+    actor_id = cu.acting_as_employee_id or cu.user_id
+
     imported_count = 0
     skipped_count = 0
-    imported_leads = []
+    assigned_count = 0
+    imported_leads: List[Dict[str, Any]] = []
+    assign_failed: List[Dict[str, str]] = []
+    employees_touched: set = set()
 
     for r in records:
         name = r["name"].strip()
-        phone = r["phone"].strip()
+        phone = normalize_phone(r["phone"])
         
         if not name or not phone:
             skipped_count += 1
@@ -3565,48 +3662,82 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
 
         lid = gen_id("lead")
         now = now_utc().isoformat()
+        lead_created = r.get("lead_date") or now
         
         pref_prop = r.get("preferred_property", "").strip()
-        r_notes = r["notes"].strip()
+        r_notes = r.get("notes", "").strip()
         if pref_prop:
-            if r_notes:
-                lead_notes = f"Preferred Property: {pref_prop}\n{r_notes}"
-            else:
-                lead_notes = f"Preferred Property: {pref_prop}"
+            lead_notes = f"Building/Project: {pref_prop}" + (f"\n{r_notes}" if r_notes else "")
         else:
             lead_notes = r_notes
 
-        lead = {
+        assignee_name = r.get("assign_to", "").strip()
+        emp_id = resolve_import_assignee(assignee_name, employee_exact, employee_names) if assignee_name else None
+
+        lead: Dict[str, Any] = {
             "lead_id": lid,
             "name": name,
             "phone": phone,
-            "email": r["email"],
-            "budget": r["budget"],
-            "location": r["location"],
-            "property_type": r["property_type"],
+            "email": r.get("email", ""),
+            "budget": r.get("budget", ""),
+            "location": r.get("location", ""),
+            "property_type": r.get("property_type", ""),
             "notes": lead_notes,
             "source": "bulk_import",
-            "stage": "new",
+            "stage": "assigned" if emp_id else "new",
             "status": "active",
-            "assigned_to": None,
-            "created_at": now,
-            "updated_at": now
+            "assigned_to": emp_id,
+            "created_at": lead_created,
+            "external_created_at": r.get("lead_date") or None,
+            "updated_at": now,
         }
+
+        if emp_id:
+            lead.update(stamp_lead_assignment(emp_id, assigned_by=actor_id, current_stage="new"))
+            lead["created_at"] = lead_created
+            if r.get("lead_date"):
+                lead["external_created_at"] = r["lead_date"]
         
         result = sb_insert("leads", lead)
-        SESSION_CACHE["leads"].insert(0, result or lead)
-        log_activity(cu, "bulk_import", f"Lead imported via bulk upload: {name}", lead_id=lid)
-        imported_leads.append(result or lead)
+        saved = enrich_lead_display_fields(result or lead)
+        SESSION_CACHE["leads"].insert(0, saved)
+
+        if emp_id:
+            emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "name", "limit": "1"})
+            emp_name = emps[0]["name"] if emps else assignee_name
+            log_activity(
+                cu,
+                "lead_assigned",
+                f"Excel import — assigned to {emp_name}",
+                lead_id=lid,
+            )
+            create_notification(emp_id, "Lead assigned", f"{name} has been assigned to you (Excel import).", lead_id=lid)
+            employees_touched.add(emp_id)
+            assigned_count += 1
+        elif assignee_name:
+            assign_failed.append({
+                "name": name,
+                "assign_to": assignee_name,
+                "reason": "employee_not_found",
+            })
+
+        log_activity(cu, "bulk_import", f"Lead imported via Excel/CSV: {name}", lead_id=lid)
+        imported_leads.append(saved)
         imported_count += 1
 
-    # Surface imported leads instantly in dashboard / Database section.
+    for eid in employees_touched:
+        sb_update("employees", "employee_id", eid, {"last_assigned_at": now_utc().isoformat()})
+
     invalidate_leads_cache()
 
     return {
         "status": "success",
         "imported_count": imported_count,
         "skipped_count": skipped_count,
-        "leads": imported_leads[:10]
+        "assigned_count": assigned_count,
+        "assign_failed_count": len(assign_failed),
+        "assign_failed": assign_failed[:20],
+        "leads": imported_leads[:10],
     }
 
 def _admin_can_reset(cu: User) -> bool:
@@ -5537,9 +5668,7 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
     })
     cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
-    all_leads = fetch_all_leads_merged(
-        "lead_id,assigned_to,status,stage,priority,call_status,follow_up_at,lead_type"
-    )
+    all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
 
     emp_stats = []
     for e in employees:
@@ -5753,7 +5882,10 @@ async def stats_me(cu: User=Depends(get_current_user)):
         "recent_activities": activities[:15],
     }
 
-EMPLOYEE_METRIC_KEYS = ["active", "hot", "visited", "not_interested", "booking_done", "low_budget", "ringing", "follow_ups"]
+EMPLOYEE_METRIC_KEYS = [
+    "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
+    "ringing", "follow_ups", "missed_leads",
+]
 
 PERSONAL_ACTIVITY_METRICS = [
     "total", "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
@@ -5905,11 +6037,12 @@ async def list_employee_metric_leads(
     if key not in EMPLOYEE_METRIC_KEYS:
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(EMPLOYEE_METRIC_KEYS)}")
     limit = min(max(limit, 1), 500)
-    all_leads = fetch_all_leads_merged(
-        "lead_id,name,phone,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,lead_type"
-    )
+    all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
     emp_leads = [l for l in all_leads if l.get("assigned_to") == employee_id]
-    filtered = filter_employee_metric_leads(emp_leads, key)
+    if key in ("missed_leads", "missed"):
+        filtered = filter_employee_missed_leads(emp_leads)
+    else:
+        filtered = filter_employee_metric_leads(emp_leads, key)
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     return {
         "employee_id": employee_id,

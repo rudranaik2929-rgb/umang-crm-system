@@ -20,6 +20,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 const WORKFLOW_METRICS = [
+  { key: 'emp_missed_leads', apiKey: 'missed_leads', label: 'Missed Lead', icon: 'alert-circle' as const, colorKey: 'negative' },
   { key: 'emp_hot', apiKey: 'hot', label: 'Hot', icon: 'flame' as const, colorKey: 'warning' },
   { key: 'emp_visited', apiKey: 'visited', label: 'Visited', icon: 'location' as const, colorKey: 'info' },
   { key: 'emp_not_interested', apiKey: 'not_interested', label: 'Not Interested', icon: 'close-circle' as const, colorKey: 'negative' },
@@ -71,7 +72,8 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
             const score = (employee.emp_hot ?? 0) * 3
               + (employee.emp_visited ?? 0) * 2
               + (employee.emp_booking_done ?? 0) * 5
-              - (employee.emp_not_interested ?? 0);
+              - (employee.emp_not_interested ?? 0)
+              - (employee.emp_missed_leads ?? 0) * 2;
 
             return (
               <View
