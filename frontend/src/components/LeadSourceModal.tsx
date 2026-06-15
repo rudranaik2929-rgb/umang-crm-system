@@ -6,7 +6,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { LeadDetailModal } from './LeadDetailModal';
-import { StageBadge } from './Badge';
+import { WorkflowStatusBadge } from './Badge';
 import {
   formatBudgetRangeLakhs,
   formatBudgetStringLakhs,
@@ -438,7 +438,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                 >
                   <View style={st.leadRowTop}>
                     <Text style={[st.leadName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
-                    {lead.stage ? <StageBadge stage={lead.stage} /> : null}
+                    {lead ? <WorkflowStatusBadge lead={lead} /> : null}
                   </View>
                   <Text style={[st.leadSub, { color: colors.textSecondary }]}>
                     {lead.phone}{lead.email ? ` · ${lead.email}` : ''}

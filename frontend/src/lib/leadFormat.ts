@@ -14,6 +14,70 @@ export function callStatusLabel(key?: string | null): string {
   return CALL_STATUS_OPTIONS.find((o) => o.key === key)?.label || key.replace(/_/g, ' ');
 }
 
+const NEGATIVE_PRIORITY_LABELS: Record<string, string> = {
+  low_budget: 'Low Budget',
+  other_location: 'Other Location',
+  already_purchased: 'Already Purchased',
+};
+
+const WORKFLOW_STATUS_COLORS: Record<string, string> = {
+  ringing: '#F59E0B',
+  not_interested: '#E11D48',
+  low_budget: '#E11D48',
+  hot: '#E11D48',
+  visited: '#0EA5E9',
+  booking_done: '#059669',
+  booked: '#059669',
+  follow_up: '#F97316',
+  new: '#0284C7',
+  assigned: '#8B5CF6',
+  active: '#6366F1',
+  closed: '#10B981',
+};
+
+function leadPriority(lead: any): string {
+  return String(lead?.priority || '').trim().toLowerCase();
+}
+
+/** Matches backend workflow_status_label / performance box buckets. */
+export function workflowStatusLabel(lead: any): string {
+  if (lead?.workflow_status_label) return lead.workflow_status_label;
+  if (lead?.status === 'negative') {
+    return NEGATIVE_PRIORITY_LABELS[leadPriority(lead)] || 'Not Interested';
+  }
+  if (leadPriority(lead) === 'low_budget') return 'Low Budget';
+  const cs = String(lead?.call_status || '').trim();
+  if (cs) return callStatusLabel(cs);
+  const stage = lead?.stage;
+  const pr = leadPriority(lead);
+  if (['booking', 'loan', 'registration'].includes(stage) || ['handoff_booking', 'handoff_loan'].includes(pr)) {
+    return 'Booking Done';
+  }
+  if (['site_visit', 'positive'].includes(stage)) return 'Visited';
+  if (pr === 'hot') return 'Hot';
+  if (lead?.follow_up_at && lead?.status !== 'negative') return 'Follow Up';
+  if (stage === 'closed') return 'Closed';
+  if (stage === 'new') return 'New Lead';
+  if (stage === 'assigned') return 'Assigned';
+  if (!lead?.assigned_to && ['new', 'assigned'].includes(stage)) return 'New Lead';
+  return 'Active';
+}
+
+export function workflowStatusColor(lead: any): string {
+  const label = workflowStatusLabel(lead);
+  if (lead?.call_status) return WORKFLOW_STATUS_COLORS.ringing;
+  if (label === 'Not Interested' || label in NEGATIVE_PRIORITY_LABELS) return WORKFLOW_STATUS_COLORS.not_interested;
+  if (label === 'Low Budget') return WORKFLOW_STATUS_COLORS.low_budget;
+  if (label === 'Hot') return WORKFLOW_STATUS_COLORS.hot;
+  if (label === 'Visited') return WORKFLOW_STATUS_COLORS.visited;
+  if (label === 'Booking Done') return WORKFLOW_STATUS_COLORS.booking_done;
+  if (label === 'Follow Up') return WORKFLOW_STATUS_COLORS.follow_up;
+  if (label === 'New Lead') return WORKFLOW_STATUS_COLORS.new;
+  if (label === 'Assigned') return WORKFLOW_STATUS_COLORS.assigned;
+  if (label === 'Closed') return WORKFLOW_STATUS_COLORS.closed;
+  return WORKFLOW_STATUS_COLORS.active;
+}
+
 /** Convert rupees or lakh-scale numbers to a short lakh label (e.g. 45). */
 export function toLakhShort(val: unknown): string | null {
   const n = Number(val);

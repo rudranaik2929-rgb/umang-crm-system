@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { LeadDetailModal } from './LeadDetailModal';
-import { StageBadge } from './Badge';
+import { WorkflowStatusBadge } from './Badge';
 
 const METRIC_LABELS: Record<string, string> = {
   hot: 'Hot',
@@ -88,7 +88,7 @@ export function EmployeeMetricModal({
                     <Text style={{ color: colors.text, fontWeight: '700' }}>{l.name}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone || '—'}</Text>
                   </View>
-                  <StageBadge stage={l.stage} />
+                  <WorkflowStatusBadge lead={l} />
                 </Pressable>
               ))}
             </ScrollView>

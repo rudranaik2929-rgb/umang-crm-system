@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { LeadDetailModal } from './LeadDetailModal';
-import { StageBadge } from './Badge';
+import { WorkflowStatusBadge } from './Badge';
 import { formatBudgetStringLakhs } from '../lib/leadFormat';
 
 type Props = {
@@ -72,7 +72,7 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
                     {l.location ? <Text style={{ color: colors.textSecondary, fontSize: 10 }}>{l.location}</Text> : null}
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                    <StageBadge stage={l.stage} />
+                    <WorkflowStatusBadge lead={l} />
                     {l.follow_up_at ? (
                       <Text style={{ color: colors.warning, fontSize: 10, fontWeight: '600' }}>
                         FU: {new Date(l.follow_up_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}

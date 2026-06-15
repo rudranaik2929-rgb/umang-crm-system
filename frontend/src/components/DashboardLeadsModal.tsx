@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { LeadDetailModal } from './LeadDetailModal';
-import { StageBadge } from './Badge';
+import { WorkflowStatusBadge } from './Badge';
 import { formatBudgetStringLakhs } from '../lib/leadFormat';
 
 const BUCKET_TITLES: Record<string, string> = {
@@ -72,7 +72,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                     <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone}</Text>
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                    <StageBadge stage={l.stage} />
+                    <WorkflowStatusBadge lead={l} />
                     {bucket === 'follow_up' && l.follow_up_at ? (
                       <Text style={{ color: '#F97316', fontSize: 10, fontWeight: '600' }}>
                         {new Date(l.follow_up_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}

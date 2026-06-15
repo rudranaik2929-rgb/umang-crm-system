@@ -6,7 +6,7 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { roleLabel } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
-import { formatBudgetStringLakhs } from '../../src/lib/leadFormat';
+import { formatBudgetStringLakhs, workflowStatusColor, workflowStatusLabel } from '../../src/lib/leadFormat';
 import {
   AssignLeadsAdvancedModal,
   AssignWorkspaceFilters,
@@ -303,8 +303,8 @@ export default function AssignLeads() {
                 <View style={{ gap: 10, marginTop: 8 }}>
                   {leads.map((lead) => {
                     const isSelected = selected.has(lead.lead_id);
-                    const badgeKey = lead.inquiry_status || 'active';
-                    const badgeColor = INQUIRY_COLORS[badgeKey] || colors.primary;
+                    const statusLabel = workflowStatusLabel(lead);
+                    const badgeColor = workflowStatusColor(lead);
                     return (
                       <View
                         key={lead.lead_id}
@@ -321,7 +321,7 @@ export default function AssignLeads() {
                             <Text style={[styles.leadName, { color: colors.text }]}>{lead.name}</Text>
                             <View style={[styles.badge, { backgroundColor: badgeColor + '18', borderColor: badgeColor + '44' }]}>
                               <Text style={{ color: badgeColor, fontSize: 9, fontWeight: '700' }}>
-                                {inquiryStatusLabel(badgeKey).toUpperCase()}
+                                {statusLabel.toUpperCase()}
                               </Text>
                             </View>
                           </View>

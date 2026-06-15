@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { STAGE_COLORS, stageLabel } from '../lib/constants';
+import { workflowStatusColor, workflowStatusLabel } from '../lib/leadFormat';
 
 interface Props {
   text: string;
@@ -26,6 +27,12 @@ export function Badge({ text, color, size = 'sm' }: Props) {
 
 export function StageBadge({ stage }: { stage: string }) {
   return <Badge text={stageLabel(stage).toUpperCase()} color={STAGE_COLORS[stage] || '#475569'} />;
+}
+
+export function WorkflowStatusBadge({ lead }: { lead: any }) {
+  const label = workflowStatusLabel(lead);
+  const color = workflowStatusColor(lead);
+  return <Badge text={label.toUpperCase()} color={color} />;
 }
 
 const styles = StyleSheet.create({

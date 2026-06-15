@@ -5,11 +5,10 @@ import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
-import { StageBadge, Badge } from './Badge';
+import { WorkflowStatusBadge } from './Badge';
 import { STAGES, isAdmin } from '../lib/constants';
 import {
   CALL_STATUS_OPTIONS,
-  callStatusLabel,
   formatBudgetRangeLakhs,
   formatBudgetStringLakhs,
   formatHousingConfiguration,
@@ -308,11 +307,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   <Text style={[styles.name, { color: colors.text }]}>{lead.name}</Text>
                   <Text style={[styles.sub, { color: colors.textMuted }]}>{lead.phone}{lead.email ? `  ·  ${lead.email}` : ''}</Text>
                   <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-                    <StageBadge stage={lead.stage} />
-                    {lead.status === 'negative' ? <Badge text="NEGATIVE" color={colors.negative} /> : null}
-                    {lead.call_status ? (
-                      <Badge text={callStatusLabel(lead.call_status).toUpperCase()} color={colors.warning} />
-                    ) : null}
+                    <WorkflowStatusBadge lead={lead} />
                   </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>

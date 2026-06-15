@@ -2,7 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { StageBadge } from './Badge';
+import { WorkflowStatusBadge } from './Badge';
 import { formatBudgetRangeLakhs, formatBudgetStringLakhs } from '../lib/leadFormat';
 
 function digitsOnly(phone?: string) {
@@ -65,7 +65,7 @@ export function LeadQueueTable({ leads, onOpen, testIdPrefix = 'queue' }: Props)
         <Text style={[styles.th, { color: colors.textMuted, flex: 2 }]}>CUSTOMER</Text>
         <Text style={[styles.th, { color: colors.textMuted, flex: 1.5 }]}>BUDGET / TYPE</Text>
         <Text style={[styles.th, { color: colors.textMuted, flex: 1.5 }]}>LOCATION</Text>
-        <Text style={[styles.th, { color: colors.textMuted, flex: 1 }]}>STAGE</Text>
+        <Text style={[styles.th, { color: colors.textMuted, flex: 1 }]}>STATUS</Text>
         <Text style={[styles.th, { color: colors.textMuted, width: 200, textAlign: 'right' }]}>ACTION</Text>
       </View>
       {leads.map((l) => (
@@ -85,7 +85,7 @@ export function LeadQueueTable({ leads, onOpen, testIdPrefix = 'queue' }: Props)
             <Text style={[styles.cellPrimary, { color: colors.text }]}>{l.location || '—'}</Text>
           </Pressable>
           <View style={{ flex: 1 }}>
-            <StageBadge stage={l.stage} />
+            <WorkflowStatusBadge lead={l} />
           </View>
           <View style={styles.actionCol}>
             <Pressable

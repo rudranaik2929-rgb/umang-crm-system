@@ -745,6 +745,60 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
     }
 
 
+CALL_STATUS_LABELS: Dict[str, str] = {
+    "ringing": "Ringing",
+    "out_of_service": "Out of Service",
+    "call_back": "Call Back",
+    "disconnect": "Disconnect",
+}
+
+NEGATIVE_PRIORITY_LABELS: Dict[str, str] = {
+    "low_budget": "Low Budget",
+    "other_location": "Other Location",
+    "already_purchased": "Already Purchased",
+}
+
+
+def workflow_status_label(lead: Dict[str, Any]) -> str:
+    """Human-readable status for lists — matches performance box buckets."""
+    if lead.get("status") == "negative":
+        return NEGATIVE_PRIORITY_LABELS.get(_lead_priority(lead), "Not Interested")
+    if _lead_priority(lead) == "low_budget":
+        return "Low Budget"
+    cs = clean_text(lead.get("call_status"))
+    if cs:
+        return CALL_STATUS_LABELS.get(cs, cs.replace("_", " ").title())
+    if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
+        return "Booking Done"
+    if lead.get("stage") in ["site_visit", "positive"]:
+        return "Visited"
+    if _lead_priority(lead) == "hot":
+        return "Hot"
+    if lead.get("follow_up_at") and lead.get("status") != "negative":
+        return "Follow Up"
+    if lead.get("stage") == "closed":
+        return "Closed"
+    if lead.get("stage") == "new":
+        return "New Lead"
+    if lead.get("stage") == "assigned":
+        return "Assigned"
+    if not lead.get("assigned_to") and lead.get("stage") in ["new", "assigned"]:
+        return "New Lead"
+    return "Active"
+
+
+def enrich_lead_display_fields(lead: Dict[str, Any]) -> Dict[str, Any]:
+    row = dict(lead)
+    row["inquiry_status"] = classify_inquiry_status(lead)
+    row["workflow_status"] = row["inquiry_status"]
+    row["workflow_status_label"] = workflow_status_label(lead)
+    return row
+
+
+def enrich_leads_display_fields(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [enrich_lead_display_fields(l) for l in leads]
+
+
 def classify_inquiry_status(lead: Dict[str, Any]) -> str:
     """Primary inquiry bucket for manager assign workspace filters."""
     if lead.get("status") == "negative":
@@ -856,10 +910,9 @@ def enrich_leads_with_employee_names(
     emp_map = {e.get("employee_id"): e.get("name") for e in employees if e.get("employee_id")}
     out: List[Dict[str, Any]] = []
     for lead in leads:
-        row = dict(lead)
+        row = enrich_lead_display_fields(lead)
         eid = lead.get("assigned_to")
         row["employee_name"] = emp_map.get(eid) if eid else None
-        row["inquiry_status"] = classify_inquiry_status(lead)
         row["platform"] = classify_lead_platform(lead.get("source"))
         out.append(row)
     return out
@@ -1679,8 +1732,12 @@ def get_lead_record(lead_id: str, select: str = "*"):
     return cache_match[0] if cache_match else None
 
 def update_cached_lead(lead_id: str, data: dict):
+    def _merge(row: dict) -> dict:
+        merged = enrich_lead_display_fields({**row, **data})
+        return merged
+
     SESSION_CACHE["leads"] = [
-        ({**l, **data} if l.get("lead_id") == lead_id else l)
+        (_merge(l) if l.get("lead_id") == lead_id else l)
         for l in SESSION_CACHE["leads"]
     ]
     patched = False
@@ -1690,7 +1747,7 @@ def update_cached_lead(lead_id: str, data: dict):
             next_rows = []
             for row in cached_rows:
                 if row.get("lead_id") == lead_id:
-                    next_rows.append({**row, **data})
+                    next_rows.append(_merge(row))
                     patched = True
                 else:
                     next_rows.append(row)
@@ -3880,8 +3937,8 @@ async def workspace_leads(
         "employee_id": emp_id,
         "role": role,
         "stats": stats,
-        "queue": {"total": len(queue), "leads": queue[:limit]},
-        "follow_ups": {"total": len(follow_ups), "leads": follow_ups[:limit]},
+        "queue": {"total": len(queue), "leads": enrich_leads_display_fields(queue[:limit])},
+        "follow_ups": {"total": len(follow_ups), "leads": enrich_leads_display_fields(follow_ups[:limit])},
     }
 
 
@@ -4193,6 +4250,7 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
         if cache_match:
             lead = cache_match[0]
     if not lead: raise HTTPException(404, "Lead not found")
+    lead = enrich_lead_display_fields(lead)
     timeline = sb_select("activities", {
         "lead_id": f"eq.{lead_id}",
         "select": "activity_id,type,text,created_at,user_id,lead_id",
@@ -5737,7 +5795,9 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
     result = filter_personal_activity(key, emp_leads, activities, cu.role)
     lead_map = {l.get("lead_id"): l for l in all_leads if l.get("lead_id")}
     if result["kind"] == "leads":
-        items = sorted(result["items"], key=lambda l: l.get("created_at") or "", reverse=True)[:limit]
+        items = enrich_leads_display_fields(
+            sorted(result["items"], key=lambda l: l.get("created_at") or "", reverse=True)[:limit]
+        )
     else:
         items = sorted(result["items"], key=lambda a: a.get("created_at") or "", reverse=True)[:limit]
         for act in items:
@@ -5775,7 +5835,12 @@ async def list_employee_metric_leads(
     emp_leads = [l for l in all_leads if l.get("assigned_to") == employee_id]
     filtered = filter_employee_metric_leads(emp_leads, key)
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
-    return {"employee_id": employee_id, "metric": key, "total": len(filtered), "leads": filtered[:limit]}
+    return {
+        "employee_id": employee_id,
+        "metric": key,
+        "total": len(filtered),
+        "leads": enrich_leads_display_fields(filtered[:limit]),
+    }
 
 
 @api_router.get("/stats/employees")
