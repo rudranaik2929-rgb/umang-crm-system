@@ -7,15 +7,10 @@ import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { isAdmin } from '../../src/lib/constants';
 
+import { formatTime12h } from '../../src/lib/timeFormat';
+
 function formatClockTime(value?: string | null) {
-  if (!value) return '-';
-  const [h, m = '0'] = String(value).split(':');
-  const hour = Number(h);
-  const minute = Number(m);
-  if (!Number.isFinite(hour)) return String(value);
-  const suffix = hour >= 12 ? 'PM' : 'AM';
-  const displayHour = hour % 12 || 12;
-  return `${displayHour}:${String(minute).padStart(2, '0')} ${suffix}`;
+  return formatTime12h(value);
 }
 
 export default function FollowUpsPage() {

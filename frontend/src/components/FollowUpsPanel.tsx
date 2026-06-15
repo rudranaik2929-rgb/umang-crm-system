@@ -7,13 +7,10 @@ import { api, getSnapshot, setSnapshot } from '../lib/api';
 import { isAdmin } from '../lib/constants';
 import { leadToFollowUpCard } from '../lib/leadFollowUp';
 
+import { formatTime12h } from '../lib/timeFormat';
+
 function formatClockTime(value?: string | null) {
-  if (!value) return '';
-  const [h, m = '0'] = String(value).split(':');
-  const hour = Number(h);
-  if (!Number.isFinite(hour)) return String(value);
-  const suffix = hour >= 12 ? 'PM' : 'AM';
-  return `${hour % 12 || 12}:${String(Number(m)).padStart(2, '0')} ${suffix}`;
+  return formatTime12h(value);
 }
 
 type Props = {

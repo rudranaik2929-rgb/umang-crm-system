@@ -1837,11 +1837,35 @@ def get_visit_record(visit_id: str):
     cache_match = [v for v in SESSION_CACHE["visits"] if v.get("visit_id") == visit_id]
     return cache_match[0] if cache_match else None
 
+def normalize_follow_up_time(time_value: str) -> str:
+    """Accept 12h (11:30 AM) or 24h (14:00) — returns HH:MM for storage."""
+    s = (time_value or "").strip()
+    if not s:
+        raise HTTPException(400, "Follow-up time is required")
+    m12 = re.match(r"^(\d{1,2}):(\d{2})\s*(AM|PM|am|pm)$", s)
+    if m12:
+        hour, minute, meridiem = int(m12.group(1)), int(m12.group(2)), m12.group(3).upper()
+        if hour < 1 or hour > 12 or minute > 59:
+            raise HTTPException(400, "Invalid follow-up time")
+        if meridiem == "PM" and hour != 12:
+            hour += 12
+        elif meridiem == "AM" and hour == 12:
+            hour = 0
+        return f"{hour:02d}:{minute:02d}"
+    m24 = re.match(r"^(\d{1,2}):(\d{2})$", s)
+    if m24:
+        hour, minute = int(m24.group(1)), int(m24.group(2))
+        if hour > 23 or minute > 59:
+            raise HTTPException(400, "Invalid follow-up time")
+        return f"{hour:02d}:{minute:02d}"
+    raise HTTPException(400, "Follow-up time must be like 11:30 AM or 14:00")
+
+
 def parse_follow_up_at(follow_up_date: str, follow_up_time: str) -> datetime:
     date_value = (follow_up_date or "").strip()
-    time_value = (follow_up_time or "").strip()
-    if not date_value or not time_value:
-        raise HTTPException(400, "Follow-up date and time are required")
+    time_value = normalize_follow_up_time(follow_up_time)
+    if not date_value:
+        raise HTTPException(400, "Follow-up date is required")
     try:
         parsed = datetime.fromisoformat(f"{date_value}T{time_value}")
     except ValueError:
