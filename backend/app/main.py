@@ -3447,7 +3447,129 @@ async def inbound_whatsapp_reply(request: Request):
 
 
 def _normalize_person_name(value: Any) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+    text = re.sub(r"[^\w\s]", " ", str(value or ""))
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _name_tokens(value: str) -> List[str]:
+    return [t for t in _normalize_person_name(value).split() if len(t) > 1]
+
+
+def map_import_headers(headers: List[Any]) -> Dict[str, int]:
+    """Map spreadsheet headers — supports Umang Excel template + legacy columns."""
+    header_mapping: Dict[str, int] = {}
+    for idx, h in enumerate(headers):
+        if h is None or str(h).strip() == "":
+            continue
+        h_clean = re.sub(r"\s+", " ", str(h).strip().lower().replace("_", " "))
+        h_compact = h_clean.replace(" ", "")
+
+        if (
+            "assign_to" not in header_mapping
+            and (
+                h_compact in ("assignto", "assigneto", "assignedto", "assignee")
+                or (re.search(r"assign", h_clean) and re.search(r"\bto\b|employee|telecaller|agent|executive", h_clean))
+                or h_clean in ("assign to", "assigne to", "assigned to", "employee name")
+            )
+        ):
+            header_mapping["assign_to"] = idx
+        elif any(term in h_clean for term in ("lead date", "enquiry date", "inquiry date")) or h_clean == "date":
+            header_mapping["lead_date"] = idx
+        elif "lead name" in h_clean or h_clean in ("name", "full name", "customer name"):
+            header_mapping["name"] = idx
+        elif any(term in h_clean for term in ("phone", "mobile", "contact")):
+            header_mapping["phone"] = idx
+        elif any(term in h_clean for term in ("email", "mail")):
+            header_mapping["email"] = idx
+        elif any(term in h_clean for term in ("price", "budget", "amount")):
+            header_mapping["budget"] = idx
+        elif any(term in h_clean for term in ("locality", "location", "address", "area")):
+            header_mapping["location"] = idx
+        elif any(term in h_clean for term in ("configuration", "config", "bhk", "property type", "requirement")):
+            header_mapping["property_type"] = idx
+        elif any(term in h_clean for term in (
+            "building/project", "building project", "project name", "building name", "society", "tower",
+        )) or (("building" in h_clean or "project" in h_clean) and "name" in h_clean):
+            header_mapping["preferred_property"] = idx
+        elif any(term in h_clean for term in ("notes", "remarks", "comments")):
+            header_mapping["notes"] = idx
+        elif "name" in h_clean and not any(
+            term in h_clean for term in ("building", "project", "property", "assign", "employee")
+        ):
+            header_mapping.setdefault("name", idx)
+    return header_mapping
+
+
+def build_employee_assign_lookup() -> Tuple[Dict[str, str], List[Dict[str, str]]]:
+    """Name/email → employee_id lookup (includes inactive=null as active)."""
+    emps = sb_select("employees", {"select": "employee_id,name,email,active"})
+    emps = [e for e in emps if e.get("active", True) is not False]
+    if not emps:
+        emps = sb_select("employees", {"select": "employee_id,name,email,active"})
+
+    exact: Dict[str, str] = {}
+    roster: List[Dict[str, str]] = []
+    for emp in emps:
+        eid = emp.get("employee_id")
+        if not eid:
+            continue
+        display = (emp.get("name") or "").strip()
+        norm = _normalize_person_name(display)
+        row = {"employee_id": eid, "name": display, "norm": norm}
+        roster.append(row)
+        if norm:
+            exact[norm] = eid
+            parts = norm.split()
+            if len(parts) >= 2:
+                exact.setdefault(f"{parts[0]} {parts[-1]}", eid)
+            if parts:
+                exact.setdefault(parts[-1], eid)
+        email = (emp.get("email") or "").strip().lower()
+        if email:
+            exact[email] = eid
+    return exact, roster
+
+
+def resolve_import_assignee(
+    assignee_raw: str,
+    exact: Dict[str, str],
+    roster: List[Dict[str, str]],
+) -> Tuple[Optional[str], str]:
+    """Return (employee_id, cleaned_assignee_label)."""
+    raw = str(assignee_raw or "").strip()
+    key = _normalize_person_name(raw)
+    if not key:
+        return None, raw
+    if key in exact:
+        eid = exact[key]
+        name = next((r["name"] for r in roster if r["employee_id"] == eid), raw)
+        return eid, name
+    key_tokens = _name_tokens(raw)
+    if key_tokens:
+        joined = " ".join(key_tokens)
+        if joined in exact:
+            eid = exact[joined]
+            name = next((r["name"] for r in roster if r["employee_id"] == eid), raw)
+            return eid, name
+
+    best_id: Optional[str] = None
+    best_score = 0
+    for emp in roster:
+        norm = emp["norm"]
+        if not norm:
+            continue
+        if norm == key or norm in key or key in norm:
+            return emp["employee_id"], emp["name"]
+        emp_tokens = norm.split()
+        overlap = sum(1 for t in emp_tokens if t in key_tokens)
+        if overlap >= max(2, len(emp_tokens)) or (len(emp_tokens) == 1 and overlap == 1):
+            if overlap > best_score:
+                best_score = overlap
+                best_id = emp["employee_id"]
+    if best_id:
+        name = next((r["name"] for r in roster if r["employee_id"] == best_id), raw)
+        return best_id, name
+    return None, raw
 
 
 def parse_import_lead_date(value: Any) -> Optional[str]:
@@ -3478,76 +3600,6 @@ def parse_import_lead_date(value: Any) -> Optional[str]:
         return dt.isoformat()
     except ValueError:
         return None
-
-
-def map_import_headers(headers: List[Any]) -> Dict[str, int]:
-    """Map spreadsheet headers — supports Umang Excel template + legacy columns."""
-    header_mapping: Dict[str, int] = {}
-    for idx, h in enumerate(headers):
-        if h is None or str(h).strip() == "":
-            continue
-        h_clean = re.sub(r"\s+", " ", str(h).strip().lower().replace("_", " "))
-
-        if any(term in h_clean for term in (
-            "assigne to", "assign to", "assigned to", "assignee", "employee name", "telecaller",
-        )):
-            header_mapping["assign_to"] = idx
-        elif any(term in h_clean for term in ("lead date", "enquiry date", "inquiry date")) or h_clean == "date":
-            header_mapping["lead_date"] = idx
-        elif "lead name" in h_clean or h_clean in ("name", "full name", "customer name"):
-            header_mapping["name"] = idx
-        elif any(term in h_clean for term in ("phone", "mobile", "contact")):
-            header_mapping["phone"] = idx
-        elif any(term in h_clean for term in ("email", "mail")):
-            header_mapping["email"] = idx
-        elif any(term in h_clean for term in ("price", "budget", "amount")):
-            header_mapping["budget"] = idx
-        elif any(term in h_clean for term in ("locality", "location", "address", "area")):
-            header_mapping["location"] = idx
-        elif any(term in h_clean for term in ("configuration", "config", "bhk", "property type", "requirement")):
-            header_mapping["property_type"] = idx
-        elif any(term in h_clean for term in (
-            "building/project", "building project", "project name", "building name", "society", "tower",
-        )) or (("building" in h_clean or "project" in h_clean) and "name" in h_clean):
-            header_mapping["preferred_property"] = idx
-        elif any(term in h_clean for term in ("notes", "remarks", "comments")):
-            header_mapping["notes"] = idx
-        elif "name" in h_clean and not any(
-            term in h_clean for term in ("building", "project", "property", "assign", "employee")
-        ):
-            header_mapping.setdefault("name", idx)
-    return header_mapping
-
-
-def build_employee_assign_lookup() -> Tuple[Dict[str, str], List[Tuple[str, str]]]:
-    """Exact name/email → employee_id, plus list for fuzzy name match."""
-    emps = sb_select("employees", {"active": "eq.true", "select": "employee_id,name,email"})
-    exact: Dict[str, str] = {}
-    names: List[Tuple[str, str]] = []
-    for emp in emps:
-        eid = emp.get("employee_id")
-        if not eid:
-            continue
-        norm = _normalize_person_name(emp.get("name"))
-        if norm:
-            exact[norm] = eid
-            names.append((norm, eid))
-        email = (emp.get("email") or "").strip().lower()
-        if email:
-            exact[email] = eid
-    return exact, names
-
-
-def resolve_import_assignee(assignee_raw: str, exact: Dict[str, str], names: List[Tuple[str, str]]) -> Optional[str]:
-    key = _normalize_person_name(assignee_raw)
-    if not key:
-        return None
-    if key in exact:
-        return exact[key]
-    for norm_name, eid in names:
-        if norm_name == key or norm_name in key or key in norm_name:
-            return eid
-    return None
 
 
 def import_row_to_record(row: List[Any], header_map: Dict[str, int]) -> Dict[str, str]:
@@ -3642,7 +3694,9 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse Excel: {str(e)}")
 
-    employee_exact, employee_names = build_employee_assign_lookup()
+    employee_exact, employee_roster = build_employee_assign_lookup()
+    if not employee_roster:
+        logging.warning("Excel import: no employees found for auto-assign lookup")
     actor_id = cu.acting_as_employee_id or cu.user_id
 
     imported_count = 0
@@ -3650,7 +3704,9 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
     assigned_count = 0
     imported_leads: List[Dict[str, Any]] = []
     assign_failed: List[Dict[str, str]] = []
+    assignment_breakdown: Dict[str, Dict[str, Any]] = {}
     employees_touched: set = set()
+    has_assign_column = any(bool(r.get("assign_to", "").strip()) for r in records)
 
     for r in records:
         name = r["name"].strip()
@@ -3672,7 +3728,7 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             lead_notes = r_notes
 
         assignee_name = r.get("assign_to", "").strip()
-        emp_id = resolve_import_assignee(assignee_name, employee_exact, employee_names) if assignee_name else None
+        emp_id, matched_emp_name = resolve_import_assignee(assignee_name, employee_exact, employee_roster) if assignee_name else (None, "")
 
         lead: Dict[str, Any] = {
             "lead_id": lid,
@@ -3684,36 +3740,36 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             "property_type": r.get("property_type", ""),
             "notes": lead_notes,
             "source": "bulk_import",
-            "stage": "assigned" if emp_id else "new",
+            "stage": "new",
             "status": "active",
-            "assigned_to": emp_id,
             "created_at": lead_created,
             "external_created_at": r.get("lead_date") or None,
             "updated_at": now,
         }
-
-        if emp_id:
-            lead.update(stamp_lead_assignment(emp_id, assigned_by=actor_id, current_stage="new"))
-            lead["created_at"] = lead_created
-            if r.get("lead_date"):
-                lead["external_created_at"] = r["lead_date"]
         
         result = sb_insert("leads", lead)
         saved = enrich_lead_display_fields(result or lead)
         SESSION_CACHE["leads"].insert(0, saved)
 
         if emp_id:
-            emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "name", "limit": "1"})
-            emp_name = emps[0]["name"] if emps else assignee_name
-            log_activity(
-                cu,
-                "lead_assigned",
-                f"Excel import — assigned to {emp_name}",
-                lead_id=lid,
-            )
-            create_notification(emp_id, "Lead assigned", f"{name} has been assigned to you (Excel import).", lead_id=lid)
+            saved = assign_lead_to_employee(lid, saved, emp_id, cu, reactivate=False)
+            saved = enrich_lead_display_fields(saved)
+            update_cached_lead(lid, {
+                "assigned_to": emp_id,
+                "stage": saved.get("stage", "assigned"),
+                "assigned_at": saved.get("assigned_at"),
+                "created_at": lead_created,
+                "external_created_at": r.get("lead_date") or None,
+            })
+            log_activity(cu, "bulk_import_assign", f"Excel import assigned {name} → {matched_emp_name}", lead_id=lid)
             employees_touched.add(emp_id)
             assigned_count += 1
+            bucket = assignment_breakdown.setdefault(emp_id, {
+                "employee_id": emp_id,
+                "employee_name": matched_emp_name,
+                "count": 0,
+            })
+            bucket["count"] += 1
         elif assignee_name:
             assign_failed.append({
                 "name": name,
@@ -3730,6 +3786,11 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
 
     invalidate_leads_cache()
 
+    breakdown_list = sorted(
+        assignment_breakdown.values(),
+        key=lambda x: (-int(x.get("count") or 0), str(x.get("employee_name") or "")),
+    )
+
     return {
         "status": "success",
         "imported_count": imported_count,
@@ -3737,6 +3798,9 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         "assigned_count": assigned_count,
         "assign_failed_count": len(assign_failed),
         "assign_failed": assign_failed[:20],
+        "assignment_breakdown": breakdown_list,
+        "has_assign_column": has_assign_column,
+        "available_employees": [r["name"] for r in employee_roster],
         "leads": imported_leads[:10],
     }
 
