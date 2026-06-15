@@ -183,3 +183,22 @@ export function formatHousingConfiguration(raw: Record<string, unknown>): string
   }
   return null;
 }
+
+/** Unassigned incoming lead — for New Today bucket / popups. */
+export function isUnassignedNewLead(lead?: { status?: string; assigned_to?: string | null; stage?: string } | null): boolean {
+  if (!lead || lead.status === 'negative') return false;
+  if (lead.assigned_to) return false;
+  return lead.stage === 'new' || lead.stage === 'assigned';
+}
+
+/** Pipeline / dashboard New Lead column — assigned leads never appear here. */
+export function pipelineStageMatch(
+  lead: { status?: string; assigned_to?: string | null; stage?: string } | null | undefined,
+  stageKey: string,
+): boolean {
+  if (!lead || lead.status === 'negative') return false;
+  const assigned = Boolean(lead.assigned_to);
+  if (stageKey === 'new') return lead.stage === 'new' && !assigned;
+  if (stageKey === 'assigned') return lead.stage === 'assigned' || (assigned && lead.stage === 'new');
+  return lead.stage === stageKey;
+}

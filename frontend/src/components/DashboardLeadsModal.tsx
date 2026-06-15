@@ -9,7 +9,7 @@ import { formatBudgetStringLakhs } from '../lib/leadFormat';
 
 const BUCKET_TITLES: Record<string, string> = {
   all: 'All Leads',
-  new_today: 'New Today',
+  new_today: 'New Today (Unassigned)',
   positive: 'Positive Leads',
   not_interested: 'Not Interested',
   registration: 'Registration',

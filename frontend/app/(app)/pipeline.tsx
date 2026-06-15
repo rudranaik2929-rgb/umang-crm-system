@@ -5,6 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { STAGES, STAGE_COLORS, stageLabel } from '../../src/lib/constants';
+import { pipelineStageMatch } from '../../src/lib/leadFormat';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
@@ -32,7 +33,7 @@ export default function Pipeline() {
   useEffect(() => { load(); }, [load]);
 
   const grouped = STAGES.reduce<Record<string, any[]>>((acc, s) => {
-    acc[s.key] = leads.filter((l) => l.stage === s.key);
+    acc[s.key] = leads.filter((l) => pipelineStageMatch(l, s.key));
     return acc;
   }, {});
 

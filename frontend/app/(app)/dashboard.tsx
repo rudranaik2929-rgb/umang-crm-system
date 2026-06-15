@@ -16,9 +16,9 @@ import { EmployeeMetricModal } from '../../src/components/EmployeeMetricModal';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
 import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel } from '../../src/lib/constants';
+import { pipelineStageMatch } from '../../src/lib/leadFormat';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
-const COLD_STAGES = ['new'];
 
 function formatCurrency(value: number) {
   if (!value) return '₹0';
@@ -111,7 +111,8 @@ export default function Dashboard() {
     const totalLeads = Number(stats?.total_leads ?? bucketSource?.all ?? 0);
 
     const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
-    const cold = activeLeads.filter((l) => COLD_STAGES.includes(l.stage)).length || Number(sd.new || 0);
+    const cold = activeLeads.filter((l) => pipelineStageMatch(l, 'new')).length
+      || Number(stats?.stage_distribution?.new ?? 0);
     const conversionScore = totalLeads ? Math.min(100, Math.round((hot / totalLeads) * 100)) : 0;
 
     return {
@@ -215,7 +216,7 @@ export default function Dashboard() {
                 : 'Tap for platform breakdown'
             }
           />
-          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Tap for full list" onPress={() => setLeadsBucket('new_today')} />
+          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Unassigned today · tap for list" onPress={() => setLeadsBucket('new_today')} />
           <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Tap for full list" onPress={() => setLeadsBucket('positive')} />
           <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Tap for full list" onPress={() => setLeadsBucket('not_interested')} />
           <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Tap for full list" onPress={() => setLeadsBucket('registration')} />
@@ -315,8 +316,10 @@ export default function Dashboard() {
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={styles.kanbanRow}>
               {STAGES.map((stage) => {
-                const stageLeads = model.activeLeads.filter((l) => l.stage === stage.key);
-                const stageCount = Number(stats?.stage_distribution?.[stage.key] ?? stageLeads.length);
+                const stageLeads = model.activeLeads.filter((l) => pipelineStageMatch(l, stage.key));
+                const stageCount = stage.key === 'new'
+                  ? stageLeads.length
+                  : Number(stats?.stage_distribution?.[stage.key] ?? stageLeads.length);
                 return (
                   <View key={stage.key} style={[styles.kanbanCol, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
                     <View style={styles.kanbanHead}>

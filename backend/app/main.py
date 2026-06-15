@@ -980,14 +980,30 @@ def enrich_leads_with_employee_names(
 
 
 def compute_unassigned_queue(all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    queue = [
-        l for l in all_leads
-        if is_pipeline_lead(l)
-        and l.get("status") != "negative"
-        and not l.get("assigned_to")
-        and l.get("stage") in {"new", "assigned"}
-    ]
+    queue = [l for l in all_leads if is_unassigned_new_lead(l)]
     return dedupe_leads(queue)
+
+
+def is_unassigned_new_lead(lead: Dict[str, Any]) -> bool:
+    """Incoming lead still waiting for manager assignment — not on any employee yet."""
+    if not is_pipeline_lead(lead):
+        return False
+    if lead.get("status") == "negative":
+        return False
+    if clean_text(lead.get("assigned_to")):
+        return False
+    return lead.get("stage") in ("new", "assigned")
+
+
+def is_new_lead_stage(lead: Dict[str, Any]) -> bool:
+    """Dashboard / pipeline 'New Lead' column — unassigned only."""
+    if not is_pipeline_lead(lead):
+        return False
+    if lead.get("status") == "negative":
+        return False
+    if clean_text(lead.get("assigned_to")):
+        return False
+    return lead.get("stage") == "new"
 
 
 def actor_activity_keys(cu: User) -> set:
@@ -4178,7 +4194,10 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
     """Single source of truth for dashboard bucket lists + counts.
     Always deduped so the metric box number == the opened list length."""
     if bucket_key == "new_today":
-        filtered = [l for l in all_leads if (l.get("created_at") or "")[:10] == today]
+        filtered = [
+            l for l in all_leads
+            if is_unassigned_new_lead(l) and (l.get("created_at") or "")[:10] == today
+        ]
     elif bucket_key == "not_interested":
         filtered = [l for l in all_leads if l.get("status") == "negative"]
     elif bucket_key == "positive":
@@ -4540,7 +4559,7 @@ async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user
     platform_labels = PLATFORM_LABELS.copy()
     platform_labels["other"] = PLATFORM_LABELS["other"]
     db_leads = sb_select("leads", {
-        "select": "lead_id,name,phone,email,source,stage,status,external_lead_id,created_at",
+        "select": "lead_id,name,phone,email,source,stage,status,assigned_to,external_lead_id,created_at",
         "order": "created_at.desc",
         "limit": str(limit * 3),
     })
@@ -4548,6 +4567,8 @@ async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user
     leads.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     out = []
     for l in leads:
+        if clean_text(l.get("assigned_to")):
+            continue
         platform = classify_lead_platform(l.get("source"))
         if platform == "meta" and not is_real_meta_lead(l):
             continue
@@ -5745,6 +5766,8 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     for l in pipeline_leads:
         if l.get("status") != "negative":
             st = l.get("stage", "new")
+            if st == "new" and clean_text(l.get("assigned_to")):
+                st = "assigned"
             stage_dist[st] = stage_dist.get(st, 0) + 1
 
     employees = fetched["employees"]
@@ -5766,7 +5789,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
         "positive_leads": lead_buckets.get("positive", 0),
         "registration_leads": lead_buckets.get("registration", 0),
         "negative_leads": lead_buckets.get("not_interested", 0),
-        "new_leads": sum(1 for l in pipeline_leads if l.get("stage") == "new"),
+        "new_leads": sum(1 for l in pipeline_leads if is_new_lead_stage(l)),
         "site_visits": len(visits),
         "completed_visits": sum(1 for v in visits if v.get("status") == "completed"),
         "bookings": len(bookings),
