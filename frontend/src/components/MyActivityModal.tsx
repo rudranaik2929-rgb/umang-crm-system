@@ -69,6 +69,7 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.text, fontWeight: '700' }}>{l.name}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone || '—'}</Text>
+                    {l.source ? <Text style={{ color: colors.textSecondary, fontSize: 10 }}>{l.source}</Text> : null}
                     {l.location ? <Text style={{ color: colors.textSecondary, fontSize: 10 }}>{l.location}</Text> : null}
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 4 }}>

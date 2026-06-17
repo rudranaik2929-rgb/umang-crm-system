@@ -239,8 +239,8 @@ LEADS_CANONICAL_SELECT = (
 
 # Fields required for employee performance + missed-lead counts on team dashboard.
 EMPLOYEE_WORKFLOW_LEAD_SELECT = (
-    "lead_id,name,phone,assigned_to,status,stage,priority,call_status,"
-    "follow_up_at,assigned_at,last_employee_action_at,created_at,lead_type"
+    "lead_id,name,phone,source,assigned_to,status,stage,priority,call_status,"
+    "follow_up_at,assigned_at,last_employee_action_at,created_at,updated_at,lead_type"
 )
 
 def _b64url_encode(raw: bytes) -> str:
@@ -639,6 +639,17 @@ def parse_lead_ts(value: Any) -> Optional[datetime]:
         return None
 
 
+def effective_assigned_at(lead: Dict[str, Any]) -> Optional[datetime]:
+    """When assigned_at is missing on legacy rows, fall back like SQL backfill."""
+    if not lead.get("assigned_to"):
+        return None
+    for key in ("assigned_at", "updated_at", "created_at"):
+        ts = parse_lead_ts(lead.get(key))
+        if ts:
+            return ts
+    return None
+
+
 def is_missed_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool:
     """Assigned lead with no employee workflow action within N hours."""
     if not lead.get("assigned_to"):
@@ -651,7 +662,7 @@ def is_missed_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool
         return False
     if lead.get("follow_up_at"):
         return False
-    assigned_at = parse_lead_ts(lead.get("assigned_at"))
+    assigned_at = effective_assigned_at(lead)
     if not assigned_at:
         return False
     last_action = parse_lead_ts(lead.get("last_employee_action_at"))
@@ -4510,7 +4521,7 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
         return _assignment_stats_cache["data"]
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "order": "name.asc"})
     all_leads = fetch_all_leads_merged(
-        "lead_id,assigned_to,status,stage,priority,call_status,created_at,updated_at,follow_up_at"
+        "lead_id,assigned_to,status,stage,priority,call_status,created_at,updated_at,follow_up_at,assigned_at,last_employee_action_at"
     )
     rows = []
     for e in employees:
@@ -6099,19 +6110,25 @@ async def stats_me(cu: User=Depends(get_current_user)):
         activities = [a for a in all_activities if a.get("user_id") in activity_keys]
 
     emp_id = resolve_employee_id(cu)
-    lead_select = "lead_id,stage,status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,priority,call_status,created_at,source,phone,email,external_lead_id"
+    employee_row = None
+    if emp_id:
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,email,role,department", "limit": "1"})
+        if emps:
+            employee_row = emps[0]
+    emp_role = (employee_row or {}).get("role") or cu.role
+
     if cu.role == "manager" and not emp_id:
         # Manager workspace uses team panels — not company-wide personal KPI totals.
         leads: List[Dict[str, Any]] = []
         platform_breakdown = {"total": 0, "housing": 0, "meta": 0, "manual": 0, "other": 0}
     elif cu.role != "admin" and emp_id:
-        leads = fetch_employee_assigned_leads(cu, lead_select)
+        leads = fetch_employee_assigned_leads(cu, EMPLOYEE_WORKFLOW_LEAD_SELECT)
         platform_breakdown = compute_platform_breakdown(leads)
     else:
-        leads = fetch_all_leads_merged(lead_select)
+        leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
         platform_breakdown = compute_platform_breakdown(leads)
 
-    assignment = compute_employee_assignment_stats(leads, cu.role)
+    assignment = compute_employee_assignment_stats(leads, emp_role)
     positives = assignment["assigned_positive"]
     negative = assignment["assigned_not_interested"]
     followups = assignment["assigned_follow_ups"]
@@ -6127,16 +6144,10 @@ async def stats_me(cu: User=Depends(get_current_user)):
     hot = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"] and l.get("status") != "negative")
     cold = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["new", "assigned", "contacted"] and l.get("status") != "negative")
 
-    employee_row = None
-    if emp_id:
-        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,email,role,department", "limit": "1"})
-        if emps:
-            employee_row = emps[0]
-
     return {
         "employee": employee_row,
         "employee_id": emp_id,
-        "role": cu.role,
+        "role": emp_role or cu.role,
         "personal": {
             "actions_total": len(activities),
             "leads_total": assignment["assigned_total"],
@@ -6265,9 +6276,16 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
     if key not in PERSONAL_ACTIVITY_METRICS:
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(PERSONAL_ACTIVITY_METRICS)}")
     limit = min(max(limit, 1), 500)
-    emp_id = cu.acting_as_employee_id or cu.employee_id
+    emp_id = resolve_employee_id(cu)
     if not emp_id and cu.role != "admin":
         raise HTTPException(400, detail="No employee profile linked to this login.")
+
+    employee_row = None
+    if emp_id:
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "role", "limit": "1"})
+        if emps:
+            employee_row = emps[0]
+    emp_role = (employee_row or {}).get("role") or cu.role
 
     activity_keys = actor_activity_keys(cu)
     db_activities = sb_select("activities", {
@@ -6279,19 +6297,13 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
     all_activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
     if cu.role == "admin" and not emp_id:
         activities = all_activities
-        all_leads = fetch_all_leads_merged(
-            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,created_at,budget,location"
-        )
-        emp_leads = all_leads
+        emp_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
     else:
         activities = [a for a in all_activities if a.get("user_id") in activity_keys]
-        all_leads = fetch_all_leads_merged(
-            "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,created_at,budget,location"
-        )
-        emp_leads = [l for l in all_leads if l.get("assigned_to") == emp_id]
+        emp_leads = fetch_employee_assigned_leads(cu, EMPLOYEE_WORKFLOW_LEAD_SELECT) if emp_id else []
 
-    result = filter_personal_activity(key, emp_leads, activities, cu.role)
-    lead_map = {l.get("lead_id"): l for l in all_leads if l.get("lead_id")}
+    result = filter_personal_activity(key, emp_leads, activities, emp_role)
+    lead_map = {l.get("lead_id"): l for l in emp_leads if l.get("lead_id")}
     if result["kind"] == "leads":
         items = enrich_leads_display_fields(
             sorted(result["items"], key=lambda l: l.get("created_at") or "", reverse=True)[:limit]

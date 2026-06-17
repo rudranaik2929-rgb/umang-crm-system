@@ -47,7 +47,13 @@ export function isMissedLead(lead: any, hours = MISSED_LEAD_HOURS): boolean {
   if (!['new', 'assigned'].includes(lead?.stage)) return false;
   if (String(lead?.call_status || '').trim()) return false;
   if (lead?.follow_up_at) return false;
-  const assignedAt = lead?.assigned_at ? new Date(lead.assigned_at).getTime() : NaN;
+  let assignedAt = lead?.assigned_at ? new Date(lead.assigned_at).getTime() : NaN;
+  if (!Number.isFinite(assignedAt)) {
+    assignedAt = lead?.updated_at ? new Date(lead.updated_at).getTime() : NaN;
+  }
+  if (!Number.isFinite(assignedAt)) {
+    assignedAt = lead?.created_at ? new Date(lead.created_at).getTime() : NaN;
+  }
   if (!Number.isFinite(assignedAt)) return false;
   const lastAction = lead?.last_employee_action_at
     ? new Date(lead.last_employee_action_at).getTime()

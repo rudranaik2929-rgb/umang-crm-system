@@ -9,6 +9,7 @@ import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { roleLabel } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
+import { MissedLeadsPanel } from '../../src/components/MissedLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { MyActivityModal } from '../../src/components/MyActivityModal';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
@@ -28,9 +29,9 @@ const ROLE_HIGHLIGHT: Record<string, string[]> = {
   telecaller: ['missed_leads', 'hot', 'follow_ups', 'ringing', 'not_interested'],
   site_visit: ['missed_leads', 'visited', 'hot', 'follow_ups'],
   sales_executive: ['missed_leads', 'visited', 'hot', 'booking_done', 'follow_ups'],
-  booking: ['booking_done'],
-  loan: ['booking_done'],
-  marketing: ['not_interested'],
+  booking: ['missed_leads', 'booking_done'],
+  loan: ['missed_leads', 'booking_done'],
+  marketing: ['missed_leads', 'not_interested'],
 };
 
 const MY_PERFORMANCE_KPIS: Array<{
@@ -116,7 +117,7 @@ export default function MyDashboard() {
     );
   }
 
-  const role = user?.role || data?.role || 'telecaller';
+  const role = data?.employee?.role || user?.role || data?.role || 'telecaller';
   const accent = ROLE_ACCENT[role] || colors.primary;
   const personal = data.personal;
   const leads = data.leads;
@@ -126,6 +127,7 @@ export default function MyDashboard() {
   const queuePlatformHelper = personal.housing_leads != null
     ? `${personal.manual_leads ?? 0} Database · ${personal.housing_leads ?? 0} Housing · ${personal.meta_leads ?? 0} Meta`
     : 'Tap for platform breakdown';
+  const missedCount = Number(personal.emp_missed_leads ?? 0);
 
   const handleKpiPress = (metric: string) => {
     if (metric === 'total') {
@@ -201,6 +203,23 @@ export default function MyDashboard() {
         {role !== 'admin' && role !== 'manager' && (
           <View>
             <Text style={[styles.section, { color: colors.textMuted }]}>MY PERFORMANCE — TAP A BOX FOR LIST</Text>
+            {missedCount > 0 ? (
+              <Pressable
+                onPress={() => setActivityMetric('missed_leads')}
+                style={[styles.missedBanner, { backgroundColor: colors.negative + '12', borderColor: colors.negative + '55' }]}
+              >
+                <Ionicons name="alert-circle" size={20} color={colors.negative} />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: colors.negative, fontWeight: '800', fontSize: 13 }}>
+                    {missedCount} Missed Lead{missedCount === 1 ? '' : 's'} — no update in 24h+
+                  </Text>
+                  <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>
+                    Tap to open list and update status
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.negative} />
+              </Pressable>
+            ) : null}
             <View style={styles.kpiGrid}>
               {MY_PERFORMANCE_KPIS.map((kpi) => {
                 const colorMap: Record<string, string> = {
@@ -214,7 +233,12 @@ export default function MyDashboard() {
                 const c = colorMap[kpi.colorKey] || colors.primary;
                 const value = personal[kpi.valueKey] ?? 0;
                 const roleHighlights = ROLE_HIGHLIGHT[role] || [];
-                const helper = kpi.metric === 'total' ? queuePlatformHelper : undefined;
+                const helper = kpi.metric === 'total'
+                  ? queuePlatformHelper
+                  : kpi.metric === 'missed_leads' && missedCount > 0
+                    ? '24h+ no employee action'
+                    : undefined;
+                const forceHighlight = kpi.metric === 'missed_leads' && missedCount > 0;
                 return (
                   <KPI
                     key={kpi.metric}
@@ -223,7 +247,7 @@ export default function MyDashboard() {
                     icon={kpi.icon}
                     color={c}
                     colors={colors}
-                    highlight={roleHighlights.includes(kpi.metric)}
+                    highlight={forceHighlight || roleHighlights.includes(kpi.metric)}
                     onPress={() => handleKpiPress(kpi.metric)}
                     helper={helper}
                     testID={`my-performance-${kpi.metric}`}
@@ -231,6 +255,25 @@ export default function MyDashboard() {
                 );
               })}
             </View>
+          </View>
+        )}
+
+        {(role === 'telecaller' || role === 'site_visit' || role === 'sales_executive' || role === 'booking' || role === 'loan' || role === 'marketing') && (
+          <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: missedCount > 0 ? colors.negative + '55' : colors.border, padding: 16 }]}>
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <Text style={[styles.section, { color: missedCount > 0 ? colors.negative : colors.textMuted, marginBottom: 0 }]}>MY MISSED LEADS</Text>
+              {missedCount > 0 ? (
+                <Pressable onPress={() => setActivityMetric('missed_leads')}>
+                  <Text style={{ color: colors.negative, fontSize: 12, fontWeight: '700' }}>Open all →</Text>
+                </Pressable>
+              ) : null}
+            </View>
+            <MissedLeadsPanel
+              compact
+              maxItems={6}
+              onOpenLead={setOpenLead}
+              onViewAll={missedCount > 0 ? () => setActivityMetric('missed_leads') : undefined}
+            />
           </View>
         )}
 
@@ -425,6 +468,15 @@ const styles = StyleSheet.create({
   kpiCard: { width: 160, minWidth: 140, flexGrow: 1, maxWidth: 200, padding: 14, borderRadius: 10, gap: 6 },
   kpiLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
   kpiVal: { fontSize: 26, fontWeight: '700', letterSpacing: -0.5 },
+  missedBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginBottom: 12,
+  },
   
   activityCard: { padding: 20, borderRadius: 12, borderWidth: 1 },
   actRow: { flexDirection: 'row', paddingVertical: 10, borderBottomWidth: 1 },
