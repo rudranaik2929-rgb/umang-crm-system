@@ -94,9 +94,11 @@ interface Props {
   onClose: () => void;
   userRole?: string | null;
   onChanged?: () => void;
+  /** company = all CRM leads (admin dashboard); mine = only leads assigned to this employee */
+  scope?: 'company' | 'mine';
 }
 
-export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props) {
+export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope = 'company' }: Props) {
   const { colors } = useTheme();
   const [data, setData] = useState<PlatformData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -127,14 +129,18 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     setListTotal(0);
   }, []);
 
-  const canSyncIntegrations = ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
+  const canSyncIntegrations = scope === 'company' && ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
+  const isMine = scope === 'mine';
+  const statsPath = isMine ? '/stats/me/leads-by-platform' : '/stats/leads-by-platform';
+  const modalTitle = isMine ? 'My Queue by Platform' : 'Leads by Platform';
+  const modalSubtitle = isMine ? 'Your assigned leads · Database · Housing · Meta' : 'Database · Housing · Meta';
 
   const loadData = useCallback(async () => {
     setLoading(true);
     setError(null);
     setData(null);
     try {
-      const res = await api.get('/stats/leads-by-platform');
+      const res = await api.get(statsPath);
       const normalized = normalizePlatformData(res.data);
       setData(normalized);
       const metaCount = normalized.platforms.find((p) => p.platform === 'meta')?.count || 0;
@@ -157,7 +163,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     } finally {
       setLoading(false);
     }
-  }, [canSyncIntegrations]);
+  }, [canSyncIntegrations, statsPath]);
 
   const loadPlatformLeads = useCallback(async (platform: PlatformRow, filter: string = leadFilter) => {
     setLeadsLoading(true);
@@ -167,7 +173,10 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     try {
       const params: Record<string, any> = { limit: 500 };
       if (filter && filter !== 'all') params.status_filter = filter;
-      const res = await api.get(`/leads/by-platform/${platform.platform}`, { params });
+      const leadsUrl = isMine
+        ? `/stats/me/leads/by-platform/${platform.platform}`
+        : `/leads/by-platform/${platform.platform}`;
+      const res = await api.get(leadsUrl, { params });
       setPlatformLeads(Array.isArray(res.data?.leads) ? res.data.leads : []);
       setListTotal(Number(res.data?.total ?? 0));
     } catch (e: any) {
@@ -177,7 +186,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     } finally {
       setLeadsLoading(false);
     }
-  }, [leadFilter]);
+  }, [isMine, leadFilter]);
 
   const handlePlatformPress = useCallback(async (platform: PlatformRow) => {
     // Open list immediately — do not wait for Housing/Meta sync (can take 30s+).
@@ -191,7 +200,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
         } else if (platform.platform === 'meta') {
           await api.post('/integrations/facebook/import', { days: 90, limit: 500 });
         }
-      const res = await api.get('/stats/leads-by-platform');
+      const res = await api.get(statsPath);
       const normalized = normalizePlatformData(res.data);
       setData(normalized);
       const refreshed = normalized.platforms.find((p) => p.platform === platform.platform) || platform;
@@ -200,7 +209,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
     } catch {
       // List already visible from first loadPlatformLeads call
     }
-  }, [canSyncIntegrations, loadPlatformLeads, onChanged]);
+  }, [canSyncIntegrations, loadPlatformLeads, onChanged, statsPath]);
 
   useEffect(() => {
     selectedPlatformRef.current = selectedPlatform;
@@ -297,16 +306,18 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[st.headerTitle, { color: colors.text }]}>
-                  {view === 'leads' && selectedPlatform ? selectedPlatform.label : 'Leads by Platform'}
+                  {view === 'leads' && selectedPlatform ? selectedPlatform.label : modalTitle}
                 </Text>
                 <Text style={[st.headerSub, { color: colors.textMuted }]}>
                   {view === 'leads' && selectedPlatform
                     ? `${listTotal || platformLeads.length} leads · tap to open details`
                     : data
-                      ? `${data.total} classified leads · tap a platform`
+                      ? isMine
+                        ? `${data.total} assigned leads · tap a platform`
+                        : `${data.total} classified leads · tap a platform`
                       : loading
                         ? 'Loading…'
-                        : 'Database · Housing · Meta'}
+                        : modalSubtitle}
                 </Text>
               </View>
             </View>
@@ -367,11 +378,15 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged }: Props
                       </Text>
                     ) : null}
                     <Text style={[st.tapHint, { color: meta.color }]}>
-                      {platform.count > 0 ? 'Tap to view leads →' : 'Tap to sync & view leads →'}
+                      {platform.count > 0
+                        ? 'Tap to view leads →'
+                        : isMine
+                          ? 'No assigned leads from this source'
+                          : 'Tap to sync & view leads →'}
                     </Text>
-                    {platform.count === 0 && platform.platform === 'housing' ? (
+                    {!isMine && platform.count === 0 && platform.platform === 'housing' ? (
                       <Text style={[st.hint, { color: colors.warning }]}>Pulls latest from Housing.com</Text>
-                    ) : platform.count === 0 && platform.platform === 'meta' ? (
+                    ) : !isMine && platform.count === 0 && platform.platform === 'meta' ? (
                       <Text style={[st.hint, { color: colors.negative, textAlign: 'center' }]}>
                         {metaStatus || 'Re-imports from Meta webhook events'}
                       </Text>

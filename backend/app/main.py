@@ -1016,6 +1016,25 @@ def actor_activity_keys(cu: User) -> set:
     return {k for k in keys if k}
 
 
+def resolve_employee_id(cu: User) -> Optional[str]:
+    return cu.acting_as_employee_id or cu.employee_id
+
+
+def fetch_employee_assigned_leads(cu: User, select: str) -> List[Dict[str, Any]]:
+    """Leads assigned to the logged-in employee (My Dashboard / workspace)."""
+    emp_id = resolve_employee_id(cu)
+    if not emp_id:
+        return []
+    db_leads = sb_select_all("leads", {
+        "select": select,
+        "assigned_to": f"eq.{emp_id}",
+        "order": "created_at.desc",
+    })
+    cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") == emp_id]
+    cache_ids = {l.get("lead_id") for l in cache_slice}
+    return cache_slice + [l for l in db_leads if l.get("lead_id") not in cache_ids]
+
+
 def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
     """Shared Database / housing / meta / other / broker counts for dashboard + modal."""
     platform_defs = [
@@ -5974,6 +5993,71 @@ async def stats_leads_by_platform(cu: User=Depends(get_current_user)):
         "platforms": breakdown["platforms"],
     }
 
+
+@api_router.get("/stats/me/leads-by-platform")
+async def stats_me_leads_by_platform(cu: User = Depends(get_current_user)):
+    """My Dashboard — platform breakdown for leads assigned to this employee."""
+    emp_id = resolve_employee_id(cu)
+    if not emp_id:
+        raise HTTPException(status_code=400, detail="No employee profile linked to this login.")
+    leads = fetch_employee_assigned_leads(
+        cu, "lead_id,phone,email,external_lead_id,source,stage,status,created_at,assigned_to"
+    )
+    breakdown = compute_platform_breakdown(leads)
+    return {
+        "total": breakdown["total"],
+        "broker_pool": breakdown["broker_pool"],
+        "platforms": breakdown["platforms"],
+        "scope": "mine",
+        "employee_id": emp_id,
+    }
+
+
+@api_router.get("/stats/me/leads/by-platform/{platform}")
+async def list_me_leads_by_platform(
+    platform: str,
+    limit: int = 200,
+    offset: int = 0,
+    status_filter: Optional[str] = None,
+    cu: User = Depends(get_current_user),
+):
+    """My Dashboard — assigned leads for a platform bucket: manual, housing, or meta."""
+    emp_id = resolve_employee_id(cu)
+    if not emp_id:
+        raise HTTPException(status_code=400, detail="No employee profile linked to this login.")
+    platform_key = platform.strip().lower()
+    if platform_key not in {"manual", "housing", "meta", "other"}:
+        raise HTTPException(status_code=400, detail="Platform must be manual, housing, meta, or other")
+
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
+    all_leads = fetch_employee_assigned_leads(
+        cu,
+        "lead_id,name,phone,email,source,stage,status,priority,call_status,budget,location,property_type,"
+        "notes,external_lead_id,external_created_at,raw_payload,created_at,assigned_to",
+    )
+    cleaned = clean_leads_for_platform_stats(all_leads)
+    filtered = [l for l in cleaned if lead_matches_platform(l, platform_key)]
+    sf = (status_filter or "").strip().lower()
+    if sf == "positive":
+        filtered = [l for l in filtered if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration", "closed"] and l.get("status") != "negative"]
+    elif sf in ("not_interested", "negative"):
+        filtered = [l for l in filtered if l.get("status") == "negative"]
+    elif sf == "registration":
+        filtered = [l for l in filtered if l.get("stage") == "registration"]
+    elif sf == "booking":
+        filtered = [l for l in filtered if l.get("stage") in ["booking", "loan"]]
+    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    page = enrich_leads_display_fields(filtered[offset:offset + limit])
+    return {
+        "platform": platform_key,
+        "label": PLATFORM_LABELS.get(platform_key, "Other Sources"),
+        "total": len(filtered),
+        "leads": page,
+        "scope": "mine",
+        "employee_id": emp_id,
+    }
+
 def _last_n_month_keys(n: int = 12) -> List[str]:
     """Calendar month keys YYYY-MM ending with current month."""
     today = now_utc().date()
@@ -6014,22 +6098,18 @@ async def stats_me(cu: User=Depends(get_current_user)):
     else:
         activities = [a for a in all_activities if a.get("user_id") in activity_keys]
 
-    emp_id = cu.acting_as_employee_id or cu.employee_id
-    lead_select = "lead_id,stage,status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,priority,call_status,created_at"
+    emp_id = resolve_employee_id(cu)
+    lead_select = "lead_id,stage,status,assigned_to,assigned_at,last_employee_action_at,follow_up_at,priority,call_status,created_at,source,phone,email,external_lead_id"
     if cu.role == "manager" and not emp_id:
         # Manager workspace uses team panels — not company-wide personal KPI totals.
         leads: List[Dict[str, Any]] = []
+        platform_breakdown = {"total": 0, "housing": 0, "meta": 0, "manual": 0, "other": 0}
     elif cu.role != "admin" and emp_id:
-        db_leads = sb_select_all("leads", {
-            "select": lead_select,
-            "assigned_to": f"eq.{emp_id}",
-            "order": "created_at.desc",
-        })
-        cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") == emp_id]
-        cache_ids = {l.get("lead_id") for l in cache_slice}
-        leads = cache_slice + [l for l in db_leads if l.get("lead_id") not in cache_ids]
+        leads = fetch_employee_assigned_leads(cu, lead_select)
+        platform_breakdown = compute_platform_breakdown(leads)
     else:
         leads = fetch_all_leads_merged(lead_select)
+        platform_breakdown = compute_platform_breakdown(leads)
 
     assignment = compute_employee_assignment_stats(leads, cu.role)
     positives = assignment["assigned_positive"]
@@ -6083,6 +6163,10 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "call_notes": sum(1 for a in activities if "call" in str(a.get("type"))),
             "score_10": score,
             "last_activity": activities[0]["created_at"] if activities else None,
+            "housing_leads": platform_breakdown.get("housing", 0),
+            "meta_leads": platform_breakdown.get("meta", 0),
+            "manual_leads": platform_breakdown.get("manual", 0),
+            "other_leads": platform_breakdown.get("other", 0),
         },
         "leads": {"hot": hot, "cold": cold, "negative": negative, "closed": closed_deals},
         "recent_activities": activities[:15],

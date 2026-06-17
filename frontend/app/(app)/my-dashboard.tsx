@@ -11,6 +11,7 @@ import { roleLabel } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { MyActivityModal } from '../../src/components/MyActivityModal';
+import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -70,6 +71,7 @@ export default function MyDashboard() {
   const [loading, setLoading] = useState(!cached);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [activityMetric, setActivityMetric] = useState<string | null>(null);
+  const [sourceModalVisible, setSourceModalVisible] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -121,6 +123,17 @@ export default function MyDashboard() {
   const score = personal.score_10 || 0;
   const scorePct = (score / 10) * 100;
   const cta = ROLE_CTA[role] || ROLE_CTA.admin;
+  const queuePlatformHelper = personal.housing_leads != null
+    ? `${personal.manual_leads ?? 0} Database · ${personal.housing_leads ?? 0} Housing · ${personal.meta_leads ?? 0} Meta`
+    : 'Tap for platform breakdown';
+
+  const handleKpiPress = (metric: string) => {
+    if (metric === 'total') {
+      setSourceModalVisible(true);
+      return;
+    }
+    setActivityMetric(metric);
+  };
 
   return (
     <View style={{ flex: 1 }}>
@@ -201,6 +214,7 @@ export default function MyDashboard() {
                 const c = colorMap[kpi.colorKey] || colors.primary;
                 const value = personal[kpi.valueKey] ?? 0;
                 const roleHighlights = ROLE_HIGHLIGHT[role] || [];
+                const helper = kpi.metric === 'total' ? queuePlatformHelper : undefined;
                 return (
                   <KPI
                     key={kpi.metric}
@@ -210,7 +224,8 @@ export default function MyDashboard() {
                     color={c}
                     colors={colors}
                     highlight={roleHighlights.includes(kpi.metric)}
-                    onPress={() => setActivityMetric(kpi.metric)}
+                    onPress={() => handleKpiPress(kpi.metric)}
+                    helper={helper}
                     testID={`my-performance-${kpi.metric}`}
                   />
                 );
@@ -269,6 +284,13 @@ export default function MyDashboard() {
         userRole={role}
         onChanged={load}
       />
+      <LeadSourceModal
+        visible={sourceModalVisible}
+        onClose={() => setSourceModalVisible(false)}
+        userRole={role}
+        scope="mine"
+        onChanged={load}
+      />
       <LeadDetailModal
         leadId={openLead}
         visible={openLead !== null}
@@ -294,7 +316,7 @@ function TempCard({ icon, label, value, color, desc, colors, testID }: any) {
   );
 }
 
-function KPI({ label, value, icon, color, colors, highlight, onPress, testID }: any) {
+function KPI({ label, value, icon, color, colors, highlight, onPress, testID, helper }: any) {
   return (
     <Pressable
       testID={testID}
@@ -313,7 +335,11 @@ function KPI({ label, value, icon, color, colors, highlight, onPress, testID }: 
         <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
       </View>
       <Text style={[styles.kpiVal, { color: highlight ? color : colors.text }]}>{value}</Text>
-      <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Tap for list</Text>
+      {helper ? (
+        <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }} numberOfLines={2}>{helper}</Text>
+      ) : (
+        <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Tap for list</Text>
+      )}
     </Pressable>
   );
 }
