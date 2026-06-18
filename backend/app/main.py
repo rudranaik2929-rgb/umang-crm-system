@@ -678,6 +678,12 @@ def filter_employee_missed_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[s
     return dedupe_leads([l for l in rows if is_missed_lead(l)])
 
 
+def filter_employee_my_queue_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """My Queue — assigned pipeline leads excluding missed (missed has its own box)."""
+    rows = normalize_employee_leads(emp_leads)
+    return dedupe_leads([l for l in rows if not is_missed_lead(l)])
+
+
 def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[str]) -> List[Dict[str, Any]]:
     """Exact filter used by Telecaller / Sales Executive queue tabs."""
     stages = workspace_queue_stages(role)
@@ -6073,9 +6079,10 @@ async def stats_me_leads_by_platform(cu: User = Depends(get_current_user)):
     if not emp_id:
         raise HTTPException(status_code=400, detail="No employee profile linked to this login.")
     leads = fetch_employee_assigned_leads(
-        cu, "lead_id,phone,email,external_lead_id,source,stage,status,created_at,assigned_to"
+        cu, EMPLOYEE_WORKFLOW_LEAD_SELECT
     )
-    breakdown = compute_platform_breakdown(leads)
+    my_queue_leads = filter_employee_my_queue_leads(leads)
+    breakdown = compute_platform_breakdown(my_queue_leads)
     return {
         "total": breakdown["total"],
         "broker_pool": breakdown["broker_pool"],
@@ -6106,9 +6113,10 @@ async def list_me_leads_by_platform(
     all_leads = fetch_employee_assigned_leads(
         cu,
         "lead_id,name,phone,email,source,stage,status,priority,call_status,budget,location,property_type,"
-        "notes,external_lead_id,external_created_at,raw_payload,created_at,assigned_to",
+        "notes,external_lead_id,external_created_at,raw_payload,created_at,assigned_to,assigned_at,"
+        "last_employee_action_at,follow_up_at,lead_type",
     )
-    cleaned = clean_leads_for_platform_stats(all_leads)
+    cleaned = clean_leads_for_platform_stats(filter_employee_my_queue_leads(all_leads))
     filtered = [l for l in cleaned if lead_matches_platform(l, platform_key)]
     sf = (status_filter or "").strip().lower()
     if sf == "positive":
@@ -6181,13 +6189,16 @@ async def stats_me(cu: User=Depends(get_current_user)):
     if cu.role == "manager" and not emp_id:
         # Manager workspace uses team panels — not company-wide personal KPI totals.
         leads: List[Dict[str, Any]] = []
+        my_queue_leads: List[Dict[str, Any]] = []
         platform_breakdown = {"total": 0, "housing": 0, "meta": 0, "manual": 0, "other": 0}
     elif cu.role != "admin" and emp_id:
         leads = fetch_employee_assigned_leads(cu, EMPLOYEE_WORKFLOW_LEAD_SELECT)
-        platform_breakdown = compute_platform_breakdown(leads)
+        my_queue_leads = filter_employee_my_queue_leads(leads)
+        platform_breakdown = compute_platform_breakdown(my_queue_leads)
     else:
         leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
-        platform_breakdown = compute_platform_breakdown(leads)
+        my_queue_leads = filter_employee_my_queue_leads(leads)
+        platform_breakdown = compute_platform_breakdown(my_queue_leads)
 
     assignment = compute_employee_assignment_stats(leads, emp_role)
     positives = assignment["assigned_positive"]
@@ -6217,7 +6228,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
         "missed_leads_total": len(missed_rows),
         "personal": {
             "actions_total": len(activities),
-            "leads_total": assignment["assigned_total"],
+            "leads_total": len(my_queue_leads) if emp_id or cu.role == "admin" else 0,
             "assigned_active": assignment["assigned_active"],
             "assigned_completed": assignment["assigned_completed"],
             "assigned_queue": assignment["assigned_queue"],
@@ -6262,7 +6273,7 @@ PERSONAL_ACTIVITY_METRICS = [
 ]
 
 PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
-    "total": "My Queue — All Leads",
+    "total": "My Queue — Active Leads",
     "queue": "My Queue",
     "follow_ups": "Follow-ups",
     "completed": "Completed",
@@ -6300,7 +6311,7 @@ def filter_personal_activity(
     key = (metric_key or "").strip().lower()
     rows = dedupe_leads(emp_leads)
     if key in ("total", "all", "leads_total", "assigned_total"):
-        return {"kind": "leads", "items": rows}
+        return {"kind": "leads", "items": filter_employee_my_queue_leads(rows)}
     if key in ("queue", "assigned_queue"):
         items = filter_employee_queue_leads(rows, role)
         return {"kind": "leads", "items": items}
