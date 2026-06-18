@@ -666,6 +666,10 @@ def is_missed_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool
     if not assigned_at:
         return False
     last_action = parse_lead_ts(lead.get("last_employee_action_at"))
+    if last_action and assigned_at:
+        # Ignore assignment noise (lead_assigned activity at same time as assign).
+        if (last_action - assigned_at).total_seconds() < 120:
+            last_action = None
     if last_action and last_action >= assigned_at:
         return False
     cutoff = now_utc() - timedelta(hours=hours)

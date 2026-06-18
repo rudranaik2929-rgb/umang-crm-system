@@ -239,8 +239,7 @@ from (
     and a.type in (
       'call_status_update', 'negative_response', 'positive_response',
       'lead_followup', 'site_visit_followup', 'stage_change_site_visit',
-      'stage_change_positive', 'status_change_negative', 'lead_assigned',
-      'bulk_import_assign'
+      'stage_change_positive', 'status_change_negative', 'manager_bulk_update'
     )
   group by a.lead_id
 ) sub

@@ -58,6 +58,9 @@ export function isMissedLead(lead: any, hours = MISSED_LEAD_HOURS): boolean {
   const lastAction = lead?.last_employee_action_at
     ? new Date(lead.last_employee_action_at).getTime()
     : NaN;
+  if (Number.isFinite(lastAction) && lastAction - assignedAt < 2 * 60 * 1000) {
+    return assignedAt <= Date.now() - hours * 60 * 60 * 1000;
+  }
   if (Number.isFinite(lastAction) && lastAction >= assignedAt) return false;
   const cutoff = Date.now() - hours * 60 * 60 * 1000;
   return assignedAt <= cutoff;
