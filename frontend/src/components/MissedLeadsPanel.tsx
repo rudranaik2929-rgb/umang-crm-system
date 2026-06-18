@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api, getSnapshot, setSnapshot } from '../lib/api';
+import { api } from '../lib/api';
 import { platformLabel } from '../lib/constants';
 
 function leadSourceLabel(source?: string) {
@@ -16,34 +16,68 @@ function leadSourceLabel(source?: string) {
 type Props = {
   compact?: boolean;
   maxItems?: number;
+  items?: any[];
+  total?: number;
   onOpenLead?: (leadId: string) => void;
   onViewAll?: () => void;
+  refreshKey?: number;
 };
 
-export function MissedLeadsPanel({ compact = false, maxItems = 6, onOpenLead, onViewAll }: Props) {
+export function MissedLeadsPanel({
+  compact = false,
+  maxItems = 6,
+  items: itemsProp,
+  total: totalProp,
+  onOpenLead,
+  onViewAll,
+  refreshKey = 0,
+}: Props) {
   const { colors } = useTheme();
-  const cached = getSnapshot<any>('missed-leads-panel');
-  const [items, setItems] = useState<any[]>(cached?.items ?? []);
-  const [total, setTotal] = useState(cached?.total ?? 0);
-  const [loading, setLoading] = useState(!cached);
+  const [items, setItems] = useState<any[]>(itemsProp ?? []);
+  const [total, setTotal] = useState(totalProp ?? 0);
+  const [loading, setLoading] = useState(itemsProp == null);
+  const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
+    if (itemsProp != null) {
+      setItems(itemsProp);
+      setTotal(totalProp ?? itemsProp.length);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    setLoading(true);
+    setError(null);
     try {
       const res = await api.get('/stats/me/activity/missed_leads', { params: { limit: 500 } });
       const leads = Array.isArray(res.data?.items) ? res.data.items : [];
       const nextTotal = Number(res.data?.total ?? leads.length);
       setTotal(nextTotal);
       setItems(leads);
-      setSnapshot('missed-leads-panel', { items: leads, total: nextTotal });
+    } catch (e: any) {
+      setError(e?.response?.data?.detail || 'Could not load missed leads.');
+      setItems([]);
+      setTotal(0);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [itemsProp, totalProp]);
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   if (loading && items.length === 0) {
     return <ActivityIndicator color={colors.negative} style={{ marginVertical: 16 }} />;
+  }
+
+  if (error) {
+    return (
+      <View>
+        <Text style={{ color: colors.negative, fontSize: 12, marginBottom: 8 }}>{error}</Text>
+        <Pressable onPress={load}>
+          <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>Retry</Text>
+        </Pressable>
+      </View>
+    );
   }
 
   if (items.length === 0) {
@@ -69,33 +103,33 @@ export function MissedLeadsPanel({ compact = false, maxItems = 6, onOpenLead, on
       )}
       <View style={styles.list}>
         {shown.map((lead) => (
-            <Pressable
-              key={lead.lead_id}
-              testID={`missed-lead-${lead.lead_id}`}
-              onPress={() => onOpenLead?.(lead.lead_id)}
-              style={({ pressed }: any) => [
-                styles.row,
-                {
-                  borderColor: colors.negative + '44',
-                  backgroundColor: pressed ? colors.negative + '10' : colors.surfaceAlt,
-                },
-              ]}
-            >
-              <View style={[styles.iconWrap, { backgroundColor: colors.negative + '18' }]}>
-                <Ionicons name="alert-circle" size={16} color={colors.negative} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13 }} numberOfLines={1}>
-                  {lead.name || 'Lead'}
-                </Text>
-                <Text style={{ color: colors.textMuted, fontSize: 11 }}>{lead.phone || '—'}</Text>
-                <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 2 }}>
-                  {leadSourceLabel(lead.source)} · assigned {formatAssignedAgo(lead.assigned_at || lead.updated_at || lead.created_at)}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.negative} />
-            </Pressable>
-          ))}
+          <Pressable
+            key={lead.lead_id}
+            testID={`missed-lead-${lead.lead_id}`}
+            onPress={() => onOpenLead?.(lead.lead_id)}
+            style={({ pressed }: any) => [
+              styles.row,
+              {
+                borderColor: colors.negative + '44',
+                backgroundColor: pressed ? colors.negative + '10' : colors.surfaceAlt,
+              },
+            ]}
+          >
+            <View style={[styles.iconWrap, { backgroundColor: colors.negative + '18' }]}>
+              <Ionicons name="alert-circle" size={16} color={colors.negative} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ color: colors.text, fontWeight: '700', fontSize: 13 }} numberOfLines={1}>
+                {lead.name || 'Lead'}
+              </Text>
+              <Text style={{ color: colors.textMuted, fontSize: 11 }}>{lead.phone || '—'}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 2 }}>
+                {leadSourceLabel(lead.source)} · assigned {formatAssignedAgo(lead.assigned_at || lead.updated_at || lead.created_at)}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={colors.negative} />
+          </Pressable>
+        ))}
       </View>
       {onViewAll && total > maxItems ? (
         <Pressable onPress={onViewAll} style={{ marginTop: 8 }}>

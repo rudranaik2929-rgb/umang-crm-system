@@ -1028,22 +1028,59 @@ def actor_activity_keys(cu: User) -> set:
 
 
 def resolve_employee_id(cu: User) -> Optional[str]:
-    return cu.acting_as_employee_id or cu.employee_id
+    if cu.acting_as_employee_id:
+        return cu.acting_as_employee_id
+    if cu.employee_id:
+        return cu.employee_id
+    if cu.email:
+        emps = sb_select("employees", {
+            "email": f"eq.{cu.email}",
+            "select": "employee_id",
+            "limit": "1",
+        })
+        if emps and emps[0].get("employee_id"):
+            return emps[0]["employee_id"]
+    if cu.user_id:
+        emps = sb_select("employees", {
+            "user_id": f"eq.{cu.user_id}",
+            "select": "employee_id",
+            "limit": "1",
+        })
+        if emps and emps[0].get("employee_id"):
+            return emps[0]["employee_id"]
+    return None
+
+
+def employee_assignee_ids(cu: User) -> List[str]:
+    """IDs that may appear in leads.assigned_to for this login (employee_id or legacy user_id)."""
+    ids: List[str] = []
+    for candidate in (resolve_employee_id(cu), cu.acting_as_employee_id, cu.employee_id, cu.user_id):
+        if candidate and candidate not in ids:
+            ids.append(candidate)
+    return ids
 
 
 def fetch_employee_assigned_leads(cu: User, select: str) -> List[Dict[str, Any]]:
     """Leads assigned to the logged-in employee (My Dashboard / workspace)."""
-    emp_id = resolve_employee_id(cu)
-    if not emp_id:
+    assignee_ids = employee_assignee_ids(cu)
+    if not assignee_ids:
         return []
-    db_leads = sb_select_all("leads", {
-        "select": select,
-        "assigned_to": f"eq.{emp_id}",
-        "order": "created_at.desc",
-    })
-    cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") == emp_id]
+    merged: List[Dict[str, Any]] = []
+    seen: set = set()
+    for emp_id in assignee_ids:
+        db_leads = sb_select_all("leads", {
+            "select": select,
+            "assigned_to": f"eq.{emp_id}",
+            "order": "created_at.desc",
+        })
+        for lead in db_leads:
+            lid = lead.get("lead_id")
+            if lid and lid not in seen:
+                seen.add(lid)
+                merged.append(lead)
+    cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") in assignee_ids]
     cache_ids = {l.get("lead_id") for l in cache_slice}
-    return cache_slice + [l for l in db_leads if l.get("lead_id") not in cache_ids]
+    return cache_slice + [l for l in merged if l.get("lead_id") not in cache_ids]
 
 
 def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -5425,16 +5462,40 @@ def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
     if role == "admin":
         return u
     emp_id = u.get("employee_id")
+    if not emp_id and u.get("email"):
+        emps = sb_select("employees", {
+            "email": f"eq.{u['email']}",
+            "select": "employee_id,allowed_pages,active,role",
+            "limit": "1",
+        })
+        if emps:
+            emp_id = emps[0].get("employee_id")
+            u["employee_id"] = emp_id
+            if role != "admin" and emp_id:
+                u["acting_as_employee_id"] = u.get("acting_as_employee_id") or emp_id
+    if not emp_id and u.get("user_id"):
+        emps = sb_select("employees", {
+            "user_id": f"eq.{u['user_id']}",
+            "select": "employee_id,allowed_pages,active,role",
+            "limit": "1",
+        })
+        if emps:
+            emp_id = emps[0].get("employee_id")
+            u["employee_id"] = emp_id
+            if role != "admin" and emp_id:
+                u["acting_as_employee_id"] = u.get("acting_as_employee_id") or emp_id
     if not emp_id:
         return u
     emps = sb_select("employees", {
         "employee_id": f"eq.{emp_id}",
-        "select": "allowed_pages,active",
+        "select": "allowed_pages,active,role",
         "limit": "1",
     })
     if not emps:
         return u
     u["allowed_pages"] = _employee_allowed_pages(emps[0])
+    if emps[0].get("role") and not u.get("role"):
+        u["role"] = emps[0]["role"]
     return u
 
 
@@ -6144,10 +6205,16 @@ async def stats_me(cu: User=Depends(get_current_user)):
     hot = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"] and l.get("status") != "negative")
     cold = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["new", "assigned", "contacted"] and l.get("status") != "negative")
 
+    missed_rows = filter_employee_missed_leads(leads)
+    missed_rows.sort(key=lambda l: l.get("assigned_at") or l.get("updated_at") or l.get("created_at") or "", reverse=False)
+    missed_preview = enrich_leads_display_fields(missed_rows[:20])
+
     return {
         "employee": employee_row,
         "employee_id": emp_id,
         "role": emp_role or cu.role,
+        "missed_leads": missed_preview,
+        "missed_leads_total": len(missed_rows),
         "personal": {
             "actions_total": len(activities),
             "leads_total": assignment["assigned_total"],
@@ -6163,7 +6230,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "emp_low_budget": assignment["emp_low_budget"],
             "emp_ringing": assignment["emp_ringing"],
             "emp_follow_ups": assignment["emp_follow_ups"],
-            "emp_missed_leads": assignment["emp_missed_leads"],
+            "emp_missed_leads": len(missed_rows),
             "positives": positives,
             "negatives": negative,
             "followups": followups,
@@ -6262,10 +6329,10 @@ def filter_personal_activity(
     if key == "loans_done":
         items = [a for a in activities if "loan" in str(a.get("type", "")).lower()]
         return {"kind": "activities", "items": items}
-    if key in EMPLOYEE_METRIC_KEYS:
-        return {"kind": "leads", "items": filter_employee_metric_leads(rows, key)}
     if key in ("missed_leads", "missed"):
         return {"kind": "leads", "items": filter_employee_missed_leads(rows)}
+    if key in EMPLOYEE_METRIC_KEYS:
+        return {"kind": "leads", "items": filter_employee_metric_leads(rows, key)}
     raise HTTPException(400, detail=f"Unknown activity metric: {key}")
 
 
