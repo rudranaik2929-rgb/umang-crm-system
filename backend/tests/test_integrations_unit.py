@@ -315,6 +315,66 @@ def test_facebook_leadgen_webhook_payload(monkeypatch):
     assert any(e.get("status") == "webhook_received" for e in inserted.get("integration_events", []))
 
 
+def test_facebook_webhook_skips_meta_test_leadgen_id(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    monkeypatch.setattr(main, "FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "page-token")
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ID", "REAL_PAGE_99")
+
+    def fail_fetch(*_args, **_kwargs):
+        raise AssertionError("fetch_facebook_lead should not run for Meta test ids")
+
+    monkeypatch.setattr(main, "fetch_facebook_lead", fail_fetch)
+
+    client = TestClient(main.app)
+    response = client.post(
+        "/api/facebook/webhook",
+        json={
+            "object": "page",
+            "entry": [{
+                "id": "0",
+                "time": 1710000000,
+                "changes": [{
+                    "field": "leadgen",
+                    "value": {
+                        "leadgen_id": "444444444444",
+                        "page_id": "0",
+                        "form_id": "0",
+                    },
+                }],
+            }],
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["created"] == []
+    assert inserted["leads"] == []
+    assert any(e.get("status") == "ignored_test" for e in inserted.get("integration_events", []))
+
+
+def test_normalize_meta_page_id_prefers_real_page_over_zero(monkeypatch):
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ID", "ENV_PAGE_77")
+    assert main.normalize_meta_page_id("0", "REAL_PAGE_12") == "REAL_PAGE_12"
+    assert main.normalize_meta_page_id("0", None) == "ENV_PAGE_77"
+
+
+def test_resolve_page_access_token_uses_me_accounts_for_user_token(monkeypatch):
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "user-token")
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ID", "PAGE_99")
+    monkeypatch.setattr(main, "facebook_token_me_id", lambda _token=None: "USER_1")
+    monkeypatch.setattr(main, "_facebook_page_tokens_map", lambda: {"PAGE_99": "page-token-99"})
+
+    assert main.resolve_page_access_token("PAGE_99", require_page_token=True) == "page-token-99"
+
+
+def test_resolve_page_access_token_accepts_direct_page_token(monkeypatch):
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "page-token-direct")
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ID", "PAGE_99")
+    monkeypatch.setattr(main, "facebook_token_me_id", lambda _token=None: "PAGE_99")
+
+    assert main.resolve_page_access_token("PAGE_99", require_page_token=True) == "page-token-direct"
+
+
 def test_facebook_verify_and_direct_payload(monkeypatch):
     inserted = _install_fake_supabase(monkeypatch)
     monkeypatch.setattr(main, "FACEBOOK_VERIFY_TOKEN", "UMANGCRM123")

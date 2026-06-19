@@ -189,7 +189,10 @@ FACEBOOK_GRAPH_VERSION = os.environ.get("FACEBOOK_GRAPH_VERSION", "v20.0")
 FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID", "")
 FACEBOOK_FORM_ID = os.environ.get("FACEBOOK_FORM_ID", "")
 META_FAKE_LEADGEN_IDS = {"444444444444", "0", "test"}
+META_FAKE_PAGE_IDS = {"0", "test"}
 _FACEBOOK_PAGE_TOKEN_CACHE: Dict[str, Any] = {"tokens": {}, "fetched_at": 0.0}
+FACEBOOK_AUTO_SYNC_ENABLED = os.environ.get("FACEBOOK_AUTO_SYNC_ENABLED", "true").lower() in ("1", "true", "yes")
+FACEBOOK_AUTO_SYNC_INTERVAL_SEC = int(os.environ.get("FACEBOOK_AUTO_SYNC_INTERVAL_SEC", "900"))  # every 15 min
 HOUSING_PROFILE_ID = os.environ.get("HOUSING_PROFILE_ID", "")
 HOUSING_ENCRYPTION_KEY = os.environ.get("HOUSING_ENCRYPTION_KEY", "")
 HOUSING_INTEGRATION_UUID = os.environ.get("HOUSING_INTEGRATION_UUID", "")
@@ -451,6 +454,23 @@ def lead_matches_platform(lead: Dict[str, Any], platform_key: str) -> bool:
     if platform == "brokerage":
         return platform_key == "brokerage"
     return platform == platform_key
+
+
+def is_fake_meta_leadgen_id(leadgen_id: Optional[str]) -> bool:
+    lid = clean_text(leadgen_id)
+    return not lid or lid.lower() in {x.lower() for x in META_FAKE_LEADGEN_IDS}
+
+
+def normalize_meta_page_id(*candidates: Optional[str]) -> Optional[str]:
+    """Resolve a real Facebook Page id (Meta test webhooks send entry.id=0)."""
+    for candidate in candidates:
+        pid = clean_text(candidate)
+        if pid and pid.lower() not in {x.lower() for x in META_FAKE_PAGE_IDS}:
+            return pid
+    env_pid = clean_text(FACEBOOK_PAGE_ID)
+    if env_pid and env_pid.lower() not in {x.lower() for x in META_FAKE_PAGE_IDS}:
+        return env_pid
+    return None
 
 
 def is_real_meta_lead(lead: Dict[str, Any]) -> bool:
@@ -2571,7 +2591,6 @@ def extract_facebook_lead_events(payload: Dict[str, Any]) -> List[Dict[str, Any]
     for entry in payload.get("entry", []) if isinstance(payload, dict) else []:
         if not isinstance(entry, dict):
             continue
-        page_id = clean_text(entry.get("id"))
         for change in entry.get("changes", []) if isinstance(entry.get("changes"), list) else []:
             if not isinstance(change, dict):
                 continue
@@ -2585,7 +2604,7 @@ def extract_facebook_lead_events(payload: Dict[str, Any]) -> List[Dict[str, Any]
                 continue
             events.append({
                 "leadgen_id": leadgen_id,
-                "page_id": page_id or clean_text(value.get("page_id")),
+                "page_id": normalize_meta_page_id(value.get("page_id"), entry.get("id")),
                 "form_id": clean_text(value.get("form_id")),
                 "created_time": value.get("created_time"),
                 "ad_id": clean_text(value.get("ad_id")),
@@ -2596,7 +2615,7 @@ def extract_facebook_lead_events(payload: Dict[str, Any]) -> List[Dict[str, Any]
     if direct_id and not any(e["leadgen_id"] == direct_id for e in events):
         events.append({
             "leadgen_id": direct_id,
-            "page_id": clean_text(payload.get("page_id")),
+            "page_id": normalize_meta_page_id(payload.get("page_id")),
             "form_id": clean_text(payload.get("form_id")),
             "created_time": payload.get("created_time"),
             "ad_id": clean_text(payload.get("ad_id")),
@@ -2656,8 +2675,39 @@ def facebook_graph_get(path: str, params: Optional[Dict[str, Any]] = None, acces
     query = {"access_token": token, **(params or {})}
     r = _http.get(url, params=query, timeout=60)
     if r.status_code >= 400:
-        raise HTTPException(status_code=502, detail=f"Meta Graph API error: {r.text[:220]}")
+        raise HTTPException(status_code=502, detail=_facebook_graph_error_detail(r))
     return r.json()
+
+
+def _facebook_graph_error_detail(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+        err = body.get("error") if isinstance(body, dict) else {}
+        if not isinstance(err, dict):
+            err = {}
+        code = err.get("code")
+        msg = clean_text(err.get("message")) or response.text[:220]
+        if code == 190 and "page access token" in msg.lower():
+            return (
+                "Page Access Token required (you have a User token). "
+                "Graph API Explorer → User or Page → select your Facebook Page → "
+                "add leads_retrieval + pages_show_list → Generate token → "
+                "paste into Render FACEBOOK_PAGE_ACCESS_TOKEN."
+            )
+        return f"Meta Graph API error: {msg}"
+    except Exception:
+        return f"Meta Graph API error: {response.text[:220]}"
+
+
+def facebook_token_me_id(token: Optional[str] = None) -> Optional[str]:
+    tok = token or FACEBOOK_PAGE_ACCESS_TOKEN
+    if not tok:
+        return None
+    try:
+        data = facebook_graph_get("me", {"fields": "id"}, access_token=tok)
+        return clean_text(data.get("id"))
+    except HTTPException:
+        return None
 
 def facebook_graph_paginate(
     path: str,
@@ -2711,23 +2761,54 @@ def _facebook_page_tokens_map() -> Dict[str, str]:
     return tokens
 
 
-def resolve_page_access_token(page_id: Optional[str] = None) -> str:
+def resolve_page_access_token(page_id: Optional[str] = None, *, require_page_token: bool = False) -> str:
     """Best Graph API token for a Lead Ad page (page-scoped token when available)."""
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         return ""
-    pid = clean_text(page_id or FACEBOOK_PAGE_ID)
+    pid = normalize_meta_page_id(page_id, FACEBOOK_PAGE_ID)
+    me_id = facebook_token_me_id(FACEBOOK_PAGE_ACCESS_TOKEN)
+
+    # Configured token is already a Page token for the target page.
+    if pid and me_id == pid:
+        return FACEBOOK_PAGE_ACCESS_TOKEN
+
+    # Configured token is a Page token (me = page) and no specific page was requested.
+    if not pid and me_id:
+        try:
+            facebook_graph_get(
+                f"{me_id}/leadgen_forms",
+                {"limit": "1", "fields": "id"},
+                access_token=FACEBOOK_PAGE_ACCESS_TOKEN,
+            )
+            return FACEBOOK_PAGE_ACCESS_TOKEN
+        except HTTPException:
+            pass
+
     if pid:
         page_tok = _facebook_page_tokens_map().get(pid)
         if page_tok:
             return page_tok
+        if require_page_token or me_id != pid:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Page Access Token required (current token is a User token). "
+                    "Graph API Explorer → User or Page → select your Facebook Page → "
+                    "permissions: leads_retrieval, pages_show_list → Generate token → "
+                    "paste into Render FACEBOOK_PAGE_ACCESS_TOKEN. "
+                    f"Set FACEBOOK_PAGE_ID={pid} on Render."
+                ),
+            )
+
     return FACEBOOK_PAGE_ACCESS_TOKEN
 
 
 def resolve_facebook_page_context(page_id: Optional[str] = None) -> Tuple[str, str]:
     """Return (page_id, access_token) for Lead Ads API calls."""
-    resolved_page = clean_text(page_id or FACEBOOK_PAGE_ID)
+    resolved_page = normalize_meta_page_id(page_id, FACEBOOK_PAGE_ID)
     if resolved_page:
-        return resolved_page, FACEBOOK_PAGE_ACCESS_TOKEN
+        token = resolve_page_access_token(resolved_page, require_page_token=True)
+        return resolved_page, token
 
     profile = facebook_graph_get("me", {"fields": "id,name"})
     me_id = clean_text(profile.get("id"))
@@ -2804,12 +2885,14 @@ def merge_facebook_meta_fields(lead_payload: Dict[str, Any], event: Dict[str, An
     return merged
 
 def fetch_facebook_lead(leadgen_id: str, page_id: Optional[str] = None) -> Dict[str, Any]:
+    resolved_page_id = normalize_meta_page_id(page_id)
     logging.info(
-        "Facebook Graph API: fetching lead details for leadgen_id=%s page_id=%s",
+        "Facebook Graph API: fetching lead details for leadgen_id=%s page_id=%s resolved_page_id=%s",
         leadgen_id,
         page_id,
+        resolved_page_id,
     )
-    token = resolve_page_access_token(page_id)
+    token = resolve_page_access_token(resolved_page_id)
     if not token:
         logging.warning(
             "Facebook Graph API: FACEBOOK_PAGE_ACCESS_TOKEN is not set; cannot fetch fields for leadgen_id=%s",
@@ -2868,6 +2951,16 @@ async def process_facebook_lead_event(
     body: Dict[str, Any],
 ) -> Dict[str, Any]:
     leadgen_id = event["leadgen_id"]
+    if is_fake_meta_leadgen_id(leadgen_id):
+        logging.info("Facebook: skipping Meta test/sample leadgen_id=%s", leadgen_id)
+        record_integration_event(
+            "Facebook",
+            {"webhook": body, "event": event},
+            "ignored_test",
+            external_id=leadgen_id,
+            error="Meta test webhook id — submit a real Lead Ad form to test",
+        )
+        return {"status": "ignored", "reason": "meta_test_webhook_id", "leadgen_id": leadgen_id}
     logging.info(
         "Facebook leadgen event: leadgen_id=%s page_id=%s form_id=%s created_time=%s",
         leadgen_id,
@@ -3116,7 +3209,9 @@ def _facebook_resync_pending_impl() -> Dict[str, Any]:
             if existing:
                 continue
 
-        if evt.get("status") not in ("leadgen_received", "graph_error", "ignored", "error", "webhook_received"):
+        if evt.get("status") not in (
+            "leadgen_received", "graph_error", "graph_fetched", "ignored", "error", "webhook_received",
+        ):
             continue
 
         page_id = None
@@ -3128,7 +3223,7 @@ def _facebook_resync_pending_impl() -> Dict[str, Any]:
                 raw = {}
         if isinstance(raw, dict):
             event = raw.get("event") if isinstance(raw.get("event"), dict) else {}
-            page_id = clean_text(event.get("page_id") or raw.get("page_id"))
+            page_id = normalize_meta_page_id(event.get("page_id"), raw.get("page_id"))
 
         retried += 1
         try:
@@ -3172,10 +3267,17 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
         "limit": "20",
     })
     token_configured = bool(FACEBOOK_PAGE_ACCESS_TOKEN)
+    token_authenticated = False
     token_valid = False
+    lead_api_ready = False
     token_error: Optional[str] = None
+    token_identity: Optional[Dict[str, Any]] = None
+    token_scopes: List[str] = []
+    token_me_id: Optional[str] = None
+    token_type: Optional[str] = None
     forms_count = 0
     page_id_resolved: Optional[str] = None
+    page_id_env_set = bool(clean_text(FACEBOOK_PAGE_ID))
     if not token_configured:
         token_error = "FACEBOOK_PAGE_ACCESS_TOKEN is not set on Render/backend .env"
     else:
@@ -3186,15 +3288,47 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
                 timeout=20,
             )
             if r.status_code == 200:
-                token_valid = True
+                token_authenticated = True
+                me_body = r.json()
+                token_identity = me_body if isinstance(me_body, dict) else None
+                token_me_id = clean_text((token_identity or {}).get("id"))
+                env_page = normalize_meta_page_id(FACEBOOK_PAGE_ID)
+                if env_page and token_me_id == env_page:
+                    token_type = "page"
+                elif env_page and token_me_id and token_me_id != env_page:
+                    token_type = "user"
+                else:
+                    token_type = "page" if token_me_id else "unknown"
+                try:
+                    perm_r = _http.get(
+                        f"https://graph.facebook.com/{FACEBOOK_GRAPH_VERSION}/me/permissions",
+                        params={"access_token": FACEBOOK_PAGE_ACCESS_TOKEN},
+                        timeout=20,
+                    )
+                    if perm_r.status_code == 200:
+                        pdata = perm_r.json()
+                        token_scopes = [
+                            p.get("permission")
+                            for p in (pdata.get("data") or [])
+                            if isinstance(p, dict) and p.get("status") == "granted" and p.get("permission")
+                        ]
+                except Exception:
+                    pass
                 try:
                     page_id_resolved, page_token = resolve_facebook_page_context(FACEBOOK_PAGE_ID or None)
                     forms = list_facebook_leadgen_forms(page_id_resolved, access_token=page_token)
                     forms_count = len(forms)
+                    lead_api_ready = True
+                    token_valid = True
                 except HTTPException as exc:
-                    token_error = str(exc.detail)[:220]
+                    token_error = str(exc.detail)[:280]
+                    if token_type == "user":
+                        token_error = (
+                            "Page Access Token required — you pasted a User token. "
+                            "Graph API Explorer → select your Facebook Page → leads_retrieval → Generate token."
+                        )
                 except Exception as exc:
-                    token_error = str(exc)[:220]
+                    token_error = str(exc)[:280]
             else:
                 body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
                 token_error = (body.get("error") or {}).get("message") or r.text[:220]
@@ -3204,33 +3338,45 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
     pending_ids: set[str] = set()
     for evt in recent:
         lid = clean_text(evt.get("external_id"))
-        if not lid or lid in META_FAKE_LEADGEN_IDS:
+        if is_fake_meta_leadgen_id(lid):
             continue
-        if evt.get("status") in ("leadgen_received", "graph_error", "error", "webhook_received"):
+        if evt.get("status") in ("leadgen_received", "graph_error", "graph_fetched", "error", "webhook_received"):
             pending_ids.add(lid)
     for lid in list(pending_ids):
         if sb_select("leads", {"external_lead_id": f"eq.{lid}", "select": "lead_id", "limit": "1"}):
             pending_ids.discard(lid)
 
     last_graph_error = next((e for e in recent if e.get("status") == "graph_error"), None)
+    has_leads_retrieval = "leads_retrieval" in token_scopes
     return {
         "webhook_url": "/api/facebook/webhook",
         "verify_token": FACEBOOK_VERIFY_TOKEN,
         "token_configured": token_configured,
+        "token_authenticated": token_authenticated,
         "token_valid": token_valid,
+        "lead_api_ready": lead_api_ready,
+        "token_type": token_type,
+        "token_me_id": token_me_id,
         "token_error": token_error,
+        "token_identity": token_identity,
+        "token_scopes": token_scopes,
+        "has_leads_retrieval": has_leads_retrieval,
+        "page_id_env_set": page_id_env_set,
+        "auto_sync_enabled": FACEBOOK_AUTO_SYNC_ENABLED,
         "db_meta_leads": db_meta_real,
         "forms_count": forms_count,
-        "page_id": page_id_resolved or FACEBOOK_PAGE_ID or None,
+        "page_id": page_id_resolved or normalize_meta_page_id(FACEBOOK_PAGE_ID) or None,
         "pending_webhook_events": len(pending_ids),
         "last_error": last_graph_error.get("error") if last_graph_error else None,
         "recent_events": recent[:5],
         "form_id": FACEBOOK_FORM_ID or None,
         "fix_steps": [
-            "Meta webhook callback URL is only step 1 — you also need FACEBOOK_PAGE_ACCESS_TOKEN on Render",
-            "Use a Page access token with leads_retrieval permission (not only User token)",
-            "Set FACEBOOK_PAGE_ID to your Facebook Page id in Render env",
-            "CRM → Integrations → Resync Webhooks or Import Past Meta Leads",
+            "Webhook URL alone does not import leads — set FACEBOOK_PAGE_ACCESS_TOKEN on Render",
+            "Use a long-lived Page access token with leads_retrieval (Graph API Explorer → your Page → Generate token)",
+            "Set FACEBOOK_PAGE_ID to your Facebook Page numeric id in Render env",
+            "Meta Developer → Webhooks → Page → leadgen subscribed; Verify token must match FACEBOOK_VERIFY_TOKEN",
+            "Do NOT use Meta's webhook Test button — submit a real Lead Ad form, then CRM → Import Past Meta Leads",
+            "CRM → Integrations → Resync Webhooks retries failed webhook leadgen ids",
         ],
     }
 
@@ -3267,7 +3413,7 @@ async def facebook_poll(cu: User = Depends(get_current_user)):
     resync = _facebook_resync_pending_impl()
     import_result: Dict[str, Any] = {"fetched": 0, "created": 0, "duplicates": 0}
     try:
-        import_result = await facebook_import(FacebookImportRequest(days=1, limit=100), cu)
+        import_result = _facebook_import_impl(days=1, limit=100)
     except HTTPException as exc:
         import_result = {"error": str(exc.detail)[:180]}
     except Exception as exc:
@@ -3290,16 +3436,24 @@ async def facebook_import(payload: FacebookImportRequest, cu: User = Depends(get
     ensure_roles(cu, ["admin", "manager", "marketing"])
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         raise HTTPException(status_code=400, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured on the server")
+    return _facebook_import_impl(payload.page_id, payload.form_id, payload.days, payload.limit)
 
-    page_id, page_token = resolve_facebook_page_context(payload.page_id)
-    days = min(max(payload.days, 1), 365)
-    limit = min(max(payload.limit, 1), 1000)
+
+def _facebook_import_impl(
+    page_id: Optional[str] = None,
+    form_id: Optional[str] = None,
+    days: int = 90,
+    limit: int = 500,
+) -> Dict[str, Any]:
+    page_id, page_token = resolve_facebook_page_context(page_id)
+    days = min(max(days, 1), 365)
+    limit = min(max(limit, 1), 1000)
     since_ts = int((now_utc() - timedelta(days=days)).timestamp())
 
     form_ids: List[str] = []
     forms_meta: List[Dict[str, Any]] = []
-    if payload.form_id or FACEBOOK_FORM_ID:
-        fid = clean_text(payload.form_id or FACEBOOK_FORM_ID)
+    if form_id or FACEBOOK_FORM_ID:
+        fid = clean_text(form_id or FACEBOOK_FORM_ID)
         if fid:
             form_ids = [fid]
             forms_meta = [{"id": fid, "name": "Configured form"}]
@@ -6449,6 +6603,55 @@ app.include_router(api_router)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 
 _housing_sync_task: Optional[asyncio.Task] = None
+_facebook_sync_task: Optional[asyncio.Task] = None
+
+
+def run_facebook_sync_background(reason: str = "auto") -> Dict[str, Any]:
+    """Resync pending Meta webhooks + import leads from the last 24 hours."""
+    if not FACEBOOK_PAGE_ACCESS_TOKEN:
+        return {"status": "skipped", "reason": "FACEBOOK_PAGE_ACCESS_TOKEN not configured"}
+    try:
+        resync = _facebook_resync_pending_impl()
+    except HTTPException as exc:
+        return {"status": "error", "detail": str(exc.detail)[:180]}
+    import_result: Dict[str, Any] = {"fetched": 0, "created": 0, "duplicates": 0}
+    try:
+        import_result = _facebook_import_impl(days=1, limit=100)
+    except HTTPException as exc:
+        import_result = {"error": str(exc.detail)[:180]}
+    except Exception as exc:
+        import_result = {"error": str(exc)[:180]}
+    return {
+        "status": "success",
+        "reason": reason,
+        "resync": resync,
+        "import_recent": {
+            "fetched": import_result.get("fetched", 0),
+            "created": import_result.get("created", 0),
+            "duplicates": import_result.get("duplicates", 0),
+            "error": import_result.get("error"),
+        },
+    }
+
+
+async def _facebook_background_sync_loop() -> None:
+    """Retry pending Meta webhooks and import recent Lead Ad submissions."""
+    await asyncio.sleep(45)
+    while True:
+        try:
+            if FACEBOOK_AUTO_SYNC_ENABLED and FACEBOOK_PAGE_ACCESS_TOKEN:
+                result = await asyncio.to_thread(run_facebook_sync_background, "auto")
+                created = (result.get("resync") or {}).get("created", 0)
+                created += (result.get("import_recent") or {}).get("created", 0)
+                if created:
+                    logging.info("Facebook auto-sync imported %s new lead(s)", created)
+                elif result.get("status") == "error":
+                    logging.warning("Facebook auto-sync error: %s", result.get("detail"))
+        except asyncio.CancelledError:
+            break
+        except Exception:
+            logging.exception("Facebook background sync loop error")
+        await asyncio.sleep(max(FACEBOOK_AUTO_SYNC_INTERVAL_SEC, 120))
 
 
 async def _housing_background_sync_loop() -> None:
@@ -6472,7 +6675,7 @@ async def _housing_background_sync_loop() -> None:
 
 @app.on_event("startup")
 async def start_housing_background_sync() -> None:
-    global _housing_sync_task
+    global _housing_sync_task, _facebook_sync_task
 
     async def _warm_caches() -> None:
         await asyncio.sleep(2)
@@ -6484,6 +6687,17 @@ async def start_housing_background_sync() -> None:
             logging.exception("Startup cache warm failed")
 
     asyncio.create_task(_warm_caches())
+
+    if FACEBOOK_AUTO_SYNC_ENABLED and FACEBOOK_PAGE_ACCESS_TOKEN:
+        _facebook_sync_task = asyncio.create_task(_facebook_background_sync_loop())
+        logging.info(
+            "Facebook auto-sync started — every %ss (resync webhooks + import last 24h)",
+            FACEBOOK_AUTO_SYNC_INTERVAL_SEC,
+        )
+    elif not FACEBOOK_PAGE_ACCESS_TOKEN:
+        logging.warning("Facebook auto-sync skipped — set FACEBOOK_PAGE_ACCESS_TOKEN on Render")
+    else:
+        logging.info("Facebook auto-sync disabled (FACEBOOK_AUTO_SYNC_ENABLED=false)")
 
     if not HOUSING_AUTO_SYNC_ENABLED:
         logging.info("Housing auto-sync disabled (HOUSING_AUTO_SYNC_ENABLED=false)")
@@ -6501,7 +6715,14 @@ async def start_housing_background_sync() -> None:
 
 @app.on_event("shutdown")
 async def stop_housing_background_sync() -> None:
-    global _housing_sync_task
+    global _housing_sync_task, _facebook_sync_task
+    if _facebook_sync_task:
+        _facebook_sync_task.cancel()
+        try:
+            await _facebook_sync_task
+        except asyncio.CancelledError:
+            pass
+        _facebook_sync_task = None
     if _housing_sync_task:
         _housing_sync_task.cancel()
         try:

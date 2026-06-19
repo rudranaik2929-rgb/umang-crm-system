@@ -110,7 +110,7 @@ export default function Integrations() {
       try {
         const v = await api.get('/integrations/facebook/verify');
         const pending = Number(v.data?.pending_webhook_events || 0);
-        if (pending > 0 && v.data?.token_valid) {
+        if (pending > 0 && v.data?.lead_api_ready) {
           await api.post('/integrations/facebook/resync', {});
           await load();
         }
@@ -203,14 +203,20 @@ export default function Integrations() {
     if (fbVerify?.token_error) {
       return fbVerify.token_error;
     }
+    if (fbVerify?.token_type === 'user') {
+      return 'User token detected — Lead Ads need a Page token. Graph API Explorer → select your Facebook Page → leads_retrieval → Generate token → paste in Render.';
+    }
     if ((fbVerify?.pending_webhook_events || 0) > 0) {
       return `${fbVerify?.pending_webhook_events} webhook lead(s) waiting — click Resync Webhooks after token is set.`;
     }
     if (metaLeads.length > 0) {
       return `${metaLeads.length} in CRM · ${fbVerify?.forms_count ?? 0} form(s) · Page ${fbVerify?.page_id || '—'}`;
     }
-    if (fbVerify?.token_valid) {
+    if (fbVerify?.lead_api_ready) {
       return `Token OK · ${fbVerify?.forms_count ?? 0} Lead Ad form(s). Click Import Past Meta Leads for older submissions.`;
+    }
+    if (fbVerify?.token_authenticated) {
+      return 'Token connects to Meta but cannot read Lead Ads — use a Page access token (see error above).';
     }
     if (fbEvents.length) {
       return `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'}`;
@@ -258,15 +264,15 @@ export default function Integrations() {
               source={metaPlatform}
               checks={[
                 ['Verify token', !!status?.facebook?.verify_token_configured],
-                ['Page token (lead fetch)', !!status?.facebook?.lead_retrieval_configured && !!fbVerify?.token_valid],
-                ['Page token valid', !!fbVerify?.token_valid],
+                ['Page token (lead fetch)', !!fbVerify?.lead_api_ready],
+                ['Lead Ads API ready', !!fbVerify?.lead_api_ready],
                 ['Recent webhooks', fbEvents.length > 0],
               ]}
               extraNote={metaExtraNote}
               actionLabel={metaSyncing ? 'Importing…' : 'Import Past Meta Leads (90 days)'}
               actionIcon="cloud-download-outline"
               onAction={runMetaImport}
-              actionDisabled={metaSyncing || !fbVerify?.token_valid}
+              actionDisabled={metaSyncing || !fbVerify?.lead_api_ready}
               secondaryActionLabel={metaSyncing ? undefined : 'Resync Webhooks'}
               onSecondaryAction={metaSyncing ? undefined : runMetaResync}
             />
