@@ -81,8 +81,8 @@ export function workflowStatusLabel(lead: any): string {
   if (['booking', 'loan', 'registration'].includes(stage) || ['handoff_booking', 'handoff_loan'].includes(pr)) {
     return 'Booking Done';
   }
-  if (['site_visit', 'positive'].includes(stage)) return 'Visited';
   if (pr === 'hot') return 'Hot';
+  if (['site_visit', 'positive'].includes(stage)) return 'Visited';
   if (lead?.follow_up_at && lead?.status !== 'negative') return 'Follow Up';
   if (stage === 'closed') return 'Closed';
   if (stage === 'new') return 'New Lead';

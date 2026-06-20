@@ -6,6 +6,7 @@ import { useAuth } from '../auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../lib/api';
 import { isAdmin } from '../lib/constants';
 import { leadToFollowUpCard } from '../lib/leadFollowUp';
+import { PanelRefreshButton } from './PanelRefreshButton';
 
 import { formatTime12h } from '../lib/timeFormat';
 
@@ -69,18 +70,14 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, as
 
   return (
     <View>
-      {!compact ? (
-        <View style={styles.toolbar}>
-          <Text style={{ color: colors.textSecondary, fontSize: 13, flex: 1 }}>
-            {managerView ? `Team follow-ups (${total})` : `Your follow-ups (${total})`}
-          </Text>
-          <Pressable onPress={load} style={[styles.refresh, { borderColor: colors.border }]}>
-            <Ionicons name="refresh" size={16} color={colors.primary} />
-          </Pressable>
-        </View>
-      ) : (
-        <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8 }}>{total} scheduled</Text>
-      )}
+      <View style={styles.toolbar}>
+        <Text style={{ color: colors.textSecondary, fontSize: compact ? 11 : 13, flex: 1 }}>
+          {compact
+            ? `${total} scheduled`
+            : managerView ? `Team follow-ups (${total})` : `Your follow-ups (${total})`}
+        </Text>
+        <PanelRefreshButton onPress={() => load(true)} loading={loading} testID="follow-ups-refresh" />
+      </View>
       <View style={styles.grid}>
         {shown.map((item) => (
           <Pressable

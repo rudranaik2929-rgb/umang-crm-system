@@ -10,6 +10,7 @@ export type AssignWorkspaceFilters = {
   source: string;
   assigned_to: string;
   q: string;
+  location: string;
 };
 
 type Props = {
@@ -116,6 +117,17 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
               />
             </View>
 
+            <View>
+              <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>LOCATION</Text>
+              <TextInput
+                value={draft.location}
+                onChangeText={(location) => setDraft((d) => ({ ...d, location }))}
+                placeholder="City, locality, area..."
+                placeholderTextColor={colors.textMuted}
+                style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+              />
+            </View>
+
             <View style={styles.filterRow}>
               <SearchableSelect
                 label="ENQUIRY STATUS"
@@ -146,10 +158,10 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
 
           <View style={styles.actions}>
             <Pressable
-              onPress={() => onApply({ inquiry_status: 'all', source: 'all', assigned_to: 'all', q: '' })}
+              onPress={() => onApply({ inquiry_status: 'all', source: 'all', assigned_to: 'all', q: '', location: '' })}
               style={[styles.btnGhost, { borderColor: colors.border }]}
             >
-              <Text style={{ color: colors.textMuted, fontWeight: '600' }}>Reset</Text>
+              <Text style={{ color: colors.textMuted, fontWeight: '600' }}>Clear all</Text>
             </Pressable>
             <Pressable
               onPress={() => onApply(draft)}

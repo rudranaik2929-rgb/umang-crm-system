@@ -14,6 +14,7 @@ import {
   formatHousingConfiguration,
   formatHousingLeadDate,
 } from '../lib/leadFormat';
+import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
 
 interface Props {
@@ -306,6 +307,22 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.name, { color: colors.text }]}>{lead.name}</Text>
                   <Text style={[styles.sub, { color: colors.textMuted }]}>{lead.phone}{lead.email ? `  ·  ${lead.email}` : ''}</Text>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                    <Pressable
+                      onPress={() => openPhoneCall(lead.phone)}
+                      style={[styles.contactBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '12' }]}
+                    >
+                      <Ionicons name="call" size={14} color={colors.primary} />
+                      <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>Call</Text>
+                    </Pressable>
+                    <Pressable
+                      onPress={() => openWhatsApp(lead.phone)}
+                      style={[styles.contactBtn, { borderColor: '#25D366', backgroundColor: '#25D36614' }]}
+                    >
+                      <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
+                      <Text style={{ color: '#25D366', fontSize: 11, fontWeight: '700' }}>WhatsApp</Text>
+                    </Pressable>
+                  </View>
                   <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                     <WorkflowStatusBadge lead={lead} />
                   </View>
@@ -1002,6 +1019,10 @@ const styles = StyleSheet.create({
   header: { padding: 20, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   name: { fontSize: 20, fontWeight: '700' },
   sub: { fontSize: 12, marginTop: 4 },
+  contactBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 10, height: 32, borderRadius: 8, borderWidth: 1,
+  },
   block: { padding: 16, borderRadius: 10, borderWidth: 1 },
   blockTitle: { fontSize: 10, fontWeight: '700', letterSpacing: 1.4, marginBottom: 6 },
   actionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },

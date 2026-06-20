@@ -21,6 +21,7 @@ const DEFAULT_FILTERS: AssignWorkspaceFilters = {
   source: 'all',
   assigned_to: 'all',
   q: '',
+  location: '',
 };
 
 const UNASSIGNED_FILTERS: AssignWorkspaceFilters = {
@@ -28,6 +29,7 @@ const UNASSIGNED_FILTERS: AssignWorkspaceFilters = {
   source: 'all',
   assigned_to: 'unassigned',
   q: '',
+  location: '',
 };
 
 function formatDt(iso?: string | null) {
@@ -91,7 +93,7 @@ export default function AssignLeads() {
       setBulkEmployeeId(null);
       setBulkStatusAction(null);
       const isDefault = activeFilters.inquiry_status === 'all' && activeFilters.source === 'all'
-        && activeFilters.assigned_to === 'all' && !activeFilters.q;
+        && activeFilters.assigned_to === 'all' && !activeFilters.q && !activeFilters.location;
       if (isDefault) {
         setSnapshot('assign-leads-page', {
           leads: nextLeads, employees: nextEmployees, total: nextTotal, facets: nextFacets, assignmentStats: nextStats,
@@ -126,7 +128,8 @@ export default function AssignLeads() {
       const emp = employees.find((e) => e.employee_id === filters.assigned_to);
       chips.push(emp?.name || 'Employee');
     }
-    if (filters.q.trim()) chips.push(`"${filters.q.trim()}"`);
+    if (filters.q.trim()) chips.push(`Search: "${filters.q.trim()}"`);
+    if (filters.location.trim()) chips.push(`Location: ${filters.location.trim()}`);
     return chips;
   }, [filters, employees]);
 
@@ -211,6 +214,15 @@ export default function AssignLeads() {
       <TopBar
         title="Assign Leads"
         subtitle="Advanced search · all leads · reassign not-interested · bulk status change"
+        rightAction={
+          <Pressable
+            onPress={() => { setLoading(true); load(); }}
+            disabled={loading}
+            style={[styles.iconBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1 }]}
+          >
+            <Ionicons name="refresh" size={18} color={colors.primary} />
+          </Pressable>
+        }
       />
       {loading && leads.length === 0 ? (
         <View style={{ padding: 48 }}><ActivityIndicator color={colors.primary} /></View>
@@ -240,14 +252,26 @@ export default function AssignLeads() {
                   <Text style={{ color: colors.textMuted, fontWeight: '600', fontSize: 12 }}>Show all leads</Text>
                 </Pressable>
               ) : null}
+              {activeFilterChips.length > 0 ? (
+                <Pressable
+                  onPress={showAllLeads}
+                  style={[styles.advancedBtn, { borderColor: colors.negative + '55', backgroundColor: colors.negative + '10' }]}
+                >
+                  <Ionicons name="close-circle" size={16} color={colors.negative} />
+                  <Text style={{ color: colors.negative, fontWeight: '700', fontSize: 12 }}>Clear filters</Text>
+                </Pressable>
+              ) : null}
             </View>
 
             {activeFilterChips.length > 0 ? (
               <View style={styles.filterRow}>
                 {activeFilterChips.map((chip) => (
-                  <View key={chip} style={[styles.filterChip, { backgroundColor: colors.primary + '14', borderColor: colors.primary + '35' }]}>
-                    <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>{chip}</Text>
-                  </View>
+                  <Pressable key={chip} onPress={showAllLeads}>
+                    <View style={[styles.filterChip, { backgroundColor: colors.primary + '14', borderColor: colors.primary + '35' }]}>
+                      <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '600' }}>{chip}</Text>
+                      <Ionicons name="close" size={12} color={colors.primary} style={{ marginLeft: 4 }} />
+                    </View>
+                  </Pressable>
                 ))}
               </View>
             ) : null}
@@ -259,7 +283,7 @@ export default function AssignLeads() {
                 value={total}
                 accent={colors.primary}
                 icon="list-outline"
-                active={!isUnassignedView && filters.inquiry_status === 'all' && filters.source === 'all' && !filters.q.trim()}
+                active={!isUnassignedView && filters.inquiry_status === 'all' && filters.source === 'all' && !filters.q.trim() && !filters.location.trim()}
                 onPress={showAllLeads}
               />
               <SummaryBox
@@ -327,10 +351,16 @@ export default function AssignLeads() {
                           </View>
                           <Text style={{ color: colors.textMuted, fontSize: 11 }}>{lead.phone}</Text>
                           <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>
-                            {lead.source} · {formatBudgetStringLakhs(lead.budget) || '—'}
+                            {[lead.property_type, formatBudgetStringLakhs(lead.budget) ? `${formatBudgetStringLakhs(lead.budget)} L` : null].filter(Boolean).join(' · ') || 'Requirement pending'}
                           </Text>
+                          <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 4, marginTop: 2 }}>
+                            <Ionicons name="location-outline" size={11} color={colors.textMuted} style={{ marginTop: 1 }} />
+                            <Text style={{ color: colors.textSecondary, fontSize: 11, flex: 1 }} numberOfLines={2}>
+                              {lead.location || 'Location not set'}
+                            </Text>
+                          </View>
                           <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>
-                            {lead.employee_name ? `Assigned: ${lead.employee_name}` : 'Unassigned'}
+                            {lead.source || '—'} · {lead.employee_name ? `Assigned: ${lead.employee_name}` : 'Unassigned'}
                             {lead.assigned_at ? ` · ${formatDt(lead.assigned_at)}` : ''}
                           </Text>
                         </View>
@@ -480,7 +510,7 @@ const styles = StyleSheet.create({
   toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
   advancedBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  filterChip: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
+  filterChip: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999, borderWidth: 1 },
   summaryRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   summaryBox: { flex: 1, minWidth: 100, padding: 12, borderRadius: 10, borderWidth: 1 },
   panel: { padding: 16, borderRadius: 12, borderWidth: 1 },
@@ -507,4 +537,8 @@ const styles = StyleSheet.create({
   bulkEmpRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   bulkEmpChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
   bulkGoBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, alignItems: 'center', alignSelf: 'flex-end' },
+  iconBtn: {
+    width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });

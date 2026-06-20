@@ -188,6 +188,15 @@ export default function Dashboard() {
       <TopBar
         title="Dashboard"
         subtitle={isManager ? 'Team pipeline, assignments and performance' : 'Pipeline, revenue and team performance snapshot'}
+        rightAction={
+          <Pressable
+            onPress={load}
+            disabled={loading}
+            style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1 }]}
+          >
+            <Ionicons name="refresh" size={18} color={colors.primary} />
+          </Pressable>
+        }
       />
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.heroGrid}>
@@ -607,4 +616,8 @@ const styles = StyleSheet.create({
   errorText: { fontSize: 14, textAlign: 'center', marginTop: 16, marginBottom: 20, maxWidth: 320 },
   retryBtn: { paddingHorizontal: 24, paddingVertical: 12, borderRadius: 8 },
   retryBtnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  refreshBtn: {
+    width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });

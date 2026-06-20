@@ -201,6 +201,13 @@ export default function Integrations() {
       return 'Webhook URL verified ≠ leads working. Add FACEBOOK_PAGE_ACCESS_TOKEN on Render (Page token with leads_retrieval).';
     }
     if (fbVerify?.token_error) {
+      const err = String(fbVerify.token_error).toLowerCase();
+      if (err.includes('expired') || err.includes('session has expired')) {
+        return 'TOKEN EXPIRED — Graph API Explorer tokens die in ~1 hour. You need a permanent Page token (Meta Business → System User). See steps below.';
+      }
+      if (err.includes('page access token')) {
+        return 'Wrong token type — select your Facebook Page (not your profile) in Graph API Explorer, or use System User token.';
+      }
       return fbVerify.token_error;
     }
     if (fbVerify?.token_type === 'user') {

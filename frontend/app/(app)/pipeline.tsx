@@ -51,7 +51,19 @@ export default function Pipeline() {
 
   return (
     <View style={{ flex: 1 }}>
-      <TopBar title="Lead Pipeline" subtitle="Kanban view of every active lead by stage" />
+      <TopBar
+        title="Lead Pipeline"
+        subtitle="Kanban view of every active lead by stage"
+        rightAction={
+          <Pressable
+            onPress={load}
+            disabled={loading}
+            style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1 }]}
+          >
+            <Ionicons name="refresh" size={18} color={colors.primary} />
+          </Pressable>
+        }
+      />
       {loading && leads.length === 0 ? (
         <View style={{ padding: 48 }}><ActivityIndicator color={colors.primary} /></View>
       ) : leads.length === 0 ? (
@@ -211,4 +223,8 @@ const styles = StyleSheet.create({
   cardMetaText: { fontSize: 11 },
   budget: { alignSelf: 'flex-start', borderWidth: 1, borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2 },
   hotBadge: { paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4 },
+  refreshBtn: {
+    width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });

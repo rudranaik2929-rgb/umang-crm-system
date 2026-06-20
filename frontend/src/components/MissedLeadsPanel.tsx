@@ -4,6 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { platformLabel } from '../lib/constants';
+import { formatBudgetStringLakhs } from '../lib/leadFormat';
+import { PanelRefreshButton } from './PanelRefreshButton';
 
 function leadSourceLabel(source?: string) {
   const s = String(source || '').toLowerCase();
@@ -21,6 +23,7 @@ type Props = {
   onOpenLead?: (leadId: string) => void;
   onViewAll?: () => void;
   refreshKey?: number;
+  onRefresh?: () => void;
 };
 
 export function MissedLeadsPanel({
@@ -31,6 +34,7 @@ export function MissedLeadsPanel({
   onOpenLead,
   onViewAll,
   refreshKey = 0,
+  onRefresh,
 }: Props) {
   const { colors } = useTheme();
   const [items, setItems] = useState<any[]>(itemsProp ?? []);
@@ -93,13 +97,19 @@ export function MissedLeadsPanel({
   return (
     <View>
       {!compact ? (
-        <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 8 }}>
-          {total} lead{total === 1 ? '' : 's'} assigned 24h+ ago with no update
-        </Text>
+        <View style={styles.panelHead}>
+          <Text style={{ color: colors.textSecondary, fontSize: 13, flex: 1 }}>
+            {total} lead{total === 1 ? '' : 's'} assigned 24h+ ago with no update
+          </Text>
+          <PanelRefreshButton onPress={() => { load(); onRefresh?.(); }} loading={loading} testID="missed-leads-refresh" />
+        </View>
       ) : (
-        <Text style={{ color: colors.negative, fontSize: 11, marginBottom: 8, fontWeight: '700' }}>
-          {total} need urgent action
-        </Text>
+        <View style={styles.panelHead}>
+          <Text style={{ color: colors.negative, fontSize: 11, flex: 1, fontWeight: '700' }}>
+            {total} need urgent action
+          </Text>
+          <PanelRefreshButton onPress={() => { load(); onRefresh?.(); }} loading={loading} testID="missed-leads-refresh" />
+        </View>
       )}
       <View style={styles.list}>
         {shown.map((lead) => (
@@ -123,8 +133,13 @@ export function MissedLeadsPanel({
                 {lead.name || 'Lead'}
               </Text>
               <Text style={{ color: colors.textMuted, fontSize: 11 }}>{lead.phone || '—'}</Text>
-              <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 2 }}>
-                {leadSourceLabel(lead.source)} · assigned {formatAssignedAgo(lead.assigned_at || lead.updated_at || lead.created_at)}
+              <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 2 }} numberOfLines={2}>
+                {[lead.property_type, lead.location].filter(Boolean).join(' · ') || 'Location / requirement pending'}
+              </Text>
+              <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>
+                {leadSourceLabel(lead.source)}
+                {lead.budget ? ` · ${formatBudgetStringLakhs(lead.budget) || lead.budget} L` : ''}
+                {' · assigned '}{formatAssignedAgo(lead.assigned_at || lead.updated_at || lead.created_at)}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color={colors.negative} />
@@ -151,6 +166,7 @@ function formatAssignedAgo(value?: string) {
 }
 
 const styles = StyleSheet.create({
+  panelHead: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
   list: { gap: 8 },
   row: {
     flexDirection: 'row',

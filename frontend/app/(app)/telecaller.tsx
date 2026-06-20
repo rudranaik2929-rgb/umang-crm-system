@@ -4,7 +4,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot, clearGetCache } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LeadQueueTable } from '../../src/components/LeadQueueTable';
@@ -109,7 +109,11 @@ export default function Telecaller() {
         leadId={openLead}
         visible={openLead !== null}
         onClose={() => setOpenLead(null)}
-        onChanged={load}
+        onChanged={() => {
+          load();
+          clearGetCache();
+          setSnapshot('my-dashboard', null);
+        }}
         userRole={user?.role}
         onGoFollowUps={() => setTab('followups')}
       />

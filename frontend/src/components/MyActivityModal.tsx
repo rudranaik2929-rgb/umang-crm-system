@@ -6,6 +6,8 @@ import { api } from '../lib/api';
 import { LeadDetailModal } from './LeadDetailModal';
 import { WorkflowStatusBadge } from './Badge';
 import { formatBudgetStringLakhs } from '../lib/leadFormat';
+import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
+import { PanelRefreshButton } from './PanelRefreshButton';
 
 type Props = {
   visible: boolean;
@@ -45,8 +47,11 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
       <Pressable style={styles.backdrop} onPress={onClose}>
         <Pressable style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={(e: any) => e?.stopPropagation?.()}>
           <View style={styles.header}>
-            <Text style={[styles.title, { color: colors.text }]}>{label || 'My Activity'}</Text>
-            <Text style={{ color: colors.textMuted, fontSize: 12 }}>{total} item{total === 1 ? '' : 's'} · tap to open lead</Text>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.title, { color: colors.text }]}>{label || 'My Activity'}</Text>
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>{total} item{total === 1 ? '' : 's'} · tap to open lead</Text>
+            </View>
+            <PanelRefreshButton onPress={load} loading={loading} testID="my-activity-refresh" />
             <Pressable onPress={onClose} style={[styles.close, { borderColor: colors.border }]}>
               <Ionicons name="close" size={18} color={colors.textSecondary} />
             </Pressable>
@@ -69,21 +74,25 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.text, fontWeight: '700' }}>{l.name}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone || '—'}</Text>
-                    {l.source ? <Text style={{ color: colors.textSecondary, fontSize: 10 }}>{l.source}</Text> : null}
-                    {l.location ? <Text style={{ color: colors.textSecondary, fontSize: 10 }}>{l.location}</Text> : null}
-                  </View>
-                  <View style={{ alignItems: 'flex-end', gap: 4 }}>
-                    <WorkflowStatusBadge lead={l} />
-                    {l.follow_up_at ? (
-                      <Text style={{ color: colors.warning, fontSize: 10, fontWeight: '600' }}>
-                        FU: {new Date(l.follow_up_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                      </Text>
-                    ) : null}
+                    <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 2 }}>
+                      {[l.property_type, l.location].filter(Boolean).join(' · ') || l.source || '—'}
+                    </Text>
                     {l.budget ? (
-                      <Text style={{ color: colors.textMuted, fontSize: 10 }}>
+                      <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>
                         {formatBudgetStringLakhs(l.budget) ? `${formatBudgetStringLakhs(l.budget)} L` : l.budget}
                       </Text>
                     ) : null}
+                  </View>
+                  <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                    <WorkflowStatusBadge lead={l} />
+                    <View style={{ flexDirection: 'row', gap: 6 }}>
+                      <Pressable onPress={() => openPhoneCall(l.phone)} style={[styles.actionBtn, { borderColor: colors.primary }]}>
+                        <Ionicons name="call" size={14} color={colors.primary} />
+                      </Pressable>
+                      <Pressable onPress={() => openWhatsApp(l.phone)} style={[styles.actionBtn, { borderColor: '#25D366' }]}>
+                        <Ionicons name="logo-whatsapp" size={14} color="#25D366" />
+                      </Pressable>
+                    </View>
                   </View>
                 </Pressable>
               )) : items.map((a) => (
@@ -121,8 +130,9 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 20 },
   card: { width: '100%', maxWidth: 560, maxHeight: '85%', borderRadius: 12, borderWidth: 1, padding: 18 },
-  header: { marginBottom: 14 },
+  header: { marginBottom: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   title: { fontSize: 18, fontWeight: '700' },
-  close: { position: 'absolute', right: 0, top: 0, width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  close: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8, alignItems: 'center', gap: 10 },
+  actionBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

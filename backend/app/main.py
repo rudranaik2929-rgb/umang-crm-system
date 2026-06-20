@@ -242,8 +242,9 @@ LEADS_CANONICAL_SELECT = (
 
 # Fields required for employee performance + missed-lead counts on team dashboard.
 EMPLOYEE_WORKFLOW_LEAD_SELECT = (
-    "lead_id,name,phone,source,assigned_to,status,stage,priority,call_status,"
-    "follow_up_at,assigned_at,last_employee_action_at,created_at,updated_at,lead_type"
+    "lead_id,name,phone,email,source,assigned_to,status,stage,priority,call_status,"
+    "follow_up_at,assigned_at,last_employee_action_at,created_at,updated_at,lead_type,"
+    "budget,location,property_type,raw_payload"
 )
 
 def _b64url_encode(raw: bytes) -> str:
@@ -774,10 +775,10 @@ def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
         return "ringing"
     if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
         return "booking_done"
-    if lead.get("stage") in ["site_visit", "positive"]:
-        return "visited"
     if _lead_priority(lead) == "hot":
         return "hot"
+    if lead.get("stage") in ["site_visit", "positive"]:
+        return "visited"
     return None
 
 
@@ -871,10 +872,10 @@ def workflow_status_label(lead: Dict[str, Any]) -> str:
         return CALL_STATUS_LABELS.get(cs, cs.replace("_", " ").title())
     if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
         return "Booking Done"
-    if lead.get("stage") in ["site_visit", "positive"]:
-        return "Visited"
     if _lead_priority(lead) == "hot":
         return "Hot"
+    if lead.get("stage") in ["site_visit", "positive"]:
+        return "Visited"
     if lead.get("follow_up_at") and lead.get("status") != "negative":
         return "Follow Up"
     if lead.get("stage") == "closed":
@@ -911,10 +912,10 @@ def classify_inquiry_status(lead: Dict[str, Any]) -> str:
         return "ringing"
     if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
         return "booked"
-    if lead.get("stage") in ["site_visit", "positive"]:
-        return "visited"
     if _lead_priority(lead) == "hot":
         return "hot"
+    if lead.get("stage") in ["site_visit", "positive"]:
+        return "visited"
     if not lead.get("assigned_to") and lead.get("stage") in ["new", "assigned"]:
         return "new"
     if lead.get("status") != "negative" and lead.get("stage") != "closed":
@@ -953,7 +954,7 @@ def lead_matches_search_query(lead: Dict[str, Any], q: str) -> bool:
         return True
     hay = " ".join(
         str(lead.get(k) or "")
-        for k in ("name", "phone", "email", "source", "location", "budget", "notes")
+        for k in ("name", "phone", "email", "source", "location", "budget", "property_type", "notes")
     ).lower()
     return needle in hay
 
@@ -964,6 +965,7 @@ def filter_assign_workspace_leads(
     source: str = "all",
     assigned_to: str = "all",
     q: str = "",
+    location: str = "",
 ) -> List[Dict[str, Any]]:
     rows = [
         l for l in dedupe_leads(all_leads)
@@ -971,6 +973,7 @@ def filter_assign_workspace_leads(
         and lead_matches_inquiry_filter(l, inquiry_status)
         and lead_matches_assign_source(l, source)
         and lead_matches_search_query(l, q)
+        and lead_matches_search_query(l, location)
     ]
     assignee = (assigned_to or "all").strip().lower()
     if assignee == "unassigned":
@@ -1082,12 +1085,50 @@ def resolve_employee_id(cu: User) -> Optional[str]:
 
 
 def employee_assignee_ids(cu: User) -> List[str]:
-    """IDs that may appear in leads.assigned_to for this login (employee_id or legacy user_id)."""
+    """IDs that may appear in leads.assigned_to for this login (employee_id, user_id, or legacy name)."""
     ids: List[str] = []
     for candidate in (resolve_employee_id(cu), cu.acting_as_employee_id, cu.employee_id, cu.user_id):
         if candidate and candidate not in ids:
             ids.append(candidate)
+    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
+    if emp_id:
+        emps = sb_select("employees", {
+            "employee_id": f"eq.{emp_id}",
+            "select": "name,user_id",
+            "limit": "1",
+        })
+        if emps:
+            uid = clean_text(emps[0].get("user_id"))
+            if uid and uid not in ids:
+                ids.append(uid)
+            name = clean_text(emps[0].get("name"))
+            if name and name not in ids:
+                ids.append(name)
     return ids
+
+
+def employee_record_match_values(employee: Dict[str, Any]) -> List[str]:
+    """All values that may appear in leads.assigned_to for one employee row."""
+    values: List[str] = []
+    for candidate in (employee.get("employee_id"), employee.get("user_id"), clean_text(employee.get("name"))):
+        if candidate and candidate not in values:
+            values.append(candidate)
+    return values
+
+
+def lead_assigned_to_employee(lead: Dict[str, Any], employee: Dict[str, Any]) -> bool:
+    assigned = clean_text(lead.get("assigned_to"))
+    if not assigned:
+        return False
+    match_values = employee_record_match_values(employee)
+    if assigned in match_values:
+        return True
+    emp_name = clean_text(employee.get("name"))
+    return bool(emp_name and assigned.lower() == emp_name.lower())
+
+
+def leads_for_employee_record(employee: Dict[str, Any], all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [l for l in all_leads if lead_assigned_to_employee(l, employee)]
 
 
 def fetch_employee_assigned_leads(cu: User, select: str) -> List[Dict[str, Any]]:
@@ -1421,9 +1462,16 @@ def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
         return
     if cu.role == "marketing" and lead.get("status") == "negative":
         return
-    emp_id = cu.acting_as_employee_id or cu.employee_id
-    if not emp_id or lead.get("assigned_to") != emp_id:
-        raise HTTPException(status_code=403, detail="You can only update leads assigned to you.")
+    assignee_ids = employee_assignee_ids(cu)
+    assigned = clean_text(lead.get("assigned_to"))
+    if assigned and assigned in assignee_ids:
+        return
+    emp_id = resolve_employee_id(cu) or cu.employee_id
+    if emp_id:
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "name", "limit": "1"})
+        if emps and assigned.lower() == clean_text(emps[0].get("name")).lower():
+            return
+    raise HTTPException(status_code=403, detail="You can only update leads assigned to you.")
 
 
 def fresh_lead_reset_fields(stage: str = "new") -> Dict[str, Any]:
@@ -3332,6 +3380,11 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
             else:
                 body = r.json() if r.headers.get("content-type", "").startswith("application/json") else {}
                 token_error = (body.get("error") or {}).get("message") or r.text[:220]
+                if token_error and "expired" in token_error.lower():
+                    token_error = (
+                        "Token EXPIRED. Graph API Explorer tokens last ~1 hour only. "
+                        "Create a permanent token via Meta Business Settings → System Users (steps in CRM guide)."
+                    )
         except Exception as exc:
             token_error = str(exc)[:220]
 
@@ -3371,12 +3424,11 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
         "recent_events": recent[:5],
         "form_id": FACEBOOK_FORM_ID or None,
         "fix_steps": [
-            "Webhook URL alone does not import leads — set FACEBOOK_PAGE_ACCESS_TOKEN on Render",
-            "Use a long-lived Page access token with leads_retrieval (Graph API Explorer → your Page → Generate token)",
-            "Set FACEBOOK_PAGE_ID to your Facebook Page numeric id in Render env",
-            "Meta Developer → Webhooks → Page → leadgen subscribed; Verify token must match FACEBOOK_VERIFY_TOKEN",
-            "Do NOT use Meta's webhook Test button — submit a real Lead Ad form, then CRM → Import Past Meta Leads",
-            "CRM → Integrations → Resync Webhooks retries failed webhook leadgen ids",
+            "PERMANENT TOKEN: business.facebook.com → Settings → System users → Add → Assign your Page → Generate token (never expires)",
+            "Permissions: leads_retrieval, pages_show_list, pages_read_engagement, pages_manage_metadata",
+            "Paste token in Render FACEBOOK_PAGE_ACCESS_TOKEN + set FACEBOOK_PAGE_ID → redeploy",
+            "Do NOT use Graph API Explorer for production — those tokens expire in ~1 hour",
+            "After deploy: CRM Integrations → Import Past Meta Leads (90 days)",
         ],
     }
 
@@ -4488,24 +4540,23 @@ async def workspace_leads(
 ):
     """Telecaller / Sales Executive workspace — queue + follow-ups with counts that
     match Assign Leads stats and My Dashboard KPIs."""
-    emp_id = cu.acting_as_employee_id or cu.employee_id
+    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
     if not emp_id and cu.role not in ["admin", "manager"]:
         raise HTTPException(403, detail="Employee profile required for workspace")
 
     limit = min(max(limit, 1), 500)
-    select = "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,follow_up_at,created_at,budget,location"
+    select = (
+        "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,"
+        "follow_up_at,created_at,budget,location,property_type,raw_payload"
+    )
     if cu.role in ["admin", "manager"] and not cu.acting_as_employee_id:
         all_leads = fetch_all_leads_merged(select)
         emp_leads = all_leads
         role = "telecaller"
     else:
-        db_params = {"select": select, "assigned_to": f"eq.{emp_id}", "order": "created_at.desc"}
-        db_leads = sb_select_all("leads", db_params)
-        cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") == emp_id]
-        cache_ids = {l.get("lead_id") for l in cache_slice}
-        all_leads = cache_slice + [l for l in db_leads if l.get("lead_id") not in cache_ids]
-        emp_leads = all_leads
-        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "role", "limit": "1"})
+        emp_leads = fetch_employee_assigned_leads(cu, select)
+        emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "role", "limit": "1"}) if emp_id else []
         role = emps[0].get("role") if emps else cu.role
 
     queue = filter_employee_queue_leads(emp_leads, role)
@@ -4560,6 +4611,7 @@ async def list_assign_workspace(
     source: str = "all",
     assigned_to: str = "all",
     q: str = "",
+    location: str = "",
     limit: int = 500,
     offset: int = 0,
     cu: User = Depends(get_current_user),
@@ -4577,7 +4629,7 @@ async def list_assign_workspace(
     offset = max(offset, 0)
     select = (
         "lead_id,name,phone,email,source,stage,status,priority,call_status,"
-        "budget,location,assigned_to,assigned_at,assigned_by,created_at,updated_at"
+        "budget,location,property_type,assigned_to,assigned_at,assigned_by,created_at,updated_at"
     )
     all_leads = fetch_all_leads_merged(select)
     employees = sb_select("employees", {
@@ -4588,7 +4640,7 @@ async def list_assign_workspace(
     assignable = [e for e in employees if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") in {"admin", "manager"}]
     assignable = assignable or employees
 
-    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q)
+    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location)
     page = enrich_leads_with_employee_names(filtered[offset:offset + limit], assignable)
     facets = compute_assign_workspace_facets(all_leads)
 
@@ -4602,6 +4654,7 @@ async def list_assign_workspace(
             "source": source_key,
             "assigned_to": assigned_to or "all",
             "q": q or "",
+            "location": location or "",
         },
         "auto_assign_on_intake": False,
     }
@@ -4720,14 +4773,14 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
     now = time.time()
     if _assignment_stats_cache["data"] is not None and (now - float(_assignment_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
         return _assignment_stats_cache["data"]
-    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active", "order": "name.asc"})
+    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id", "order": "name.asc"})
     all_leads = fetch_all_leads_merged(
         "lead_id,assigned_to,status,stage,priority,call_status,created_at,updated_at,follow_up_at,assigned_at,last_employee_action_at"
     )
     rows = []
     for e in employees:
         eid = e.get("employee_id")
-        emp_leads = [l for l in all_leads if l.get("assigned_to") == eid]
+        emp_leads = leads_for_employee_record(e, all_leads)
         rows.append({
             "employee_id": eid,
             "name": e.get("name"),
@@ -4954,6 +5007,10 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         )
         if workflow_touched:
             data["last_employee_action_at"] = now_utc().isoformat()
+            canonical_emp = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
+            if canonical_emp and old_lead.get("assigned_to") != canonical_emp:
+                if old_lead.get("assigned_to") in employee_assignee_ids(cu):
+                    data["assigned_to"] = canonical_emp
     
     if p.assigned_to and p.assigned_to != old_lead.get("assigned_to"):
         stamp = stamp_lead_assignment(
@@ -6135,7 +6192,7 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
     for e in employees:
         eid = e["employee_id"]
         emp_acts = [a for a in activities if a.get("user_id") in {eid, e.get("user_id")}]
-        emp_leads = [l for l in all_leads if l.get("assigned_to") == eid]
+        emp_leads = leads_for_employee_record(e, all_leads)
         assignment = compute_employee_assignment_stats(emp_leads, e.get("role"))
         last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
 
@@ -6576,7 +6633,9 @@ async def list_employee_metric_leads(
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(EMPLOYEE_METRIC_KEYS)}")
     limit = min(max(limit, 1), 500)
     all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
-    emp_leads = [l for l in all_leads if l.get("assigned_to") == employee_id]
+    employees = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,user_id", "limit": "1"})
+    employee = employees[0] if employees else {"employee_id": employee_id}
+    emp_leads = leads_for_employee_record(employee, all_leads)
     if key in ("missed_leads", "missed"):
         filtered = filter_employee_missed_leads(emp_leads)
     else:

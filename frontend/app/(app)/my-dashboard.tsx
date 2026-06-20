@@ -167,6 +167,13 @@ export default function MyDashboard() {
         <View style={{ flex: 1 }}>
           <TopBar title="My Dashboard" subtitle={`${roleLabel(role)} workspace`} />
         </View>
+        <Pressable
+          onPress={load}
+          disabled={loading}
+          style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1 }]}
+        >
+          <Ionicons name="refresh" size={18} color={colors.primary} />
+        </Pressable>
         <LivePulse />
       </View>
       <ScrollView contentContainerStyle={styles.content}>
@@ -299,6 +306,7 @@ export default function MyDashboard() {
               refreshKey={refreshKey}
               onOpenLead={setOpenLead}
               onViewAll={missedCount > 0 ? () => setActivityMetric('missed_leads') : undefined}
+              onRefresh={load}
             />
           </View>
         )}
@@ -511,4 +519,8 @@ const styles = StyleSheet.create({
   liveDotOuter: { position: 'absolute', left: 0, width: 12, height: 12, borderRadius: 6, backgroundColor: '#22C55E' },
   liveDotInner: { width: 8, height: 8, borderRadius: 4, backgroundColor: '#22C55E', marginLeft: 2 },
   liveText: { fontSize: 10, fontWeight: '800', color: '#22C55E', letterSpacing: 1.5, marginLeft: 10 },
+  refreshBtn: {
+    width: 34, height: 34, borderRadius: 8, borderWidth: 1,
+    alignItems: 'center', justifyContent: 'center', marginRight: 8,
+  },
 });
