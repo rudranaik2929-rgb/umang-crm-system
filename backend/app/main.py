@@ -2139,7 +2139,12 @@ def log_activity(actor, type_, text, lead_id=None):
         "text": f"[{actor_name}] {text}",
         "created_at": now_utc().isoformat(),
     }
-    sb_insert("activities", act)
+    result = sb_insert("activities", act)
+    if result is None:
+        logging.error("log_activity: insert failed for lead_id=%s type=%s", lead_id, type_)
+        return None
+    if isinstance(result, dict):
+        return {**act, **result}
     return act
 
 def _activity_actor_name(actor: Optional[User]) -> str:
@@ -2157,7 +2162,7 @@ def strip_activity_actor_prefix(text: str) -> str:
     return raw[m.end():] if m else raw
 
 def format_activity_note_text(actor: Optional[User], body: str) -> str:
-    clean = (body or "").strip()
+    clean = strip_activity_actor_prefix((body or "").strip())
     if not clean:
         return ""
     return f"[{_activity_actor_name(actor)}] {clean}"
@@ -5531,30 +5536,47 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
 
 @api_router.post("/leads/{lead_id}/notes")
 async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_current_user)):
-    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id"})
-    if not leads:
-        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
-        if not cache_match: raise HTTPException(404, "Lead not found")
-    body = (p.text or "").strip()
-    if not body:
+    lead = get_lead_record(lead_id, "lead_id,assigned_to")
+    if not lead:
+        raise HTTPException(404, detail="Lead not found")
+    ensure_lead_edit_access(cu, lead)
+    clean = strip_activity_actor_prefix((p.text or "").strip())
+    if not clean:
         raise HTTPException(400, detail="Note text is required.")
-    activity = log_activity(cu, p.type, body, lead_id=lead_id)
-    if activity: SESSION_CACHE["activities"].insert(0, activity)
-    return activity
+    note_type = (p.type or "call_note").strip().lower() or "call_note"
+    if note_type not in ("call_note", "visit_note"):
+        note_type = "call_note"
+    user_id_to_log = cu.acting_as_employee_id or cu.employee_id or cu.user_id
+    act = {
+        "activity_id": gen_id("act"),
+        "lead_id": lead_id,
+        "user_id": user_id_to_log,
+        "type": note_type,
+        "text": format_activity_note_text(cu, clean),
+        "created_at": now_utc().isoformat(),
+    }
+    inserted = sb_insert("activities", act)
+    if inserted is None:
+        raise HTTPException(500, detail="Could not save note. Please try again.")
+    saved = {**act, **inserted} if isinstance(inserted, dict) else act
+    SESSION_CACHE["activities"] = [a for a in SESSION_CACHE["activities"] if a.get("activity_id") != saved.get("activity_id")]
+    SESSION_CACHE["activities"].insert(0, saved)
+    return saved
 
 @api_router.patch("/leads/{lead_id}/notes/{activity_id}")
 async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: User = Depends(get_current_user)):
     lead = get_lead_record(lead_id, "lead_id,assigned_to")
     if not lead:
-        raise HTTPException(404, "Lead not found")
+        raise HTTPException(404, detail="Lead not found")
     ensure_lead_edit_access(cu, lead)
-    body = format_activity_note_text(cu, strip_activity_actor_prefix(p.text or ""))
-    if not body:
+    clean = strip_activity_actor_prefix((p.text or "").strip())
+    if not clean:
         raise HTTPException(400, detail="Note text is required.")
+    body = format_activity_note_text(cu, clean)
     rows = sb_select("activities", {
         "activity_id": f"eq.{activity_id}",
         "lead_id": f"eq.{lead_id}",
-        "select": "activity_id,type,text,lead_id",
+        "select": "activity_id,type,text,lead_id,user_id,created_at",
         "limit": "1",
     })
     activity = rows[0] if rows else None
@@ -5562,18 +5584,32 @@ async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: Us
         cache_match = [a for a in SESSION_CACHE["activities"] if a.get("activity_id") == activity_id and a.get("lead_id") == lead_id]
         activity = cache_match[0] if cache_match else None
     if not activity:
-        raise HTTPException(404, "Note not found.")
-    if str(activity.get("type") or "") != "call_note":
+        raise HTTPException(404, detail="Note not found.")
+    if str(activity.get("type") or "") not in ("call_note", "visit_note"):
         raise HTTPException(400, detail="Only call / visit notes can be edited.")
     updated = sb_update("activities", "activity_id", activity_id, {"text": body})
     if not updated:
-        raise HTTPException(500, detail="Could not update note.")
-    merged = {**activity, **updated}
+        upsert_row = {
+            "activity_id": activity_id,
+            "lead_id": lead_id,
+            "user_id": activity.get("user_id") or cu.acting_as_employee_id or cu.employee_id or cu.user_id,
+            "type": activity.get("type") or "call_note",
+            "text": body,
+            "created_at": activity.get("created_at") or now_utc().isoformat(),
+        }
+        inserted = sb_insert("activities", upsert_row)
+        if inserted is None:
+            raise HTTPException(500, detail="Could not update note. Please try again.")
+        updated = {**upsert_row, **inserted} if isinstance(inserted, dict) else upsert_row
+    else:
+        updated = {**activity, **updated}
     SESSION_CACHE["activities"] = [
-        merged if a.get("activity_id") == activity_id else a
+        updated if a.get("activity_id") == activity_id else a
         for a in SESSION_CACHE["activities"]
     ]
-    return merged
+    if not any(a.get("activity_id") == activity_id for a in SESSION_CACHE["activities"]):
+        SESSION_CACHE["activities"].insert(0, updated)
+    return updated
 
 @api_router.post("/leads/{lead_id}/advance")
 async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):

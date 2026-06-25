@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api } from '../lib/api';
+import { api, clearGetCache } from '../lib/api';
 import { WorkflowStatusBadge } from './Badge';
 import { STAGES, isAdmin } from '../lib/constants';
 import {
@@ -80,6 +80,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [noteError, setNoteError] = useState<string | null>(null);
+  const [noteSaved, setNoteSaved] = useState<string | null>(null);
+  const noteDirtyRef = React.useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -105,20 +108,39 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     }
   };
 
-  const load = useCallback(async (isBackground = false) => {
+  const applyNoteFromTimeline = useCallback((timeline: any[]) => {
+    const latestCallNote = [...(timeline || [])]
+      .filter((t: any) => t.type === 'call_note' || t.type === 'visit_note')
+      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0];
+    if (latestCallNote) {
+      setNote(stripActivityActorPrefix(latestCallNote.text));
+      setEditingNoteId(latestCallNote.activity_id || null);
+    } else {
+      setNote('');
+      setEditingNoteId(null);
+    }
+  }, []);
+
+  const load = useCallback(async (isBackground = false, hydrateNote = false) => {
     if (!leadId) return;
     if (!isBackground) setLoading(true);
     try {
-      const r = await api.get(`/leads/${leadId}`);
+      const r = await api.get(`/leads/${leadId}`, hydrateNote ? { params: { _t: Date.now() } } : undefined);
       setData(r.data);
+      if (hydrateNote && !noteDirtyRef.current) {
+        applyNoteFromTimeline(r.data?.timeline || []);
+      }
     } finally {
       if (!isBackground) setLoading(false);
     }
-  }, [leadId]);
+  }, [leadId, applyNoteFromTimeline]);
 
   useEffect(() => {
     if (visible && leadId) {
-      load();
+      noteDirtyRef.current = false;
+      setNoteError(null);
+      setNoteSaved(null);
+      load(false, true);
       setAiSummary(null);
       setShowAssignDropdown(false);
       setAssignSearch('');
@@ -133,22 +155,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setActiveCategory(null);
       setNote('');
       setEditingNoteId(null);
+      setNoteError(null);
+      setNoteSaved(null);
+      noteDirtyRef.current = false;
     }
   }, [visible, leadId, load]);
-
-  useEffect(() => {
-    const timeline = data?.timeline || [];
-    const latestCallNote = [...timeline]
-      .filter((t: any) => t.type === 'call_note')
-      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0];
-    if (latestCallNote) {
-      setNote(stripActivityActorPrefix(latestCallNote.text));
-      setEditingNoteId(latestCallNote.activity_id || null);
-    } else {
-      setNote('');
-      setEditingNoteId(null);
-    }
-  }, [data?.timeline]);
 
   useEffect(() => {
     if (data?.lead?.brokerage_amount) {
@@ -225,19 +236,52 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const addNote = async () => {
     if (!leadId || !note.trim()) return;
     setBusy('note');
+    setNoteError(null);
+    setNoteSaved(null);
+    const body = note.trim();
     try {
+      let saved: any;
       if (editingNoteId) {
-        await api.patch(`/leads/${leadId}/notes/${editingNoteId}`, { text: note.trim() });
+        try {
+          const res = await api.patch(`/leads/${leadId}/notes/${editingNoteId}`, { text: body });
+          saved = res.data;
+        } catch (patchErr: any) {
+          if (patchErr?.response?.status === 404) {
+            const res = await api.post(`/leads/${leadId}/notes`, { text: body, type: 'call_note' });
+            saved = res.data;
+          } else {
+            throw patchErr;
+          }
+        }
       } else {
-        const res = await api.post(`/leads/${leadId}/notes`, { text: note.trim(), type: 'call_note' });
-        setEditingNoteId(res.data?.activity_id || null);
+        const res = await api.post(`/leads/${leadId}/notes`, { text: body, type: 'call_note' });
+        saved = res.data;
       }
+      if (!saved?.activity_id) {
+        throw new Error('Note saved but server returned no id.');
+      }
+      clearGetCache();
+      noteDirtyRef.current = false;
+      setEditingNoteId(saved.activity_id);
+      setNote(stripActivityActorPrefix(saved.text || body));
       const r = await api.get(`/leads/${leadId}`, { params: { _t: Date.now() } });
       setData(r.data);
+      setNoteSaved('Note saved.');
       onChanged?.();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setNoteError(typeof detail === 'string' ? detail : 'Could not save note. Please try again.');
     } finally {
       setBusy(null);
     }
+  };
+
+  const startNewNote = () => {
+    noteDirtyRef.current = true;
+    setEditingNoteId(null);
+    setNote('');
+    setNoteError(null);
+    setNoteSaved(null);
   };
 
   const assignToEmployee = async (employeeId: string, employeeName: string) => {
@@ -803,7 +847,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   <TextInput
                     testID="lead-note-input"
                     value={note}
-                    onChangeText={setNote}
+                    onChangeText={(text) => {
+                      noteDirtyRef.current = true;
+                      setNote(text);
+                      setNoteError(null);
+                      setNoteSaved(null);
+                    }}
                     editable={busy !== 'note'}
                     multiline
                     placeholder="e.g. Customer wants to revisit on Saturday..."
@@ -813,13 +862,15 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 13, marginTop: 8,
                     }}
                   />
+                  {noteError ? (
+                    <Text style={{ color: colors.negative, fontSize: 12, marginTop: 8 }}>{noteError}</Text>
+                  ) : noteSaved ? (
+                    <Text style={{ color: colors.positive, fontSize: 12, marginTop: 8 }}>{noteSaved}</Text>
+                  ) : null}
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
                     {editingNoteId ? (
                       <Pressable
-                        onPress={() => {
-                          setEditingNoteId(null);
-                          setNote('');
-                        }}
+                        onPress={startNewNote}
                         style={[styles.saveBtn, { flex: 1, backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border }]}
                       >
                         <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 13 }}>Add New Note</Text>
@@ -848,7 +899,18 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   ) : (
                     <View style={{ marginTop: 8 }}>
                       {timeline.map((t: any) => (
-                        <View key={t.activity_id} style={[styles.timeItem, { borderLeftColor: colors.border }]}>
+                        <Pressable
+                          key={t.activity_id}
+                          onPress={() => {
+                            if (t.type !== 'call_note' && t.type !== 'visit_note') return;
+                            noteDirtyRef.current = false;
+                            setNote(stripActivityActorPrefix(t.text));
+                            setEditingNoteId(t.activity_id || null);
+                            setNoteError(null);
+                            setNoteSaved(null);
+                          }}
+                          style={[styles.timeItem, { borderLeftColor: colors.border }]}
+                        >
                           <View style={[styles.timeDot, { backgroundColor: colors.primary, borderColor: colors.surface }]} />
                           <View style={{ flex: 1 }}>
                             <Text style={{ color: colors.text, fontSize: 13 }}>{t.text}</Text>
@@ -856,7 +918,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                               {new Date(t.created_at).toLocaleString()}
                             </Text>
                           </View>
-                        </View>
+                        </Pressable>
                       ))}
                     </View>
                   )}
