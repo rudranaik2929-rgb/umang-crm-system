@@ -12,6 +12,8 @@
 --   • My Dashboard: New Leads = assigned, not yet updated by employee
 --   • My Dashboard: Total Leads = employee took action (ringing, visited, hot, not interested, etc.)
 --   • Workflow pills (Hot, Ringing, Missed, etc.) count actioned leads only
+--   • Visited box = stage site_visit only (Mark Visited button)
+--   • Today Activity box = employee work log in last 24 hours
 --   • Visit follow-ups, call_status, priority
 --
 -- Excel import (no extra columns — uses fields below):

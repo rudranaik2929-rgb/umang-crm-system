@@ -17,12 +17,19 @@ type Props = {
   onChanged?: () => void;
 };
 
+function formatWhen(iso?: string | null) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' });
+}
+
 export function MyActivityModal({ visible, metric, onClose, userRole, onChanged }: Props) {
   const { colors } = useTheme();
   const [label, setLabel] = useState('');
-  const [kind, setKind] = useState<'leads' | 'activities'>('leads');
+  const [kind, setKind] = useState<'leads' | 'activities' | 'today_report'>('leads');
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [actionTotal, setActionTotal] = useState(0);
+  const [periodHours, setPeriodHours] = useState(24);
   const [loading, setLoading] = useState(false);
   const [openLead, setOpenLead] = useState<string | null>(null);
 
@@ -32,15 +39,22 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
     try {
       const res = await api.get(`/stats/me/activity/${metric}`, { params: { limit: 500 } });
       setLabel(res.data?.label || metric);
-      setKind(res.data?.kind === 'activities' ? 'activities' : 'leads');
+      const k = res.data?.kind;
+      setKind(k === 'today_report' ? 'today_report' : k === 'activities' ? 'activities' : 'leads');
       setItems(res.data?.items || []);
       setTotal(Number(res.data?.total || 0));
+      setActionTotal(Number(res.data?.action_total || 0));
+      setPeriodHours(Number(res.data?.period_hours || 24));
     } finally {
       setLoading(false);
     }
   }, [visible, metric]);
 
   useEffect(() => { load(); }, [load]);
+
+  const subtitle = kind === 'today_report'
+    ? `${total} lead${total === 1 ? '' : 's'} · ${actionTotal} action${actionTotal === 1 ? '' : 's'} in last ${periodHours}h`
+    : `${total} lead${total === 1 ? '' : 's'} · tap to open`;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -49,9 +63,7 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.title, { color: colors.text }]}>{label || 'My Activity'}</Text>
-              <Text style={{ color: colors.textMuted, fontSize: 12 }}>
-                {total} lead{total === 1 ? '' : 's'} · tap to open
-              </Text>
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>{subtitle}</Text>
             </View>
             <PanelRefreshButton onPress={load} loading={loading} testID="my-activity-refresh" />
             <Pressable onPress={onClose} style={[styles.close, { borderColor: colors.border }]}>
@@ -62,11 +74,44 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
             <ActivityIndicator color={colors.primary} style={{ marginVertical: 40 }} />
           ) : items.length === 0 ? (
             <Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 32, fontSize: 13 }}>
-              No items in this category yet.
+              {kind === 'today_report' ? 'No work logged in the last 24 hours yet.' : 'No items in this category yet.'}
             </Text>
           ) : (
-            <ScrollView style={{ maxHeight: 480 }}>
-              {kind === 'leads' ? items.map((l) => (
+            <ScrollView style={{ maxHeight: 520 }}>
+              {kind === 'today_report' ? items.map((row) => (
+                <Pressable
+                  key={row.lead_id}
+                  testID={`my-today-lead-${row.lead_id}`}
+                  onPress={() => setOpenLead(row.lead_id)}
+                  style={[styles.reportCard, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+                >
+                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8, alignItems: 'flex-start' }}>
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontWeight: '700', fontSize: 14 }}>{row.lead_name}</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: 11 }}>{row.lead_phone || '—'}</Text>
+                      <Text style={{ color: colors.primary, fontSize: 10, marginTop: 4, fontWeight: '600' }}>
+                        {row.workflow_status_label || 'Updated'}
+                      </Text>
+                    </View>
+                    <View style={{ alignItems: 'flex-end' }}>
+                      <Text style={{ color: colors.positive, fontWeight: '800', fontSize: 16 }}>{row.action_count}</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: 9 }}>actions</Text>
+                    </View>
+                  </View>
+                  <View style={[styles.actionsList, { borderTopColor: colors.border }]}>
+                    {(row.actions || []).map((act: any) => (
+                      <View key={act.activity_id || act.created_at} style={styles.actionRow}>
+                        <Ionicons name="checkmark-circle" size={12} color={colors.positive} />
+                        <View style={{ flex: 1 }}>
+                          <Text style={{ color: colors.textSecondary, fontSize: 11 }}>{act.label}</Text>
+                          <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>{formatWhen(act.created_at)}</Text>
+                        </View>
+                      </View>
+                    ))}
+                  </View>
+                  <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 8 }}>Tap card to open lead</Text>
+                </Pressable>
+              )) : kind === 'leads' ? items.map((l) => (
                 <Pressable
                   key={l.lead_id}
                   testID={`my-activity-lead-${l.lead_id}`}
@@ -107,7 +152,7 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.text, fontSize: 13 }}>{a.text}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>
-                      {new Date(a.created_at).toLocaleString('en-IN')}
+                      {formatWhen(a.created_at)}
                       {a.lead_name ? ` · ${a.lead_name}` : ''}
                     </Text>
                   </View>
@@ -131,10 +176,13 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  card: { width: '100%', maxWidth: 560, maxHeight: '85%', borderRadius: 12, borderWidth: 1, padding: 18 },
+  card: { width: '100%', maxWidth: 600, maxHeight: '88%', borderRadius: 12, borderWidth: 1, padding: 18 },
   header: { marginBottom: 14, flexDirection: 'row', alignItems: 'flex-start', gap: 8 },
   title: { fontSize: 18, fontWeight: '700' },
   close: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8, alignItems: 'center', gap: 10 },
+  reportCard: { padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 10 },
+  actionsList: { marginTop: 10, paddingTop: 8, borderTopWidth: 1, gap: 6 },
+  actionRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
   actionBtn: { width: 32, height: 32, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
 });

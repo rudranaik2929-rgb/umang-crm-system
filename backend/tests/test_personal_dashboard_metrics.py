@@ -27,7 +27,8 @@ def test_personal_dashboard_counts_match_drill_down_lists():
         _lead("untouched", 30),
         _lead("ringing", 40, call_status="ringing"),
         _lead("negative", 50, status="negative", priority="low_budget"),
-        _lead("visited", 60, stage="positive", priority="hot"),
+        _lead("visited", 60, stage="site_visit"),
+        _lead("hot", 58, stage="positive", priority="hot"),
         _lead("fresh", 2),
     ]
     activities = []

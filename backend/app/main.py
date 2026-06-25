@@ -643,6 +643,13 @@ def workspace_queue_stages(role: Optional[str]) -> List[str]:
 
 
 MISSED_LEAD_HOURS = 24
+TODAY_ACTIVITY_HOURS = 24
+
+NON_WORK_ACTIVITY_TYPES = frozenset({
+    "lead_assigned", "bulk_import", "bulk_import_assign", "integration_duplicate",
+    "integration_enquiry", "broker_lead_received", "website_enquiry", "manual_enquiry",
+    "broker_pool", "broker_activated", "converted_customer", "booking_deleted", "loan_deleted",
+})
 
 
 def parse_lead_ts(value: Any) -> Optional[datetime]:
@@ -697,6 +704,104 @@ def is_missed_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool
         return False
     cutoff = now_utc() - timedelta(hours=hours)
     return assigned_at <= cutoff
+
+
+def is_employee_work_activity(act: Dict[str, Any]) -> bool:
+    """Activity types that count as employee work for Today Activity report."""
+    t = str(act.get("type") or "").strip().lower()
+    if not t or t in NON_WORK_ACTIVITY_TYPES:
+        return False
+    if t in ("call_note", "call_status_update", "lead_followup", "site_visit_interested"):
+        return True
+    if t.startswith("stage_change") or t.startswith("status_change"):
+        return True
+    if t in ("positive_response", "negative_response"):
+        return True
+    return False
+
+
+def filter_employee_work_activities(
+    activities: List[Dict[str, Any]],
+    hours: int = TODAY_ACTIVITY_HOURS,
+) -> List[Dict[str, Any]]:
+    cutoff = now_utc() - timedelta(hours=hours)
+    rows = []
+    for act in activities:
+        if not is_employee_work_activity(act):
+            continue
+        ts = parse_lead_ts(act.get("created_at"))
+        if not ts or ts < cutoff:
+            continue
+        rows.append(act)
+    rows.sort(key=lambda a: a.get("created_at") or "", reverse=True)
+    return rows
+
+
+def activity_report_label(act: Dict[str, Any]) -> str:
+    t = str(act.get("type") or "").strip().lower()
+    body = strip_activity_actor_prefix(str(act.get("text") or ""))
+    if t == "call_note":
+        return f"Note — {body}" if body else "Call / visit note"
+    if t == "call_status_update":
+        return body or "Call status updated"
+    if t == "lead_followup":
+        return body or "Follow-up scheduled"
+    if t.startswith("stage_change"):
+        return body or "Stage updated"
+    if t.startswith("status_change") or t in ("positive_response", "negative_response"):
+        return body or "Status updated"
+    if t == "site_visit_interested":
+        return body or "Site visit — interested"
+    return body or t.replace("_", " ").title()
+
+
+def build_today_activity_report(
+    activities: List[Dict[str, Any]],
+    emp_leads: List[Dict[str, Any]],
+    hours: int = TODAY_ACTIVITY_HOURS,
+) -> List[Dict[str, Any]]:
+    """Per-lead daily work report — last N hours of employee actions."""
+    work = filter_employee_work_activities(activities, hours=hours)
+    lead_map = {l.get("lead_id"): l for l in emp_leads if l.get("lead_id")}
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
+    for act in work:
+        lid = act.get("lead_id")
+        if not lid:
+            continue
+        grouped.setdefault(lid, []).append(act)
+
+    report: List[Dict[str, Any]] = []
+    for lid, acts in grouped.items():
+        acts.sort(key=lambda a: a.get("created_at") or "", reverse=True)
+        lead = lead_map.get(lid) or get_lead_record(lid, "lead_id,name,phone,stage,status,priority,call_status,follow_up_at") or {}
+        enriched = enrich_lead_display_fields(lead) if lead.get("lead_id") else {"lead_id": lid}
+        report.append({
+            "lead_id": lid,
+            "lead_name": enriched.get("name") or "Lead",
+            "lead_phone": enriched.get("phone"),
+            "workflow_status_label": enriched.get("workflow_status_label") or workflow_status_label(enriched),
+            "action_count": len(acts),
+            "last_action_at": acts[0].get("created_at"),
+            "actions": [
+                {
+                    "activity_id": a.get("activity_id"),
+                    "type": a.get("type"),
+                    "label": activity_report_label(a),
+                    "created_at": a.get("created_at"),
+                }
+                for a in acts
+            ],
+        })
+    report.sort(key=lambda r: r.get("last_action_at") or "", reverse=True)
+    return report
+
+
+def count_today_activity_leads(
+    activities: List[Dict[str, Any]],
+    emp_leads: List[Dict[str, Any]],
+    hours: int = TODAY_ACTIVITY_HOURS,
+) -> int:
+    return len(build_today_activity_report(activities, emp_leads, hours=hours))
 
 
 def has_employee_workflow_action(lead: Dict[str, Any]) -> bool:
@@ -825,7 +930,7 @@ def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
         return "booking_done"
     if _lead_priority(lead) == "hot":
         return "hot"
-    if lead.get("stage") in ["site_visit", "positive"]:
+    if lead.get("stage") == "site_visit":
         return "visited"
     return None
 
@@ -847,6 +952,11 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
         return filter_employee_missed_leads(emp_leads)
     if key in ("new_leads", "new", "assigned_new"):
         return filter_employee_new_leads(emp_leads)
+    if key == "visited":
+        return [
+            l for l in rows
+            if l.get("stage") == "site_visit" and l.get("status") != "negative"
+        ]
     return [l for l in rows if classify_employee_performance_metric(l) == key]
 
 
@@ -931,8 +1041,10 @@ def workflow_status_label(lead: Dict[str, Any]) -> str:
         return "Booking Done"
     if _lead_priority(lead) == "hot":
         return "Hot"
-    if lead.get("stage") in ["site_visit", "positive"]:
+    if lead.get("stage") == "site_visit":
         return "Visited"
+    if lead.get("stage") == "positive":
+        return "Interested"
     if lead.get("follow_up_at") and lead.get("status") != "negative":
         return "Follow Up"
     if lead.get("stage") == "closed":
@@ -972,8 +1084,10 @@ def classify_inquiry_status(lead: Dict[str, Any]) -> str:
         return "booked"
     if _lead_priority(lead) == "hot":
         return "hot"
-    if lead.get("stage") in ["site_visit", "positive"]:
+    if lead.get("stage") == "site_visit":
         return "visited"
+    if lead.get("stage") == "positive":
+        return "active"
     if not lead.get("assigned_to") and lead.get("stage") in ["new", "assigned"]:
         return "new"
     if lead.get("status") != "negative" and lead.get("stage") != "closed":
@@ -6582,7 +6696,7 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
         return _employee_stats_cache["data"]
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id"})
     db_activities = sb_select("activities", {
-        "select": "user_id,created_at,type",
+        "select": "activity_id,user_id,created_at,type,text,lead_id",
         "order": "created_at.desc",
         "limit": "2000",
     })
@@ -6608,6 +6722,7 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
             "actions_total": len(emp_acts),
             "leads_total": assignment["assigned_total"],
             "last_activity": last_activity,
+            "emp_today_activity": count_today_activity_leads(emp_acts, emp_leads),
             **assignment,
             "positives": assignment["assigned_positive"],
             "negatives": assignment["assigned_not_interested"],
@@ -6859,6 +6974,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "emp_booking_done": metric_counts["booking_done"],
             "emp_low_budget": metric_counts["low_budget"],
             "emp_ringing": metric_counts["ringing"],
+            "emp_today_activity": metric_counts["today_activity"],
             "emp_follow_ups": metric_counts["follow_ups"],
             "emp_missed_leads": metric_counts["missed_leads"],
             "metric_counts": metric_counts,
@@ -6883,12 +6999,12 @@ async def stats_me(cu: User=Depends(get_current_user)):
 
 EMPLOYEE_METRIC_KEYS = [
     "total", "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
-    "ringing", "follow_ups", "missed_leads", "new_leads",
+    "ringing", "follow_ups", "missed_leads", "new_leads", "today_activity",
 ]
 
 MY_DASHBOARD_METRICS = [
     "new_leads", "total", "missed_leads", "hot", "visited",
-    "not_interested", "booking_done", "low_budget", "follow_ups", "ringing",
+    "not_interested", "booking_done", "low_budget", "follow_ups", "ringing", "today_activity",
 ]
 
 PERSONAL_ACTIVITY_METRICS = list(dict.fromkeys(
@@ -6918,6 +7034,7 @@ PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
     "low_budget": "Low Budget",
     "ringing": "Ringing",
     "missed_leads": "Missed Lead",
+    "today_activity": "Today Activity — Last 24 Hours",
 }
 
 
@@ -6925,6 +7042,8 @@ def personal_dashboard_metric_kind(metric_key: str) -> str:
     key = (metric_key or "").strip().lower()
     if key in ("call_notes", "bookings_done", "loans_done"):
         return "activities"
+    if key in ("today_activity", "today"):
+        return "today_report"
     return "leads"
 
 
@@ -6967,6 +7086,8 @@ def personal_dashboard_metric_items(
         return [a for a in (activities or []) if "loan" in str(a.get("type", "")).lower()]
     if key == "active":
         return filter_employee_metric_leads(backlog, "active")
+    if key in ("today_activity", "today"):
+        return build_today_activity_report(activities or [], rows)
     if key in ("hot", "visited", "booking_done", "low_budget", "ringing"):
         return filter_employee_metric_leads(backlog, key)
     return []
@@ -7039,7 +7160,10 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
 
     result = filter_personal_activity(key, emp_leads, activities, emp_role)
     lead_map = {l.get("lead_id"): l for l in emp_leads if l.get("lead_id")}
-    if result["kind"] == "leads":
+    if result["kind"] == "today_report":
+        items = result["items"][:limit]
+        action_total = sum(int(r.get("action_count") or 0) for r in items)
+    elif result["kind"] == "leads":
         items = enrich_leads_display_fields(
             sorted(result["items"], key=lambda l: l.get("created_at") or "", reverse=True)[:limit]
         )
@@ -7051,13 +7175,17 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
                 act["lead_name"] = lead_map[lid].get("name")
                 act["lead_phone"] = lead_map[lid].get("phone")
 
-    return {
+    payload: Dict[str, Any] = {
         "metric": key,
         "label": PERSONAL_ACTIVITY_LABELS.get(key, key.replace("_", " ").title()),
         "kind": result["kind"],
         "total": len(result["items"]),
         "items": items,
     }
+    if result["kind"] == "today_report":
+        payload["action_total"] = action_total
+        payload["period_hours"] = TODAY_ACTIVITY_HOURS
+    return payload
 
 
 @api_router.get("/leads/employee/{employee_id}/metric/{metric_key}")
@@ -7078,6 +7206,27 @@ async def list_employee_metric_leads(
     employees = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,user_id", "limit": "1"})
     employee = employees[0] if employees else {"employee_id": employee_id}
     emp_leads = leads_for_employee_record(employee, all_leads)
+    if key in ("today_activity", "today"):
+        db_activities = sb_select("activities", {
+            "select": "activity_id,user_id,created_at,type,text,lead_id",
+            "order": "created_at.desc",
+            "limit": "2000",
+        })
+        cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
+        all_activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
+        actor_ids = {employee_id, employee.get("user_id")}
+        emp_activities = [a for a in all_activities if a.get("user_id") in actor_ids]
+        report = build_today_activity_report(emp_activities, emp_leads)
+        return {
+            "employee_id": employee_id,
+            "metric": key,
+            "kind": "today_report",
+            "total": len(report),
+            "action_total": sum(int(r.get("action_count") or 0) for r in report),
+            "period_hours": TODAY_ACTIVITY_HOURS,
+            "report": report[:limit],
+            "leads": [],
+        }
     if key in ("new_leads", "new", "assigned_new"):
         filtered = filter_employee_new_leads(emp_leads)
     elif key in ("total", "backlog", "assigned_total"):

@@ -26,12 +26,12 @@ const ROLE_ACCENT: Record<string, string> = {
 };
 
 const ROLE_HIGHLIGHT: Record<string, string[]> = {
-  telecaller: ['missed_leads', 'hot', 'follow_ups', 'ringing', 'not_interested'],
-  site_visit: ['missed_leads', 'visited', 'hot', 'follow_ups'],
-  sales_executive: ['missed_leads', 'visited', 'hot', 'booking_done', 'follow_ups'],
-  booking: ['missed_leads', 'booking_done'],
-  loan: ['missed_leads', 'booking_done'],
-  marketing: ['missed_leads', 'not_interested'],
+  telecaller: ['missed_leads', 'hot', 'follow_ups', 'ringing', 'today_activity', 'not_interested'],
+  site_visit: ['missed_leads', 'visited', 'hot', 'follow_ups', 'today_activity'],
+  sales_executive: ['missed_leads', 'visited', 'hot', 'booking_done', 'follow_ups', 'today_activity'],
+  booking: ['missed_leads', 'booking_done', 'today_activity'],
+  loan: ['missed_leads', 'booking_done', 'today_activity'],
+  marketing: ['missed_leads', 'not_interested', 'today_activity'],
 };
 
 const MY_PERFORMANCE_KPIS: Array<{
@@ -51,6 +51,7 @@ const MY_PERFORMANCE_KPIS: Array<{
   { label: 'Low Budget', metric: 'low_budget', icon: 'wallet', colorKey: 'accent', valueKey: 'emp_low_budget' },
   { label: 'Follow Up', metric: 'follow_ups', icon: 'calendar', colorKey: 'warning', valueKey: 'emp_follow_ups' },
   { label: 'Ringing', metric: 'ringing', icon: 'call', colorKey: 'warning', valueKey: 'emp_ringing' },
+  { label: 'Today Activity', metric: 'today_activity', icon: 'today', colorKey: 'positive', valueKey: 'emp_today_activity' },
 ];
 
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
@@ -282,6 +283,10 @@ export default function MyDashboard() {
                   ? 'No status change yet · tap for list'
                   : kpi.metric === 'total'
                     ? 'Leads you already updated · tap for list'
+                    : kpi.metric === 'today_activity'
+                    ? 'Last 24h work report · tap to open'
+                    : kpi.metric === 'visited'
+                    ? 'Only Mark Visited leads'
                     : kpi.metric === 'missed_leads' && missedCount > 0
                     ? '24h+ no employee action'
                     : undefined;

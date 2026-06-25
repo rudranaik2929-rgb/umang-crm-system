@@ -96,7 +96,8 @@ export function workflowStatusLabel(lead: any): string {
     return 'Booking Done';
   }
   if (pr === 'hot') return 'Hot';
-  if (['site_visit', 'positive'].includes(stage)) return 'Visited';
+  if (stage === 'site_visit') return 'Visited';
+  if (stage === 'positive') return 'Interested';
   if (lead?.follow_up_at && lead?.status !== 'negative') return 'Follow Up';
   if (stage === 'closed') return 'Closed';
   if (stage === 'new') return 'New Lead';
@@ -113,6 +114,7 @@ export function workflowStatusColor(lead: any): string {
   if (label === 'Low Budget') return WORKFLOW_STATUS_COLORS.low_budget;
   if (label === 'Hot') return WORKFLOW_STATUS_COLORS.hot;
   if (label === 'Visited') return WORKFLOW_STATUS_COLORS.visited;
+  if (label === 'Interested') return WORKFLOW_STATUS_COLORS.positive;
   if (label === 'Booking Done') return WORKFLOW_STATUS_COLORS.booking_done;
   if (label === 'Follow Up') return WORKFLOW_STATUS_COLORS.follow_up;
   if (label === 'New Lead') return WORKFLOW_STATUS_COLORS.new;
