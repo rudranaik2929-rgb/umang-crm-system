@@ -22,6 +22,26 @@ type ImportResult = {
   availableEmployees: string[];
 };
 
+function importErrorMessage(error: any): string {
+  const detail = error?.response?.data?.detail;
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) {
+    return detail.map((d: any) => d?.msg || JSON.stringify(d)).join(', ');
+  }
+  const status = error?.response?.status;
+  if (status === 401) return 'Session expired. Please log in again and retry.';
+  if (status === 413) return 'File is too large for the server. Try a smaller file.';
+  if (status && status >= 500) return `Server error (${status}). Wait a minute and try again.`;
+  if (error?.code === 'ECONNABORTED') {
+    return 'Upload timed out. If the server was sleeping, wait 30 seconds and try again.';
+  }
+  if (!error?.response) {
+    const hint = error?.message || 'network error';
+    return `Cannot reach server (${hint}). Check your internet connection and retry.`;
+  }
+  return 'Upload failed. Check Excel headers and try again.';
+}
+
 export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
   const { colors } = useTheme();
   const [loading, setLoading] = useState(false);
@@ -70,7 +90,8 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
     setResult(null);
 
     const formData = new FormData();
-    formData.append('file', selectedFile);
+    const uploadName = selectedFile.name || 'leads.xlsx';
+    formData.append('file', selectedFile, uploadName);
 
     try {
       const res = await api.post('/leads/import', formData, {
@@ -101,13 +122,7 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
       }
     } catch (e: any) {
       console.error(e);
-      const detail = e.response?.data?.detail;
-      const msg = typeof detail === 'string'
-        ? detail
-        : Array.isArray(detail)
-          ? detail.map((d: any) => d?.msg || JSON.stringify(d)).join(', ')
-          : 'Upload failed. Check Excel headers and try again.';
-      setErrorMsg(msg);
+      setErrorMsg(importErrorMessage(e));
     } finally {
       setLoading(false);
     }

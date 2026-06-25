@@ -226,6 +226,11 @@ api.interceptors.request.use(async (config) => {
     if (url.includes('/auth/session') || url.includes('/auth/me')) {
         config.timeout = Math.max(Number(config.timeout) || 0, AUTH_TIMEOUT_MS);
     }
+    // Let the browser set multipart boundary for file uploads (Excel/CSV import).
+    if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
+        delete (config.headers as Record<string, unknown>)['Content-Type'];
+        delete (config.headers as Record<string, unknown>)['content-type'];
+    }
     if (t) {
           (config.headers as any)['Authorization'] = `Bearer ${t}`;
     }

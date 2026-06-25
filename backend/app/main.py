@@ -3966,13 +3966,79 @@ def _name_tokens(value: str) -> List[str]:
     return tokens
 
 
+def _normalize_import_header_text(value: Any) -> str:
+    """Normalize header cells — strips NBSP / zero-width chars from Google Sheets exports."""
+    s = str(value or "").strip()
+    for ch in ("\u00a0", "\u200b", "\u200c", "\u200d", "\ufeff"):
+        s = s.replace(ch, " ")
+    return re.sub(r"\s+", " ", s).strip().lower().replace("_", " ")
+
+
+def sniff_upload_extension(filename: Optional[str], contents: bytes) -> str:
+    """Detect CSV vs Excel when the browser omits a filename on multipart uploads."""
+    name = (filename or "").strip().lower()
+    if name.endswith(".csv"):
+        return "csv"
+    if name.endswith(".xlsx"):
+        return "xlsx"
+    if name.endswith(".xls"):
+        return "xls"
+    if contents[:2] == b"PK":
+        return "xlsx"
+    if contents[:4] == b"\xd0\xcf\x11\xe0":
+        return "xls"
+    sample = contents[:4096]
+    if sample and not sample.strip(b"\x00\r\n\t "):
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if b"," in sample or b"\t" in sample:
+        try:
+            sample.decode("utf-8")
+            return "csv"
+        except UnicodeDecodeError:
+            try:
+                sample.decode("latin-1")
+                return "csv"
+            except UnicodeDecodeError:
+                pass
+    raise HTTPException(
+        status_code=400,
+        detail="Only CSV and Excel files (.xlsx, .xls) are supported. In Google Sheets use File → Download → Microsoft Excel (.xlsx).",
+    )
+
+
+def load_excel_import_rows(contents: bytes) -> Tuple[List[Any], int, Dict[str, int]]:
+    """Parse Excel and locate the header row — scans every worksheet."""
+    try:
+        wb = openpyxl.load_workbook(filename=BytesIO(contents), data_only=True, read_only=True)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if "zip" in msg or "workbook" in msg or "xml" in msg:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid Excel file. In Google Sheets use File → Download → Microsoft Excel (.xlsx), not CSV renamed to .xlsx.",
+            ) from exc
+        raise HTTPException(status_code=400, detail=f"Failed to open Excel file: {exc}") from exc
+
+    last_detail = "Excel file is empty."
+    for sheet in wb.worksheets:
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            continue
+        try:
+            header_idx, header_map = locate_import_header(rows)
+            return rows, header_idx, header_map
+        except HTTPException as exc:
+            last_detail = str(exc.detail)
+    raise HTTPException(status_code=400, detail=last_detail)
+
+
 def map_import_headers(headers: List[Any]) -> Dict[str, int]:
     """Map spreadsheet headers — supports Umang Excel template + legacy columns."""
     header_mapping: Dict[str, int] = {}
     for idx, h in enumerate(headers):
         if h is None or str(h).strip() == "":
             continue
-        h_clean = re.sub(r"\s+", " ", str(h).strip().lower().replace("_", " "))
+        h_clean = _normalize_import_header_text(h)
         h_compact = h_clean.replace(" ", "")
 
         if (
@@ -4187,7 +4253,7 @@ def import_row_to_record(row: List[Any], header_map: Dict[str, int]) -> Dict[str
 
 def normalize_import_source(raw: str) -> str:
     """Map spreadsheet Source column to CRM source (Meta → Facebook for platform stats)."""
-    s = clean_text(raw).lower()
+    s = (clean_text(raw) or "").lower()
     if not s:
         return "bulk_import"
     if any(t in s for t in ("facebook", "meta", "instagram", "lead ad", "leadads")):
@@ -4199,16 +4265,14 @@ def normalize_import_source(raw: str) -> str:
 
 @api_router.post("/leads/import")
 async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_current_user)):
-    filename = file.filename.lower()
-    
-    # Supported files: .csv, .xlsx, .xls
-    if not (filename.endswith(".csv") or filename.endswith(".xlsx") or filename.endswith(".xls")):
-        raise HTTPException(status_code=400, detail="Only CSV and Excel files (.xlsx, .xls) are supported.")
-    
     contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
+    upload_kind = sniff_upload_extension(file.filename, contents)
     records: List[Dict[str, str]] = []
 
-    if filename.endswith(".csv"):
+    if upload_kind == "csv":
         try:
             text = contents.decode("utf-8-sig")
             csv_reader = csv.reader(io.StringIO(text))
@@ -4227,16 +4291,9 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Failed to parse CSV: {str(e)}")
 
-    else: # Excel
+    else:  # Excel (.xlsx / .xls — .xls only if openpyxl can read it)
         try:
-            wb = openpyxl.load_workbook(filename=BytesIO(contents), data_only=True)
-            sheet = wb.active
-            rows = list(sheet.iter_rows(values_only=True))
-            if not rows:
-                raise HTTPException(status_code=400, detail="Excel file is empty.")
-            
-            header_idx, header_map = locate_import_header(rows)
-                
+            rows, header_idx, header_map = load_excel_import_rows(contents)
             for row in rows[header_idx + 1:]:
                 if not row or all(c is None or str(c).strip() == "" for c in row):
                     continue
