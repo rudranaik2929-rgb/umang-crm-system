@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Animated, Easing, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
@@ -68,6 +68,8 @@ export default function MyDashboard() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const router = useRouter();
+  const { width: screenWidth } = useWindowDimensions();
+  const kpiCardWidth = screenWidth < 400 ? '48%' : screenWidth < 720 ? '31%' : '23%';
   const cached = getSnapshot<any>('my-dashboard');
   const hasFreshCache = cached?.data?.missed_leads_total != null || cached?.data?.missed_leads != null;
   const [data, setData] = useState<any>(hasFreshCache ? cached.data : null);
@@ -147,9 +149,6 @@ export default function MyDashboard() {
   const newLeadsCount = Number(personal.emp_new_leads ?? 0);
   const backlogTotal = Number(personal.leads_total ?? 0);
   const cta = ROLE_CTA[role] || ROLE_CTA.admin;
-  const queuePlatformHelper = personal.housing_leads != null
-    ? `${personal.manual_leads ?? 0} Database · ${personal.housing_leads ?? 0} Housing · ${personal.meta_leads ?? 0} Meta`
-    : 'Tap for platform breakdown';
   const missedCount = Number(data.missed_leads_total ?? personal.emp_missed_leads ?? 0);
   const missedLeads = Array.isArray(data.missed_leads) ? data.missed_leads : [];
 
@@ -229,7 +228,7 @@ export default function MyDashboard() {
               <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>NEW LEADS</Text>
               <Text style={[styles.newLeadsVal, { color: accent }]}>{newLeadsCount}</Text>
               <Text style={[styles.scoreSub, { color: colors.textSecondary, textAlign: 'center' }]}>
-                Assigned in last 24h
+                Not yet updated — tap to call
               </Text>
             </Pressable>
             <Pressable
@@ -239,7 +238,7 @@ export default function MyDashboard() {
               <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>TOTAL LEADS</Text>
               <Text style={[styles.backlogVal, { color: colors.text }]}>{backlogTotal}</Text>
               <Text style={[styles.scoreSub, { color: colors.textSecondary, textAlign: 'center' }]}>
-                Previous backlog for calling
+                Ringing, visited, hot & more
               </Text>
             </Pressable>
           </View>
@@ -280,9 +279,9 @@ export default function MyDashboard() {
                 const value = personal[kpi.valueKey] ?? 0;
                 const roleHighlights = ROLE_HIGHLIGHT[role] || [];
                 const helper = kpi.metric === 'new_leads'
-                  ? 'Assigned in last 24h · tap for list'
+                  ? 'No status change yet · tap for list'
                   : kpi.metric === 'total'
-                    ? queuePlatformHelper
+                    ? 'Leads you already updated · tap for list'
                     : kpi.metric === 'missed_leads' && missedCount > 0
                     ? '24h+ no employee action'
                     : undefined;
@@ -295,6 +294,7 @@ export default function MyDashboard() {
                     icon={kpi.icon}
                     color={c}
                     colors={colors}
+                    cardWidth={kpiCardWidth}
                     highlight={forceHighlight || roleHighlights.includes(kpi.metric)}
                     onPress={() => handleKpiPress(kpi.metric)}
                     helper={helper}
@@ -411,12 +411,13 @@ function TempCard({ icon, label, value, color, desc, colors, testID }: any) {
   );
 }
 
-function KPI({ label, value, icon, color, colors, highlight, onPress, testID, helper }: any) {
+function KPI({ label, value, icon, color, colors, highlight, onPress, testID, helper, cardWidth }: any) {
   return (
     <Pressable
       testID={testID}
       onPress={onPress}
       style={[styles.kpiCard, {
+        width: cardWidth,
         backgroundColor: colors.surface,
         borderColor: highlight ? color + '60' : colors.border,
         borderWidth: highlight ? 1.5 : 1,
@@ -468,7 +469,7 @@ function LivePulse() {
 const styles = StyleSheet.create({
   content: { padding: 24, gap: 24 },
   hero: {
-    flexDirection: 'row', gap: 24,
+    flexDirection: 'row', flexWrap: 'wrap', gap: 24,
     padding: 28, borderRadius: 16, borderWidth: 1,
     alignItems: 'center',
   },
@@ -492,7 +493,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   ctaText: { color: '#fff', fontWeight: '600', fontSize: 13 },
-  scoreWrap: { alignItems: 'stretch', gap: 10, width: 200 },
+  scoreWrap: { alignItems: 'stretch', gap: 10, width: '100%', maxWidth: 320, flexGrow: 1, minWidth: 150 },
   newLeadsCard: {
     padding: 16, borderRadius: 12, borderWidth: 1, alignItems: 'center', gap: 4,
   },
@@ -515,8 +516,8 @@ const styles = StyleSheet.create({
   tempVal: { fontSize: 30, fontWeight: '700', letterSpacing: -0.5 },
   tempDesc: { fontSize: 11 },
 
-  kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
-  kpiCard: { width: 160, minWidth: 140, flexGrow: 1, maxWidth: 200, padding: 14, borderRadius: 10, gap: 6 },
+  kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-start' },
+  kpiCard: { minWidth: 130, flexGrow: 1, maxWidth: 220, padding: 14, borderRadius: 10, gap: 6 },
   kpiLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
   kpiVal: { fontSize: 26, fontWeight: '700', letterSpacing: -0.5 },
   missedBanner: {

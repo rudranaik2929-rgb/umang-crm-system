@@ -24,11 +24,11 @@ def _lead(lead_id: str, assigned_hours_ago: float, **extra):
 
 def test_personal_dashboard_counts_match_drill_down_lists():
     leads = [
-        _lead("old1", 30),
-        _lead("old2", 40, call_status="ringing"),
-        _lead("old3", 50, status="negative", priority="low_budget"),
-        _lead("old4", 60, stage="positive", priority="hot"),
-        _lead("new1", 2),
+        _lead("untouched", 30),
+        _lead("ringing", 40, call_status="ringing"),
+        _lead("negative", 50, status="negative", priority="low_budget"),
+        _lead("visited", 60, stage="positive", priority="hot"),
+        _lead("fresh", 2),
     ]
     activities = []
     counts = main.build_personal_dashboard_counts(leads, "telecaller", activities)
@@ -37,10 +37,10 @@ def test_personal_dashboard_counts_match_drill_down_lists():
         assert len(items) == count, f"{metric}: count {count} != list {len(items)}"
 
 
-def test_total_excludes_new_leads_within_24h():
-    leads = [_lead(f"old{i}", 30 + i) for i in range(24)]
-    leads += [_lead(f"new{i}", 0.2) for i in range(11)]
+def test_total_only_includes_actioned_leads():
+    leads = [_lead(f"untouched{i}", 30 + i) for i in range(24)]
+    leads += [_lead("ringing1", 5, call_status="ringing")]
     counts = main.build_personal_dashboard_counts(leads, "telecaller", [])
-    assert counts["total"] == 24
-    assert counts["new_leads"] == 11
-    assert len(main.personal_dashboard_metric_items("total", leads, "telecaller", [])) == 24
+    assert counts["total"] == 1
+    assert counts["new_leads"] == 24
+    assert len(main.personal_dashboard_metric_items("total", leads, "telecaller", [])) == 1

@@ -699,8 +699,31 @@ def is_missed_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool
     return assigned_at <= cutoff
 
 
+def has_employee_workflow_action(lead: Dict[str, Any]) -> bool:
+    """True when employee updated this lead (ringing, visited, not interested, hot, etc.)."""
+    if lead.get("status") == "negative":
+        return True
+    if clean_text(lead.get("call_status")):
+        return True
+    if lead.get("follow_up_at"):
+        return True
+    pr = _lead_priority(lead)
+    if pr in ("hot", "low_budget", "not_searching", HANDOFF_BOOKING, HANDOFF_LOAN):
+        return True
+    if lead.get("stage") not in (None, "new", "assigned"):
+        return True
+    last_action = parse_lead_ts(lead.get("last_employee_action_at"))
+    assigned_at = effective_assigned_at(lead)
+    if last_action and assigned_at:
+        if (last_action - assigned_at).total_seconds() >= 120:
+            return True
+    elif last_action:
+        return True
+    return False
+
+
 def is_newly_assigned_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool:
-    """Lead assigned to this employee within the last N hours — shown in New Leads, not Total."""
+    """Legacy time check — prefer has_employee_workflow_action for dashboard buckets."""
     if not lead.get("assigned_to"):
         return False
     assigned_at = effective_assigned_at(lead)
@@ -711,15 +734,15 @@ def is_newly_assigned_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS)
 
 
 def filter_employee_new_leads(emp_leads: List[Dict[str, Any]], hours: int = MISSED_LEAD_HOURS) -> List[Dict[str, Any]]:
-    """Assignments in the last 24h — separate from backlog Total Leads."""
+    """Assigned leads with no employee workflow update yet — My Dashboard New Leads."""
     rows = normalize_employee_leads(emp_leads)
-    return dedupe_leads([l for l in rows if is_newly_assigned_lead(l, hours=hours)])
+    return dedupe_leads([l for l in rows if not has_employee_workflow_action(l)])
 
 
 def filter_employee_backlog_leads(emp_leads: List[Dict[str, Any]], hours: int = MISSED_LEAD_HOURS) -> List[Dict[str, Any]]:
-    """Assignments older than 24h — Total Leads + workflow pills (calling, ringing, etc.)."""
+    """Leads where employee took action (ringing, visited, not interested, hot, etc.) — Total Leads."""
     rows = normalize_employee_leads(emp_leads)
-    return dedupe_leads([l for l in rows if not is_newly_assigned_lead(l, hours=hours)])
+    return dedupe_leads([l for l in rows if has_employee_workflow_action(l)])
 
 
 def filter_employee_missed_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -843,11 +866,11 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
 
 
 def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Optional[str] = None) -> Dict[str, int]:
-    """Per-employee assignment counts — new (last 24h) vs backlog (older) stay separate."""
+    """Per-employee counts — New = untouched; Total = employee has updated status."""
     rows = normalize_employee_leads(emp_leads)
     new_rows = filter_employee_new_leads(rows)
     backlog_rows = filter_employee_backlog_leads(rows)
-    queue_rows = filter_employee_queue_leads(backlog_rows, role)
+    queue_rows = filter_employee_queue_leads(new_rows, role)
     follow_rows = filter_employee_follow_up_leads(backlog_rows)
     in_progress = sum(
         1 for l in backlog_rows
@@ -5213,6 +5236,7 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     # Deduplicate activities
     cache_act_ids = {a.get("activity_id") for a in cache_activities}
     all_timeline = cache_activities + [a for a in timeline if a.get("activity_id") not in cache_act_ids]
+    all_timeline.sort(key=lambda a: a.get("created_at") or "", reverse=True)
     
     return {"lead": lead, "timeline": all_timeline}
 
@@ -5404,12 +5428,11 @@ async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_curren
 
 @api_router.patch("/leads/{lead_id}/notes/{activity_id}")
 async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: User = Depends(get_current_user)):
-    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id"})
-    if not leads:
-        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
-        if not cache_match:
-            raise HTTPException(404, "Lead not found")
-    body = format_activity_note_text(cu, p.text)
+    lead = get_lead_record(lead_id, "lead_id,assigned_to")
+    if not lead:
+        raise HTTPException(404, "Lead not found")
+    ensure_lead_edit_access(cu, lead)
+    body = format_activity_note_text(cu, strip_activity_actor_prefix(p.text or ""))
     if not body:
         raise HTTPException(400, detail="Note text is required.")
     rows = sb_select("activities", {
@@ -6787,8 +6810,8 @@ async def stats_me(cu: User=Depends(get_current_user)):
         platform_breakdown = {"total": 0, "housing": 0, "meta": 0, "manual": 0, "other": 0}
     elif cu.role != "admin" and emp_id:
         leads = fetch_employee_assigned_leads(cu, EMPLOYEE_WORKFLOW_LEAD_SELECT)
-        backlog_leads = filter_employee_backlog_leads(leads)
-        platform_breakdown = compute_platform_breakdown(backlog_leads)
+        new_lead_rows = filter_employee_new_leads(leads)
+        platform_breakdown = compute_platform_breakdown(new_lead_rows)
     else:
         leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
         backlog_leads = filter_employee_backlog_leads(leads)
@@ -6876,8 +6899,8 @@ PERSONAL_ACTIVITY_METRICS = list(dict.fromkeys(
 ))
 
 PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
-    "total": "Total Leads — Previous Assignments",
-    "new_leads": "New Leads — Assigned in Last 24 Hours",
+    "total": "Total Leads — Updated by You",
+    "new_leads": "New Leads — Not Yet Updated",
     "queue": "My Queue",
     "follow_ups": "Follow-ups",
     "completed": "Completed",

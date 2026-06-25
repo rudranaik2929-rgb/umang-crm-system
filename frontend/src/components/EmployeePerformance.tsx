@@ -38,7 +38,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
       <View style={styles.headerRow}>
         <View>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Employee Performance</Text>
-          <Text style={[styles.cardSub, { color: colors.textMuted }]}>New vs backlog leads — workflow boxes count previous assignments only</Text>
+          <Text style={[styles.cardSub, { color: colors.textMuted }]}>New = not updated yet · Total = employee has taken action</Text>
         </View>
         <Text style={[styles.cardSub, { color: colors.textMuted }]}>
           {employees.length} {employees.length === 1 ? 'employee' : 'employees'}
@@ -117,7 +117,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                   >
                     <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>NEW LEADS</Text>
                     <Text style={{ color: colors.primary, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.emp_new_leads ?? 0}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Assigned in last 24h</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Not yet updated</Text>
                   </Pressable>
                   <Pressable
                     onPress={onMetricPress ? () => onMetricPress(employee, 'total') : undefined}
@@ -126,7 +126,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                   >
                     <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>TOTAL LEADS</Text>
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.assigned_total ?? employee.leads_total ?? 0}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Previous backlog</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Updated by employee</Text>
                   </Pressable>
                 </View>
 

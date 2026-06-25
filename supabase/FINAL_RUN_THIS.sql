@@ -9,8 +9,9 @@
 --   • Workflow: Ringing, Visited, Hot, Not Interested, Follow Up
 --   • Missed Lead (24h no employee response after assign)
 --   • Employee performance + My Dashboard KPI boxes (count = drill-down list)
---   • My Dashboard: New Leads = assigned in last 24h; Total Leads = backlog 24h+
---   • Workflow pills (Hot, Ringing, Missed, etc.) count backlog only — not new assignments
+--   • My Dashboard: New Leads = assigned, not yet updated by employee
+--   • My Dashboard: Total Leads = employee took action (ringing, visited, hot, not interested, etc.)
+--   • Workflow pills (Hot, Ringing, Missed, etc.) count actioned leads only
 --   • Visit follow-ups, call_status, priority
 --
 -- Excel import (no extra columns — uses fields below):

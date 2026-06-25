@@ -8,7 +8,7 @@ import { WorkflowStatusBadge } from './Badge';
 
 const METRIC_LABELS: Record<string, string> = {
   total: 'Total Leads (Backlog)',
-  new_leads: 'New Leads (24h)',
+  new_leads: 'New Leads — Not Yet Updated',
   missed_leads: 'Missed Lead',
   hot: 'Hot',
   visited: 'Visited',

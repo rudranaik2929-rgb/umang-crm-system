@@ -138,7 +138,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
 
   useEffect(() => {
     const timeline = data?.timeline || [];
-    const latestCallNote = timeline.find((t: any) => t.type === 'call_note');
+    const latestCallNote = [...timeline]
+      .filter((t: any) => t.type === 'call_note')
+      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0];
     if (latestCallNote) {
       setNote(stripActivityActorPrefix(latestCallNote.text));
       setEditingNoteId(latestCallNote.activity_id || null);
@@ -230,7 +232,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
         const res = await api.post(`/leads/${leadId}/notes`, { text: note.trim(), type: 'call_note' });
         setEditingNoteId(res.data?.activity_id || null);
       }
-      await load(true);
+      const r = await api.get(`/leads/${leadId}`, { params: { _t: Date.now() } });
+      setData(r.data);
       onChanged?.();
     } finally {
       setBusy(null);
