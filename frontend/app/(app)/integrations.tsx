@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from
 import { Ionicons } from '@expo/vector-icons';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api, BACKEND, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, BACKEND, getSnapshot, setSnapshot, META_INTEGRATION_TIMEOUT_MS, integrationErrorMessage } from '../../src/lib/api';
 
 type IntegrationStatus = {
   facebook?: {
@@ -43,8 +43,11 @@ type FacebookVerify = {
   token_configured: boolean;
   token_valid: boolean;
   token_error?: string | null;
+  token_type?: string | null;
+  lead_api_ready?: boolean;
   db_meta_leads: number;
   forms_count?: number;
+  forms?: Array<{ id: string; name?: string; status?: string }>;
   page_id?: string | null;
   pending_webhook_events?: number;
   last_error?: string | null;
@@ -157,7 +160,7 @@ export default function Integrations() {
     setMetaSyncing(true);
     setMessage(null);
     try {
-      const r = await api.post('/integrations/facebook/resync', {});
+      const r = await api.post('/integrations/facebook/resync', {}, { timeout: META_INTEGRATION_TIMEOUT_MS });
       const created = Number(r.data?.created || 0);
       const failed = Number(r.data?.failed || 0);
       const retried = Number(r.data?.retried || 0);
@@ -170,7 +173,7 @@ export default function Integrations() {
       }
       await load();
     } catch (e: any) {
-      setMessage(e?.response?.data?.detail || 'Meta resync failed.');
+      setMessage(integrationErrorMessage(e, 'Meta resync failed.'));
     } finally {
       setMetaSyncing(false);
     }
@@ -178,19 +181,57 @@ export default function Integrations() {
 
   const runMetaImport = async () => {
     setMetaSyncing(true);
-    setMessage(null);
+    setMessage('Starting Meta import…');
     try {
-      const r = await api.post('/integrations/facebook/import', { days: 90, limit: 500 });
-      const created = Number(r.data?.created || 0);
-      const fetched = Number(r.data?.fetched || 0);
-      const duplicates = Number(r.data?.duplicates || 0);
-      const forms = Array.isArray(r.data?.forms) ? r.data.forms.length : 0;
-      setMessage(
-        `Meta import: ${fetched} fetched from ${forms} form(s), ${created} new, ${duplicates} already in CRM (last 90 days).`,
-      );
+      let verifyData = fbVerify;
+      if (!verifyData?.forms?.length) {
+        const v = await api.get('/integrations/facebook/verify', { timeout: 60000 });
+        verifyData = v.data || null;
+        setFbVerify(verifyData);
+      }
+      const forms = Array.isArray(verifyData?.forms) ? verifyData.forms.filter((f) => f?.id) : [];
+      const chunks: Array<{ form_id?: string; label: string }> = forms.length
+        ? forms.map((f) => ({ form_id: f.id, label: f.name || f.id }))
+        : [{ label: 'all forms' }];
+
+      let fetched = 0;
+      let created = 0;
+      let duplicates = 0;
+      let ignored = 0;
+      let failed = 0;
+
+      for (let i = 0; i < chunks.length; i += 1) {
+        const chunk = chunks[i];
+        setMessage(`Importing Meta form ${i + 1}/${chunks.length}: ${chunk.label}…`);
+        const r = await api.post(
+          '/integrations/facebook/import',
+          { days: 90, limit: 300, form_id: chunk.form_id },
+          { timeout: META_INTEGRATION_TIMEOUT_MS },
+        );
+        fetched += Number(r.data?.fetched || 0);
+        created += Number(r.data?.created || 0);
+        duplicates += Number(r.data?.duplicates || 0);
+        ignored += Number(r.data?.ignored || 0);
+        failed += Number(r.data?.failed || 0);
+      }
+
+      const formWord = chunks.length === 1 ? '1 form' : `${chunks.length} forms`;
+      if (fetched === 0) {
+        setMessage(
+          `Meta import: 0 leads found in the last 90 days across ${formWord}. Submit a test lead on Facebook or check Lead Ad forms on Page ${verifyData?.page_id || '—'}.`,
+        );
+      } else if (created === 0 && ignored > 0) {
+        setMessage(
+          `Meta import: ${fetched} fetched from ${formWord}, but ${ignored} had no phone/email in the form. Edit your Lead Ad form to require phone number.`,
+        );
+      } else {
+        setMessage(
+          `Meta import: ${fetched} fetched from ${formWord}, ${created} new, ${duplicates} already in CRM${ignored ? `, ${ignored} missing phone/email` : ''}${failed ? `, ${failed} failed` : ''} (last 90 days).`,
+        );
+      }
       await load();
     } catch (e: any) {
-      setMessage(e?.response?.data?.detail || 'Meta import failed.');
+      setMessage(integrationErrorMessage(e, 'Meta import failed.'));
     } finally {
       setMetaSyncing(false);
     }
@@ -210,8 +251,11 @@ export default function Integrations() {
       }
       return fbVerify.token_error;
     }
-    if (fbVerify?.token_type === 'user') {
+    if (fbVerify?.token_type === 'user' && !fbVerify?.lead_api_ready) {
       return 'User token detected — Lead Ads need a Page token. Graph API Explorer → select your Facebook Page → leads_retrieval → Generate token → paste in Render.';
+    }
+    if (fbVerify?.token_type === 'system_user' && fbVerify?.lead_api_ready) {
+      return `System User token OK · Page ${fbVerify?.page_id || '—'} · ${fbVerify?.forms_count ?? 0} form(s). Click Import Past Meta Leads.`;
     }
     if ((fbVerify?.pending_webhook_events || 0) > 0) {
       return `${fbVerify?.pending_webhook_events} webhook lead(s) waiting — click Resync Webhooks after token is set.`;

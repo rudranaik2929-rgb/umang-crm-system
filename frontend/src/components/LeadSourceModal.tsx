@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api } from '../lib/api';
+import { api, META_INTEGRATION_TIMEOUT_MS } from '../lib/api';
 import { LeadDetailModal } from './LeadDetailModal';
 import { WorkflowStatusBadge } from './Badge';
 import {
@@ -198,7 +198,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
       if (platform.platform === 'housing') {
         await api.post('/integrations/housing/poll', {});
         } else if (platform.platform === 'meta') {
-          await api.post('/integrations/facebook/import', { days: 90, limit: 500 });
+          await api.post('/integrations/facebook/poll', {}, { timeout: META_INTEGRATION_TIMEOUT_MS });
         }
       const res = await api.get(statsPath);
       const normalized = normalizePlatformData(res.data);

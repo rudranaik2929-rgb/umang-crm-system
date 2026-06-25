@@ -231,7 +231,7 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
                 <View style={[styles.infoCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
                   <Text style={[styles.infoTitle, { color: colors.text }]}>Excel headers (row 1)</Text>
                   <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                    Lead Date · Lead Name · Phone Number · Locality · Configuration · Price · Building/Project Name · Assign to
+                    Lead Date · Lead Name · Phone Number · Locality · Configuration · Price · Building/Project Name · Assign to · Source (optional: Facebook / Meta)
                   </Text>
                   <Text style={[styles.infoText, { color: colors.textMuted, marginTop: 8, fontStyle: 'italic' }]}>
                     Example: 30/12/2025 · Shastri Ramnarayan mishra · (+91)-9869122319 · Nalasopara West · 1 BHK · 31.5 Lac · Vimal Classic · khyati shah

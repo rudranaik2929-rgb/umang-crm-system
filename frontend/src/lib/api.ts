@@ -274,6 +274,20 @@ export function clearSnapshots() {
     } catch {}
 }
 
+export const META_INTEGRATION_TIMEOUT_MS = 180000;
+
+export function integrationErrorMessage(error: any, fallback: string): string {
+    if (error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')) {
+        return `${fallback} The server took too long — Meta import runs form-by-form and may need 1–3 minutes. Deploy the latest backend, then try Import again.`;
+    }
+    const detail = error?.response?.data?.detail;
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (Array.isArray(detail)) {
+        return detail.map((item) => item?.msg || String(item)).filter(Boolean).join('; ');
+    }
+    return fallback;
+}
+
 export { USER_SNAPSHOT_KEY };
 
 export default api;

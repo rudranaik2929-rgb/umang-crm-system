@@ -2563,10 +2563,11 @@ def find_existing_integrated_lead(phone: str, email: Optional[str], source: str,
             return lead
     return None
 
-def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> Dict[str, Any]:
+def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, quiet: bool = False) -> Dict[str, Any]:
     normalized = lead_from_payload(payload, source)
     if not normalized["phone"] and not normalized.get("email"):
-        record_integration_event(source, payload, "ignored", external_id=normalized.get("external_lead_id"), error="Missing phone/email")
+        if not quiet:
+            record_integration_event(source, payload, "ignored", external_id=normalized.get("external_lead_id"), error="Missing phone/email")
         return {"status": "ignored", "reason": "missing_phone_or_email", "payload": normalized}
 
     existing = find_existing_integrated_lead(
@@ -2583,8 +2584,9 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
         updated = sb_update("leads", "lead_id", existing["lead_id"], update_data) if len(update_data) > 1 else existing
         merged = {**existing, **update_data}
         update_cached_lead(existing["lead_id"], update_data)
-        log_activity(actor, "integration_duplicate", f"Duplicate lead received from {source}; existing record refreshed.", lead_id=existing["lead_id"])
-        record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
+        if not quiet:
+            log_activity(actor, "integration_duplicate", f"Duplicate lead received from {source}; existing record refreshed.", lead_id=existing["lead_id"])
+            record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
         return {"status": "duplicate", "lead": updated or merged, "lead_id": existing["lead_id"]}
 
     brokerage = is_brokerage_lead(source, payload)
@@ -2626,11 +2628,12 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None) -> 
     lead_record = result or base_lead
     SESSION_CACHE["leads"].insert(0, lead_record)
     invalidate_leads_cache()
-    if brokerage:
-        log_activity(actor, "broker_lead_received", f"Brokerage lead stored for future: {normalized['name']} ({source})", lead_id=lead_id)
-    else:
-        log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']} (awaiting manager assignment)", lead_id=lead_id)
-    record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
+    if not quiet:
+        if brokerage:
+            log_activity(actor, "broker_lead_received", f"Brokerage lead stored for future: {normalized['name']} ({source})", lead_id=lead_id)
+        else:
+            log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']} (awaiting manager assignment)", lead_id=lead_id)
+        record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
     return {"status": "created", "lead": lead_record, "lead_id": lead_id}
 
 def extract_facebook_lead_events(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -2914,13 +2917,44 @@ def list_facebook_form_leads(form_id: str, limit: int = 500, since_ts: Optional[
         params["filtering"] = json.dumps([{"field": "time_created", "operator": "GREATER_THAN", "value": since_ts}])
     return facebook_graph_paginate(f"{form_id}/leads", params, max_items=limit, access_token=access_token)
 
-def import_facebook_graph_lead(graph_lead: Dict[str, Any]) -> Dict[str, Any]:
+def _load_facebook_external_ids() -> set:
+    """Preload Meta leadgen IDs already stored in CRM (speeds bulk import)."""
+    known: set = set()
+    offset = 0
+    while offset < 10000:
+        rows = sb_select("leads", {
+            "source": "eq.Facebook",
+            "select": "external_lead_id",
+            "limit": "1000",
+            "offset": str(offset),
+        })
+        if not rows:
+            break
+        for row in rows:
+            eid = clean_text(row.get("external_lead_id"))
+            if eid:
+                known.add(eid)
+        if len(rows) < 1000:
+            break
+        offset += 1000
+    return known
+
+def import_facebook_graph_lead(
+    graph_lead: Dict[str, Any],
+    known_external_ids: Optional[set] = None,
+    *,
+    quiet: bool = False,
+) -> Dict[str, Any]:
     leadgen_id = clean_text(graph_lead.get("id"))
     if not leadgen_id or leadgen_id in META_FAKE_LEADGEN_IDS:
         return {"status": "ignored", "reason": "fake_or_missing_id", "leadgen_id": leadgen_id}
+    if known_external_ids is not None and leadgen_id in known_external_ids:
+        return {"status": "duplicate", "leadgen_id": leadgen_id, "reason": "already_imported"}
     payload = normalize_meta_field_payload(facebook_fields_to_payload(graph_lead, leadgen_id))
-    result = create_integrated_lead(payload, "Facebook")
+    result = create_integrated_lead(payload, "Facebook", quiet=quiet)
     result["leadgen_id"] = leadgen_id
+    if known_external_ids is not None and leadgen_id and result.get("status") in ("created", "duplicate"):
+        known_external_ids.add(leadgen_id)
     return result
 
 def merge_facebook_meta_fields(lead_payload: Dict[str, Any], event: Dict[str, Any]) -> Dict[str, Any]:
@@ -3324,6 +3358,7 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
     token_me_id: Optional[str] = None
     token_type: Optional[str] = None
     forms_count = 0
+    forms_summary: List[Dict[str, Any]] = []
     page_id_resolved: Optional[str] = None
     page_id_env_set = bool(clean_text(FACEBOOK_PAGE_ID))
     if not token_configured:
@@ -3344,7 +3379,7 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
                 if env_page and token_me_id == env_page:
                     token_type = "page"
                 elif env_page and token_me_id and token_me_id != env_page:
-                    token_type = "user"
+                    token_type = "system_user"
                 else:
                     token_type = "page" if token_me_id else "unknown"
                 try:
@@ -3366,6 +3401,11 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
                     page_id_resolved, page_token = resolve_facebook_page_context(FACEBOOK_PAGE_ID or None)
                     forms = list_facebook_leadgen_forms(page_id_resolved, access_token=page_token)
                     forms_count = len(forms)
+                    forms_summary = [
+                        {"id": clean_text(f.get("id")), "name": clean_text(f.get("name")), "status": clean_text(f.get("status"))}
+                        for f in forms
+                        if clean_text(f.get("id"))
+                    ]
                     lead_api_ready = True
                     token_valid = True
                 except HTTPException as exc:
@@ -3418,6 +3458,7 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
         "auto_sync_enabled": FACEBOOK_AUTO_SYNC_ENABLED,
         "db_meta_leads": db_meta_real,
         "forms_count": forms_count,
+        "forms": forms_summary,
         "page_id": page_id_resolved or normalize_meta_page_id(FACEBOOK_PAGE_ID) or None,
         "pending_webhook_events": len(pending_ids),
         "last_error": last_graph_error.get("error") if last_graph_error else None,
@@ -3517,6 +3558,7 @@ def _facebook_import_impl(
     if not form_ids:
         raise HTTPException(status_code=404, detail="No Lead Ad forms found for this Facebook Page. Set FACEBOOK_FORM_ID if needed.")
 
+    known_external_ids = _load_facebook_external_ids()
     fetched = created = duplicates = ignored = failed = 0
     results: List[Dict[str, Any]] = []
 
@@ -3530,7 +3572,7 @@ def _facebook_import_impl(
         fetched += len(graph_leads)
         for graph_lead in graph_leads:
             try:
-                result = import_facebook_graph_lead(graph_lead)
+                result = import_facebook_graph_lead(graph_lead, known_external_ids, quiet=True)
                 status = result.get("status")
                 if status == "created":
                     created += 1
@@ -3831,6 +3873,8 @@ def map_import_headers(headers: List[Any]) -> Dict[str, int]:
             header_mapping["preferred_property"] = idx
         elif any(term in h_clean for term in ("notes", "remarks", "comments")):
             header_mapping["notes"] = idx
+        elif any(term in h_clean for term in ("source", "lead source", "platform")):
+            header_mapping["source"] = idx
         elif "name" in h_clean and not any(
             term in h_clean for term in ("building", "project", "property", "assign", "employee")
         ):
@@ -4006,7 +4050,20 @@ def import_row_to_record(row: List[Any], header_map: Dict[str, int]) -> Dict[str
         "notes": text_val("notes"),
         "assign_to": text_val("assign_to"),
         "lead_date": parsed_date or "",
+        "source": text_val("source"),
     }
+
+
+def normalize_import_source(raw: str) -> str:
+    """Map spreadsheet Source column to CRM source (Meta → Facebook for platform stats)."""
+    s = clean_text(raw).lower()
+    if not s:
+        return "bulk_import"
+    if any(t in s for t in ("facebook", "meta", "instagram", "lead ad", "leadads")):
+        return "Facebook"
+    if "housing" in s:
+        return "Housing.com"
+    return raw.strip() or "bulk_import"
 
 
 @api_router.post("/leads/import")
@@ -4103,7 +4160,7 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
             "location": r.get("location", ""),
             "property_type": r.get("property_type", ""),
             "notes": lead_notes,
-            "source": "bulk_import",
+            "source": normalize_import_source(r.get("source", "")),
             "stage": "new",
             "status": "active",
             "created_at": lead_created,
