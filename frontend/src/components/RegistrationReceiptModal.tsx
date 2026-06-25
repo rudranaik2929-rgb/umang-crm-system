@@ -189,8 +189,8 @@ export function RegistrationReceiptModal({
 
             <Text style={[styles.section, { color: colors.textMuted, marginTop: 8 }]}>CHARGE BREAKDOWN (₹)</Text>
             {([
-              ['flat_cost', 'Flat Cost'],
               ['agreement_value', 'Agreement Value'],
+              ['flat_cost', 'Interior Cost'],
               ['stamp_duty', 'Stamp Duty'],
               ['registration_fees', 'Registration Charges'],
               ['gst', 'GST'],

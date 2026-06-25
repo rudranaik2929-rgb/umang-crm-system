@@ -34,11 +34,11 @@ const BOOKING_TASKS = [
 
 const CHARGE_FIELDS = [
   { key: 'agreement_value', label: 'Agreement Value' },
+  { key: 'flat_cost', label: 'Interior Cost' },
   { key: 'stamp_duty', label: 'Stamp Duty' },
   { key: 'registration_fees', label: 'Registration Charges' },
   { key: 'gst', label: 'GST' },
   { key: 'society_charges', label: 'Society Charges' },
-  { key: 'flat_cost', label: 'Flat Cost' },
 ] as const;
 
 function formatRupee(n: number) {
@@ -647,8 +647,8 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
               <FormField label="BOOKING AMOUNT (₹, OPTIONAL)" testID="booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
               <FormField label="TOKEN RECEIVED (₹, OPTIONAL)" testID="booking-token-input" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
               <Text style={[styles.label, { color: colors.textMuted, marginTop: 16 }]}>COST BREAKDOWN (ALL OPTIONAL)</Text>
-              <FormField label="FLAT COST (₹)" testID="booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
               <FormField label="AGREEMENT VALUE (₹)" testID="booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
+              <FormField label="INTERIOR COST (₹)" testID="booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
               <FormField label="STAMP DUTY (₹)" testID="booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
               <FormField label="REGISTRATION FEES (₹)" testID="booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
               <FormField label="GST (₹)" testID="booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
@@ -737,8 +737,8 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
             <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
             <FormField label="BOOKING AMOUNT (₹)" testID="edit-booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
             <FormField label="TOKEN RECEIVED (₹)" testID="edit-booking-token" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
-            <FormField label="FLAT COST (₹)" testID="edit-booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
             <FormField label="AGREEMENT VALUE (₹)" testID="edit-booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
+            <FormField label="INTERIOR COST (₹)" testID="edit-booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
             <FormField label="STAMP DUTY (₹)" testID="edit-booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
             <FormField label="REGISTRATION FEES (₹)" testID="edit-booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
             <FormField label="GST (₹)" testID="edit-booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
