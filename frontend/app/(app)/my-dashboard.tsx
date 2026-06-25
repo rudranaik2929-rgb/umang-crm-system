@@ -41,7 +41,8 @@ const MY_PERFORMANCE_KPIS: Array<{
   colorKey: string;
   valueKey: string;
 }> = [
-  { label: 'My Queue', metric: 'total', icon: 'list-outline', colorKey: 'primary', valueKey: 'leads_total' },
+  { label: 'New Leads', metric: 'new_leads', icon: 'sparkles-outline', colorKey: 'primary', valueKey: 'emp_new_leads' },
+  { label: 'Total Leads', metric: 'total', icon: 'list-outline', colorKey: 'info', valueKey: 'leads_total' },
   { label: 'Missed Lead', metric: 'missed_leads', icon: 'alert-circle', colorKey: 'negative', valueKey: 'emp_missed_leads' },
   { label: 'Hot', metric: 'hot', icon: 'flame', colorKey: 'warning', valueKey: 'emp_hot' },
   { label: 'Visited', metric: 'visited', icon: 'location', colorKey: 'info', valueKey: 'emp_visited' },
@@ -143,8 +144,8 @@ export default function MyDashboard() {
   const accent = ROLE_ACCENT[role] || colors.primary;
   const personal = data.personal;
   const leads = data.leads;
-  const score = personal.score_10 || 0;
-  const scorePct = (score / 10) * 100;
+  const newLeadsCount = Number(personal.emp_new_leads ?? 0);
+  const backlogTotal = Number(personal.leads_total ?? 0);
   const cta = ROLE_CTA[role] || ROLE_CTA.admin;
   const queuePlatformHelper = personal.housing_leads != null
     ? `${personal.manual_leads ?? 0} Database · ${personal.housing_leads ?? 0} Housing · ${personal.meta_leads ?? 0} Meta`
@@ -154,7 +155,11 @@ export default function MyDashboard() {
 
   const handleKpiPress = (metric: string) => {
     if (metric === 'total') {
-      setSourceModalVisible(true);
+      setActivityMetric('total');
+      return;
+    }
+    if (metric === 'new_leads') {
+      setActivityMetric('new_leads');
       return;
     }
     setActivityMetric(metric);
@@ -223,19 +228,28 @@ export default function MyDashboard() {
             ) : null}
           </View>
 
-          {/* Score ring */}
+          {/* New leads + backlog summary */}
           <View style={styles.scoreWrap}>
-            <View style={[styles.scoreRing, { borderColor: colors.border }]}>
-              <View style={[styles.scoreFill, { backgroundColor: accent + '14', borderColor: accent, transform: [{ rotate: `${(scorePct / 100) * 360}deg` }] }]} />
-              <View style={[styles.scoreInner, { backgroundColor: colors.surface }]}>
-                <Text style={[styles.scoreVal, { color: accent }]}>{score}</Text>
-                <Text style={[styles.scoreMax, { color: colors.textMuted }]}>/ 10</Text>
-              </View>
-            </View>
-            <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>PERFORMANCE SCORE</Text>
-            <Text style={[styles.scoreSub, { color: colors.text }]}>
-              {score >= 8 ? 'Outstanding 🔥' : score >= 5 ? 'Doing well 👍' : score >= 2 ? 'Getting started' : 'Make your first move'}
-            </Text>
+            <Pressable
+              onPress={() => setActivityMetric('new_leads')}
+              style={[styles.newLeadsCard, { backgroundColor: accent + '12', borderColor: accent + '40' }]}
+            >
+              <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>NEW LEADS</Text>
+              <Text style={[styles.newLeadsVal, { color: accent }]}>{newLeadsCount}</Text>
+              <Text style={[styles.scoreSub, { color: colors.textSecondary, textAlign: 'center' }]}>
+                Assigned in last 24h
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setActivityMetric('total')}
+              style={[styles.backlogCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+            >
+              <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>TOTAL LEADS</Text>
+              <Text style={[styles.backlogVal, { color: colors.text }]}>{backlogTotal}</Text>
+              <Text style={[styles.scoreSub, { color: colors.textSecondary, textAlign: 'center' }]}>
+                Previous backlog for calling
+              </Text>
+            </Pressable>
           </View>
         </View>
 
@@ -273,9 +287,11 @@ export default function MyDashboard() {
                 const c = colorMap[kpi.colorKey] || colors.primary;
                 const value = personal[kpi.valueKey] ?? 0;
                 const roleHighlights = ROLE_HIGHLIGHT[role] || [];
-                const helper = kpi.metric === 'total'
-                  ? queuePlatformHelper
-                  : kpi.metric === 'missed_leads' && missedCount > 0
+                const helper = kpi.metric === 'new_leads'
+                  ? 'Assigned in last 24h · tap for list'
+                  : kpi.metric === 'total'
+                    ? queuePlatformHelper
+                    : kpi.metric === 'missed_leads' && missedCount > 0
                     ? '24h+ no employee action'
                     : undefined;
                 const forceHighlight = kpi.metric === 'missed_leads' && missedCount > 0;
@@ -484,24 +500,17 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   ctaText: { color: '#fff', fontWeight: '600', fontSize: 13 },
-  scoreWrap: { alignItems: 'center', gap: 8, width: 200 },
-  scoreRing: {
-    width: 160, height: 160, borderRadius: 80,
-    borderWidth: 8, alignItems: 'center', justifyContent: 'center',
-    overflow: 'hidden',
+  scoreWrap: { alignItems: 'stretch', gap: 10, width: 200 },
+  newLeadsCard: {
+    padding: 16, borderRadius: 12, borderWidth: 1, alignItems: 'center', gap: 4,
   },
-  scoreFill: {
-    position: 'absolute', width: 160, height: 160, borderRadius: 80,
-    borderWidth: 8,
+  newLeadsVal: { fontSize: 42, fontWeight: '800', letterSpacing: -1 },
+  backlogCard: {
+    padding: 14, borderRadius: 12, borderWidth: 1, alignItems: 'center', gap: 4,
   },
-  scoreInner: {
-    width: 130, height: 130, borderRadius: 65,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  scoreVal: { fontSize: 48, fontWeight: '700', letterSpacing: -1 },
-  scoreMax: { fontSize: 12, marginTop: -6 },
-  scoreLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.4, marginTop: 4 },
-  scoreSub: { fontSize: 13, fontWeight: '600' },
+  backlogVal: { fontSize: 28, fontWeight: '800', letterSpacing: -0.5 },
+  scoreLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.4 },
+  scoreSub: { fontSize: 11, fontWeight: '600' },
 
   section: { fontSize: 11, fontWeight: '700', letterSpacing: 1.4, marginBottom: 12 },
 

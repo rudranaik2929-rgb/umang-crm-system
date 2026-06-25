@@ -699,6 +699,29 @@ def is_missed_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool
     return assigned_at <= cutoff
 
 
+def is_newly_assigned_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS) -> bool:
+    """Lead assigned to this employee within the last N hours — shown in New Leads, not Total."""
+    if not lead.get("assigned_to"):
+        return False
+    assigned_at = effective_assigned_at(lead)
+    if not assigned_at:
+        return False
+    cutoff = now_utc() - timedelta(hours=hours)
+    return assigned_at > cutoff
+
+
+def filter_employee_new_leads(emp_leads: List[Dict[str, Any]], hours: int = MISSED_LEAD_HOURS) -> List[Dict[str, Any]]:
+    """Assignments in the last 24h — separate from backlog Total Leads."""
+    rows = normalize_employee_leads(emp_leads)
+    return dedupe_leads([l for l in rows if is_newly_assigned_lead(l, hours=hours)])
+
+
+def filter_employee_backlog_leads(emp_leads: List[Dict[str, Any]], hours: int = MISSED_LEAD_HOURS) -> List[Dict[str, Any]]:
+    """Assignments older than 24h — Total Leads + workflow pills (calling, ringing, etc.)."""
+    rows = normalize_employee_leads(emp_leads)
+    return dedupe_leads([l for l in rows if not is_newly_assigned_lead(l, hours=hours)])
+
+
 def filter_employee_missed_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Leads assigned 24h+ ago with no employee status update — My Dashboard Missed Lead box."""
     rows = normalize_employee_leads(emp_leads)
@@ -799,6 +822,8 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
         ]
     if key in ("missed_leads", "missed"):
         return filter_employee_missed_leads(emp_leads)
+    if key in ("new_leads", "new", "assigned_new"):
+        return filter_employee_new_leads(emp_leads)
     return [l for l in rows if classify_employee_performance_metric(l) == key]
 
 
@@ -818,30 +843,36 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
 
 
 def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Optional[str] = None) -> Dict[str, int]:
-    """Per-employee assignment counts — dedupe within this employee's leads only."""
+    """Per-employee assignment counts — new (last 24h) vs backlog (older) stay separate."""
     rows = normalize_employee_leads(emp_leads)
-    queue_rows = filter_employee_queue_leads(rows, role)
+    new_rows = filter_employee_new_leads(rows)
+    backlog_rows = filter_employee_backlog_leads(rows)
+    queue_rows = filter_employee_queue_leads(backlog_rows, role)
     follow_rows = filter_employee_follow_up_leads(rows)
     in_progress = sum(
-        1 for l in rows
+        1 for l in backlog_rows
         if l.get("status") == "active"
         and l.get("stage") not in workspace_queue_stages(role)
         and l.get("stage") != "closed"
     )
-    workflow = compute_employee_workflow_stats(rows)
+    workflow = compute_employee_workflow_stats(backlog_rows)
     return {
-        "assigned_total": len(rows),
+        "assigned_total": len(backlog_rows),
+        "emp_new_leads": len(new_rows),
         "assigned_queue": len(queue_rows),
         "assigned_in_progress": in_progress,
         "assigned_active": workflow["emp_active"],
-        "assigned_completed": sum(1 for l in rows if l.get("stage") == "closed"),
+        "assigned_completed": sum(1 for l in backlog_rows if l.get("stage") == "closed"),
         "assigned_positive": sum(
-            1 for l in rows
+            1 for l in backlog_rows
             if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]
             and l.get("status") != "negative"
         ),
         "assigned_not_interested": workflow["emp_not_interested"],
-        "assigned_new": sum(1 for l in rows if l.get("stage") in ["new", "assigned"] and l.get("status") != "negative"),
+        "assigned_new": sum(
+            1 for l in backlog_rows
+            if l.get("stage") in ["new", "assigned"] and l.get("status") != "negative"
+        ),
         "assigned_follow_ups": len(follow_rows),
         **workflow,
     }
@@ -6723,7 +6754,8 @@ async def stats_me(cu: User=Depends(get_current_user)):
         "missed_leads_total": len(missed_rows),
         "personal": {
             "actions_total": len(activities),
-            "leads_total": len(my_queue_leads) if emp_id or cu.role == "admin" else 0,
+            "leads_total": assignment["assigned_total"],
+            "emp_new_leads": assignment["emp_new_leads"],
             "assigned_active": assignment["assigned_active"],
             "assigned_completed": assignment["assigned_completed"],
             "assigned_queue": assignment["assigned_queue"],
@@ -6757,18 +6789,19 @@ async def stats_me(cu: User=Depends(get_current_user)):
     }
 
 EMPLOYEE_METRIC_KEYS = [
-    "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
-    "ringing", "follow_ups", "missed_leads",
+    "total", "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
+    "ringing", "follow_ups", "missed_leads", "new_leads",
 ]
 
 PERSONAL_ACTIVITY_METRICS = [
-    "total", "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
+    "total", "new_leads", "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
     "call_notes", "bookings_done", "loans_done", "active", "hot", "visited",
     "not_interested", "booking_done", "low_budget", "ringing", "missed_leads",
 ]
 
 PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
-    "total": "My Queue — Active Leads",
+    "total": "Total Leads — Previous Assignments",
+    "new_leads": "New Leads — Assigned in Last 24 Hours",
     "queue": "My Queue",
     "follow_ups": "Follow-ups",
     "completed": "Completed",
@@ -6806,12 +6839,14 @@ def filter_personal_activity(
     key = (metric_key or "").strip().lower()
     rows = dedupe_leads(emp_leads)
     if key in ("total", "all", "leads_total", "assigned_total"):
-        return {"kind": "leads", "items": filter_employee_my_queue_leads(rows)}
+        return {"kind": "leads", "items": filter_employee_backlog_leads(rows)}
+    if key in ("new_leads", "new", "assigned_new"):
+        return {"kind": "leads", "items": filter_employee_new_leads(rows)}
     if key in ("queue", "assigned_queue"):
-        items = filter_employee_queue_leads(rows, role)
+        items = filter_employee_queue_leads(filter_employee_backlog_leads(rows), role)
         return {"kind": "leads", "items": items}
     if key in ("follow_ups", "followups", "assigned_follow_ups"):
-        items = filter_employee_follow_up_leads(rows)
+        items = filter_employee_follow_up_leads(filter_employee_backlog_leads(rows))
         return {"kind": "leads", "items": items}
     if key in ("completed", "assigned_completed", "closed_deals"):
         items = [l for l in rows if l.get("stage") == "closed"]
@@ -6824,7 +6859,7 @@ def filter_personal_activity(
         ]
         return {"kind": "leads", "items": items}
     if key in ("negatives", "not_interested"):
-        items = filter_employee_metric_leads(rows, "not_interested")
+        items = filter_employee_metric_leads(filter_employee_backlog_leads(rows), "not_interested")
         return {"kind": "leads", "items": items}
     if key == "call_notes":
         items = [a for a in activities if "call" in str(a.get("type", "")).lower()]
@@ -6838,7 +6873,8 @@ def filter_personal_activity(
     if key in ("missed_leads", "missed"):
         return {"kind": "leads", "items": filter_employee_missed_leads(rows)}
     if key in EMPLOYEE_METRIC_KEYS:
-        return {"kind": "leads", "items": filter_employee_metric_leads(rows, key)}
+        backlog = filter_employee_backlog_leads(rows)
+        return {"kind": "leads", "items": filter_employee_metric_leads(backlog, key)}
     raise HTTPException(400, detail=f"Unknown activity metric: {key}")
 
 
@@ -6916,10 +6952,16 @@ async def list_employee_metric_leads(
     employees = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,user_id", "limit": "1"})
     employee = employees[0] if employees else {"employee_id": employee_id}
     emp_leads = leads_for_employee_record(employee, all_leads)
-    if key in ("missed_leads", "missed"):
+    if key in ("new_leads", "new", "assigned_new"):
+        filtered = filter_employee_new_leads(emp_leads)
+    elif key in ("total", "backlog", "assigned_total"):
+        filtered = filter_employee_backlog_leads(emp_leads)
+    elif key in ("missed_leads", "missed"):
         filtered = filter_employee_missed_leads(emp_leads)
+    elif key in EMPLOYEE_METRIC_KEYS:
+        filtered = filter_employee_metric_leads(filter_employee_backlog_leads(emp_leads), key)
     else:
-        filtered = filter_employee_metric_leads(emp_leads, key)
+        filtered = []
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     return {
         "employee_id": employee_id,

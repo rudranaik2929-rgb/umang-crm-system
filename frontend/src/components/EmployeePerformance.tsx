@@ -38,7 +38,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
       <View style={styles.headerRow}>
         <View>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Employee Performance</Text>
-          <Text style={[styles.cardSub, { color: colors.textMuted }]}>Assigned leads by workflow stage — tap any box for list</Text>
+          <Text style={[styles.cardSub, { color: colors.textMuted }]}>New vs backlog leads — workflow boxes count previous assignments only</Text>
         </View>
         <Text style={[styles.cardSub, { color: colors.textMuted }]}>
           {employees.length} {employees.length === 1 ? 'employee' : 'employees'}
@@ -69,11 +69,6 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
               marketing: '#EC4899',
             };
             const roleColor = roleColorMap[employee.role] || colors.primary;
-            const score = (employee.emp_hot ?? 0) * 3
-              + (employee.emp_visited ?? 0) * 2
-              + (employee.emp_booking_done ?? 0) * 5
-              - (employee.emp_not_interested ?? 0)
-              - (employee.emp_missed_leads ?? 0) * 2;
 
             return (
               <View
@@ -115,14 +110,24 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                 </View>
 
                 <View style={[styles.scoreBanner, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
-                  <View>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>PERFORMANCE SCORE</Text>
-                    <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{score}</Text>
-                  </View>
-                  <View style={{ alignItems: 'flex-end' }}>
+                  <Pressable
+                    onPress={onMetricPress ? () => onMetricPress(employee, 'new_leads') : undefined}
+                    style={{ flex: 1 }}
+                    disabled={!onMetricPress}
+                  >
+                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>NEW LEADS</Text>
+                    <Text style={{ color: colors.primary, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.emp_new_leads ?? 0}</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Assigned in last 24h</Text>
+                  </Pressable>
+                  <Pressable
+                    onPress={onMetricPress ? () => onMetricPress(employee, 'total') : undefined}
+                    style={{ alignItems: 'flex-end' }}
+                    disabled={!onMetricPress}
+                  >
                     <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>TOTAL LEADS</Text>
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.assigned_total ?? employee.leads_total ?? 0}</Text>
-                  </View>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Previous backlog</Text>
+                  </Pressable>
                 </View>
 
                 <View style={styles.statusRow}>
