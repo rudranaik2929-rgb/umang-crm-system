@@ -131,7 +131,7 @@ async def rate_limit_middleware(request: Request, call_next):
         return await call_next(request)
 
     path = request.url.path
-    if path in {"/", "/debug-config"}:
+    if path in {"/", "/debug-config"} or path.startswith("/api/auth/"):
         return await call_next(request)
 
     forwarded_for = request.headers.get("x-forwarded-for", "")
@@ -193,6 +193,8 @@ META_FAKE_PAGE_IDS = {"0", "test"}
 _FACEBOOK_PAGE_TOKEN_CACHE: Dict[str, Any] = {"tokens": {}, "fetched_at": 0.0}
 FACEBOOK_AUTO_SYNC_ENABLED = os.environ.get("FACEBOOK_AUTO_SYNC_ENABLED", "true").lower() in ("1", "true", "yes")
 FACEBOOK_AUTO_SYNC_INTERVAL_SEC = int(os.environ.get("FACEBOOK_AUTO_SYNC_INTERVAL_SEC", "900"))  # every 15 min
+# Auto-sync / poll: only import Meta leads from this recent window (not 90-day history).
+FACEBOOK_AUTO_SYNC_WINDOW_SEC = int(os.environ.get("FACEBOOK_AUTO_SYNC_WINDOW_SEC", "7200"))  # 2 hours
 HOUSING_PROFILE_ID = os.environ.get("HOUSING_PROFILE_ID", "")
 HOUSING_ENCRYPTION_KEY = os.environ.get("HOUSING_ENCRYPTION_KEY", "")
 HOUSING_INTEGRATION_UUID = os.environ.get("HOUSING_INTEGRATION_UUID", "")
@@ -2939,15 +2941,58 @@ def _load_facebook_external_ids() -> set:
         offset += 1000
     return known
 
+
+def _load_facebook_suppressed_ids() -> set:
+    """Meta leadgen IDs removed from CRM — do not auto-import again."""
+    suppressed: set = set()
+    offset = 0
+    while offset < 20000:
+        rows = sb_select("integration_events", {
+            "source": "eq.Facebook",
+            "status": "eq.suppressed",
+            "select": "external_id",
+            "limit": "1000",
+            "offset": str(offset),
+        })
+        if not rows:
+            break
+        for row in rows:
+            eid = clean_text(row.get("external_id"))
+            if eid:
+                suppressed.add(eid)
+        if len(rows) < 1000:
+            break
+        offset += 1000
+    return suppressed
+
+
+def suppress_integrated_lead(lead: Dict[str, Any], reason: str = "deleted_from_crm") -> None:
+    """Remember a portal lead ID so background sync does not recreate it after delete."""
+    source = clean_text(lead.get("source"))
+    ext = clean_text(lead.get("external_lead_id"))
+    if not ext or source not in ("Facebook", "Housing.com"):
+        return
+    record_integration_event(
+        source,
+        {"lead_id": lead.get("lead_id"), "reason": reason},
+        "suppressed",
+        external_id=ext,
+        error=reason,
+    )
+
+
 def import_facebook_graph_lead(
     graph_lead: Dict[str, Any],
     known_external_ids: Optional[set] = None,
+    suppressed_ids: Optional[set] = None,
     *,
     quiet: bool = False,
 ) -> Dict[str, Any]:
     leadgen_id = clean_text(graph_lead.get("id"))
     if not leadgen_id or leadgen_id in META_FAKE_LEADGEN_IDS:
         return {"status": "ignored", "reason": "fake_or_missing_id", "leadgen_id": leadgen_id}
+    if suppressed_ids is not None and leadgen_id in suppressed_ids:
+        return {"status": "ignored", "leadgen_id": leadgen_id, "reason": "suppressed_deleted"}
     if known_external_ids is not None and leadgen_id in known_external_ids:
         return {"status": "duplicate", "leadgen_id": leadgen_id, "reason": "already_imported"}
     payload = normalize_meta_field_payload(facebook_fields_to_payload(graph_lead, leadgen_id))
@@ -3277,12 +3322,15 @@ def _facebook_resync_pending_impl() -> Dict[str, Any]:
         "limit": "500",
     })
     seen: set[str] = set()
+    suppressed_ids = _load_facebook_suppressed_ids()
     retried = created = duplicates = ignored = failed = 0
     results: List[Dict[str, Any]] = []
 
     for evt in rows:
         leadgen_id = clean_text(evt.get("external_id"))
         if not leadgen_id or leadgen_id in seen or leadgen_id in META_FAKE_LEADGEN_IDS:
+            continue
+        if leadgen_id in suppressed_ids:
             continue
         seen.add(leadgen_id)
 
@@ -3498,15 +3546,16 @@ async def facebook_resync(cu: User = Depends(get_current_user)):
 
 @api_router.post("/integrations/facebook/poll")
 async def facebook_poll(cu: User = Depends(get_current_user)):
-    """Auto-retry pending Meta webhook leads + import last 24h from Lead Ad forms."""
+    """Auto-retry pending Meta webhook leads + import recent Lead Ad submissions only."""
     ensure_roles(cu, ["admin", "manager", "marketing"])
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         return {"status": "skipped", "reason": "FACEBOOK_PAGE_ACCESS_TOKEN not configured"}
 
     resync = _facebook_resync_pending_impl()
     import_result: Dict[str, Any] = {"fetched": 0, "created": 0, "duplicates": 0}
+    poll_hours = max(FACEBOOK_AUTO_SYNC_WINDOW_SEC // 3600, 1)
     try:
-        import_result = _facebook_import_impl(days=1, limit=100)
+        import_result = _facebook_import_impl(limit=100, max_age_hours=poll_hours)
     except HTTPException as exc:
         import_result = {"error": str(exc.detail)[:180]}
     except Exception as exc:
@@ -3537,11 +3586,18 @@ def _facebook_import_impl(
     form_id: Optional[str] = None,
     days: int = 90,
     limit: int = 500,
+    max_age_hours: Optional[int] = None,
 ) -> Dict[str, Any]:
     page_id, page_token = resolve_facebook_page_context(page_id)
     days = min(max(days, 1), 365)
     limit = min(max(limit, 1), 1000)
-    since_ts = int((now_utc() - timedelta(days=days)).timestamp())
+    if max_age_hours is not None:
+        hours = min(max(max_age_hours, 1), 168)
+        since_ts = int((now_utc() - timedelta(hours=hours)).timestamp())
+        window_label = f"{hours}h"
+    else:
+        since_ts = int((now_utc() - timedelta(days=days)).timestamp())
+        window_label = f"{days}d"
 
     form_ids: List[str] = []
     forms_meta: List[Dict[str, Any]] = []
@@ -3559,6 +3615,7 @@ def _facebook_import_impl(
         raise HTTPException(status_code=404, detail="No Lead Ad forms found for this Facebook Page. Set FACEBOOK_FORM_ID if needed.")
 
     known_external_ids = _load_facebook_external_ids()
+    suppressed_ids = _load_facebook_suppressed_ids()
     fetched = created = duplicates = ignored = failed = 0
     results: List[Dict[str, Any]] = []
 
@@ -3572,7 +3629,9 @@ def _facebook_import_impl(
         fetched += len(graph_leads)
         for graph_lead in graph_leads:
             try:
-                result = import_facebook_graph_lead(graph_lead, known_external_ids, quiet=True)
+                result = import_facebook_graph_lead(
+                    graph_lead, known_external_ids, suppressed_ids, quiet=True,
+                )
                 status = result.get("status")
                 if status == "created":
                     created += 1
@@ -3597,6 +3656,7 @@ def _facebook_import_impl(
         "page_id": page_id,
         "forms": forms_meta,
         "days": days,
+        "window": window_label,
         "fetched": fetched,
         "created": created,
         "duplicates": duplicates,
@@ -4316,7 +4376,16 @@ async def clear_all_leads(cu: User = Depends(get_current_user)):
         
     tables_to_wipe = ["notifications", "customers", "lead_notes", "visit_followups", "visits", "bookings", "loans", "activities", "leads"]
     optional_tables = {"notifications", "customers", "lead_notes", "visit_followups"}
-    
+
+    # Stop Meta/Housing auto-sync from re-importing leads the admin just cleared.
+    portal_leads = sb_select("leads", {
+        "source": "in.(Facebook,Housing.com)",
+        "select": "lead_id,source,external_lead_id",
+        "limit": "5000",
+    })
+    for row in portal_leads:
+        suppress_integrated_lead(row, reason="clear_all")
+
     # We clear them from Supabase
     import httpx
     errors = []
@@ -4961,7 +5030,12 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
 async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
     if cu.role != "admin":
         raise HTTPException(status_code=403, detail="Only admins can delete leads")
-    
+
+    lead_rows = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id,source,external_lead_id", "limit": "1"})
+    lead_row = lead_rows[0] if lead_rows else None
+    if lead_row:
+        suppress_integrated_lead(lead_row)
+
     # 1. Delete associated data first
     sb_delete("visit_followups", "lead_id", lead_id)
     sb_delete("visits", "lead_id", lead_id)
@@ -6723,7 +6797,7 @@ _facebook_sync_task: Optional[asyncio.Task] = None
 
 
 def run_facebook_sync_background(reason: str = "auto") -> Dict[str, Any]:
-    """Resync pending Meta webhooks + import leads from the last 24 hours."""
+    """Resync pending Meta webhooks + import only recent Lead Ad submissions."""
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         return {"status": "skipped", "reason": "FACEBOOK_PAGE_ACCESS_TOKEN not configured"}
     try:
@@ -6731,8 +6805,9 @@ def run_facebook_sync_background(reason: str = "auto") -> Dict[str, Any]:
     except HTTPException as exc:
         return {"status": "error", "detail": str(exc.detail)[:180]}
     import_result: Dict[str, Any] = {"fetched": 0, "created": 0, "duplicates": 0}
+    auto_hours = max(FACEBOOK_AUTO_SYNC_WINDOW_SEC // 3600, 1)
     try:
-        import_result = _facebook_import_impl(days=1, limit=100)
+        import_result = _facebook_import_impl(limit=100, max_age_hours=auto_hours)
     except HTTPException as exc:
         import_result = {"error": str(exc.detail)[:180]}
     except Exception as exc:
@@ -6807,8 +6882,9 @@ async def start_housing_background_sync() -> None:
     if FACEBOOK_AUTO_SYNC_ENABLED and FACEBOOK_PAGE_ACCESS_TOKEN:
         _facebook_sync_task = asyncio.create_task(_facebook_background_sync_loop())
         logging.info(
-            "Facebook auto-sync started — every %ss (resync webhooks + import last 24h)",
+            "Facebook auto-sync started — every %ss (webhooks + last %sh only)",
             FACEBOOK_AUTO_SYNC_INTERVAL_SEC,
+            max(FACEBOOK_AUTO_SYNC_WINDOW_SEC // 3600, 1),
         )
     elif not FACEBOOK_PAGE_ACCESS_TOKEN:
         logging.warning("Facebook auto-sync skipped — set FACEBOOK_PAGE_ACCESS_TOKEN on Render")

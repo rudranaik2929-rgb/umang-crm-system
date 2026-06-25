@@ -48,7 +48,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const r = await api.get('/auth/me');
       setUser(r.data);
       setSnapshot(USER_SNAPSHOT_KEY, r.data);
-    } catch {
+    } catch (e: any) {
+      const timedOut = e?.code === 'ECONNABORTED' || String(e?.message || '').toLowerCase().includes('timeout');
+      const noResponse = !e?.response;
+      if (timedOut || noResponse) {
+        // Keep cached session when Render is waking up — do not force logout on slow cold start.
+        return;
+      }
       setUser(null);
       setSnapshot(USER_SNAPSHOT_KEY, null);
     } finally {
@@ -94,7 +100,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const exchangeSession = useCallback(async (credentials: { email: string; password: string }): Promise<User | null> => {
     try {
-      const r = await api.post('/auth/session', credentials);
+      await warmUpBackend();
+      const r = await api.post('/auth/session', credentials, { timeout: 90000 });
       if (r.data?.session_token) {
         await setToken(r.data.session_token);
       }
@@ -104,14 +111,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
       const msg = e?.message || '';
-      if (!e?.response && (msg.includes('Network Error') || e?.code === 'ERR_NETWORK')) {
+      const timedOut = e?.code === 'ECONNABORTED' || msg.toLowerCase().includes('timeout');
+      if (!e?.response && (msg.includes('Network Error') || e?.code === 'ERR_NETWORK' || timedOut)) {
         console.warn('exchangeSession failed: cannot reach API', BACKEND, e);
         const host = typeof window !== 'undefined' ? window.location.hostname : '';
         const wwwHint = host.startsWith('www.')
           ? ' Your site uses www — on Render set CORS_ORIGINS to include both https://umanghometechllp.in and https://www.umanghometechllp.in, then redeploy the backend.'
           : '';
         throw new Error(
-          `Cannot reach the CRM server (${BACKEND}). On Vercel set EXPO_PUBLIC_BACKEND_URL to your Render URL and redeploy.${wwwHint}`,
+          timedOut
+            ? `Server is waking up (Render cold start). Wait 30–60 seconds and try Log in again.${wwwHint}`
+            : `Cannot reach the CRM server (${BACKEND}). On Vercel set EXPO_PUBLIC_BACKEND_URL to your Render URL and redeploy.${wwwHint}`,
         );
       }
       console.warn('exchangeSession failed', detail || e);

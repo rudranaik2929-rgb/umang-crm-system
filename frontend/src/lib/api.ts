@@ -6,6 +6,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-systemumang-home-tech.onrender.com').replace(/\/$/, '');
 
 const REQUEST_TIMEOUT_MS = 15000;
+const AUTH_TIMEOUT_MS = 90000;
 const GET_CACHE_MS = 120000;
 const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
 const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v1';
@@ -130,7 +131,8 @@ api.interceptors.response.use(
         return Promise.reject(error);
     }
     config.__isRetry = true;
-    config.timeout = 30000;
+    const authPath = String(config.url || '').includes('/auth/');
+    config.timeout = authPath ? AUTH_TIMEOUT_MS : 30000;
     await new Promise((r) => setTimeout(r, 600));
     return api(config);
 });
@@ -220,6 +222,10 @@ api.interceptors.request.use(async (config) => {
     const t = await getToken();
     const actAs = await getActAsId();
     config.headers = config.headers || {};
+    const url = String(config.url || '');
+    if (url.includes('/auth/session') || url.includes('/auth/me')) {
+        config.timeout = Math.max(Number(config.timeout) || 0, AUTH_TIMEOUT_MS);
+    }
     if (t) {
           (config.headers as any)['Authorization'] = `Bearer ${t}`;
     }
@@ -275,6 +281,7 @@ export function clearSnapshots() {
 }
 
 export const META_INTEGRATION_TIMEOUT_MS = 180000;
+export const AUTH_REQUEST_TIMEOUT_MS = AUTH_TIMEOUT_MS;
 
 export function integrationErrorMessage(error: any, fallback: string): string {
     if (error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')) {
