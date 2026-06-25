@@ -848,7 +848,7 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
     new_rows = filter_employee_new_leads(rows)
     backlog_rows = filter_employee_backlog_leads(rows)
     queue_rows = filter_employee_queue_leads(backlog_rows, role)
-    follow_rows = filter_employee_follow_up_leads(rows)
+    follow_rows = filter_employee_follow_up_leads(backlog_rows)
     in_progress = sum(
         1 for l in backlog_rows
         if l.get("status") == "active"
@@ -6787,14 +6787,15 @@ async def stats_me(cu: User=Depends(get_current_user)):
         platform_breakdown = {"total": 0, "housing": 0, "meta": 0, "manual": 0, "other": 0}
     elif cu.role != "admin" and emp_id:
         leads = fetch_employee_assigned_leads(cu, EMPLOYEE_WORKFLOW_LEAD_SELECT)
-        my_queue_leads = filter_employee_my_queue_leads(leads)
-        platform_breakdown = compute_platform_breakdown(my_queue_leads)
+        backlog_leads = filter_employee_backlog_leads(leads)
+        platform_breakdown = compute_platform_breakdown(backlog_leads)
     else:
         leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
-        my_queue_leads = filter_employee_my_queue_leads(leads)
-        platform_breakdown = compute_platform_breakdown(my_queue_leads)
+        backlog_leads = filter_employee_backlog_leads(leads)
+        platform_breakdown = compute_platform_breakdown(backlog_leads)
 
     assignment = compute_employee_assignment_stats(leads, emp_role)
+    metric_counts = build_personal_dashboard_counts(leads, emp_role, activities)
     positives = assignment["assigned_positive"]
     negative = assignment["assigned_not_interested"]
     followups = assignment["assigned_follow_ups"]
@@ -6819,24 +6820,25 @@ async def stats_me(cu: User=Depends(get_current_user)):
         "employee_id": emp_id,
         "role": emp_role or cu.role,
         "missed_leads": missed_preview,
-        "missed_leads_total": len(missed_rows),
+        "missed_leads_total": metric_counts["missed_leads"],
         "personal": {
             "actions_total": len(activities),
-            "leads_total": assignment["assigned_total"],
-            "emp_new_leads": assignment["emp_new_leads"],
+            "leads_total": metric_counts["total"],
+            "emp_new_leads": metric_counts["new_leads"],
             "assigned_active": assignment["assigned_active"],
             "assigned_completed": assignment["assigned_completed"],
             "assigned_queue": assignment["assigned_queue"],
             "assigned_in_progress": assignment["assigned_in_progress"],
             "assigned_follow_ups": assignment["assigned_follow_ups"],
-            "emp_hot": assignment["emp_hot"],
-            "emp_visited": assignment["emp_visited"],
-            "emp_not_interested": assignment["emp_not_interested"],
-            "emp_booking_done": assignment["emp_booking_done"],
-            "emp_low_budget": assignment["emp_low_budget"],
-            "emp_ringing": assignment["emp_ringing"],
-            "emp_follow_ups": assignment["emp_follow_ups"],
-            "emp_missed_leads": len(missed_rows),
+            "emp_hot": metric_counts["hot"],
+            "emp_visited": metric_counts["visited"],
+            "emp_not_interested": metric_counts["not_interested"],
+            "emp_booking_done": metric_counts["booking_done"],
+            "emp_low_budget": metric_counts["low_budget"],
+            "emp_ringing": metric_counts["ringing"],
+            "emp_follow_ups": metric_counts["follow_ups"],
+            "emp_missed_leads": metric_counts["missed_leads"],
+            "metric_counts": metric_counts,
             "positives": positives,
             "negatives": negative,
             "followups": followups,
@@ -6861,11 +6863,17 @@ EMPLOYEE_METRIC_KEYS = [
     "ringing", "follow_ups", "missed_leads", "new_leads",
 ]
 
-PERSONAL_ACTIVITY_METRICS = [
-    "total", "new_leads", "queue", "follow_ups", "completed", "closed_deals", "positive", "negatives",
-    "call_notes", "bookings_done", "loans_done", "active", "hot", "visited",
-    "not_interested", "booking_done", "low_budget", "ringing", "missed_leads",
+MY_DASHBOARD_METRICS = [
+    "new_leads", "total", "missed_leads", "hot", "visited",
+    "not_interested", "booking_done", "low_budget", "follow_ups", "ringing",
 ]
+
+PERSONAL_ACTIVITY_METRICS = list(dict.fromkeys(
+    MY_DASHBOARD_METRICS + [
+        "queue", "completed", "closed_deals", "positive", "negatives",
+        "call_notes", "bookings_done", "loans_done", "active",
+    ]
+))
 
 PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
     "total": "Total Leads — Previous Assignments",
@@ -6890,6 +6898,68 @@ PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
 }
 
 
+def personal_dashboard_metric_kind(metric_key: str) -> str:
+    key = (metric_key or "").strip().lower()
+    if key in ("call_notes", "bookings_done", "loans_done"):
+        return "activities"
+    return "leads"
+
+
+def personal_dashboard_metric_items(
+    metric_key: str,
+    emp_leads: List[Dict[str, Any]],
+    role: Optional[str],
+    activities: Optional[List[Dict[str, Any]]] = None,
+) -> List[Any]:
+    """Single source of truth — My Dashboard KPI count and drill-down list always match."""
+    key = (metric_key or "").strip().lower()
+    rows = dedupe_leads(emp_leads)
+    backlog = filter_employee_backlog_leads(rows)
+
+    if key in ("total", "all", "leads_total", "assigned_total"):
+        return backlog
+    if key in ("new_leads", "new", "assigned_new"):
+        return filter_employee_new_leads(rows)
+    if key in ("queue", "assigned_queue"):
+        return filter_employee_queue_leads(backlog, role)
+    if key in ("follow_ups", "followups", "assigned_follow_ups"):
+        return filter_employee_follow_up_leads(backlog)
+    if key in ("missed_leads", "missed"):
+        return filter_employee_missed_leads(rows)
+    if key in ("completed", "assigned_completed", "closed_deals"):
+        return [l for l in backlog if l.get("stage") == "closed"]
+    if key in ("positive", "positives"):
+        return [
+            l for l in backlog
+            if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]
+            and l.get("status") != "negative"
+        ]
+    if key in ("negatives", "not_interested"):
+        return filter_employee_metric_leads(backlog, "not_interested")
+    if key == "call_notes":
+        return [a for a in (activities or []) if "call" in str(a.get("type", "")).lower()]
+    if key == "bookings_done":
+        return [a for a in (activities or []) if "booking" in str(a.get("type", "")).lower()]
+    if key == "loans_done":
+        return [a for a in (activities or []) if "loan" in str(a.get("type", "")).lower()]
+    if key == "active":
+        return filter_employee_metric_leads(backlog, "active")
+    if key in ("hot", "visited", "booking_done", "low_budget", "ringing"):
+        return filter_employee_metric_leads(backlog, key)
+    return []
+
+
+def build_personal_dashboard_counts(
+    emp_leads: List[Dict[str, Any]],
+    role: Optional[str],
+    activities: List[Dict[str, Any]],
+) -> Dict[str, int]:
+    return {
+        metric: len(personal_dashboard_metric_items(metric, emp_leads, role, activities))
+        for metric in MY_DASHBOARD_METRICS
+    }
+
+
 def _employee_may_view_stats(cu: User, employee_id: str) -> bool:
     if cu.role in ("admin", "manager"):
         return True
@@ -6905,45 +6975,10 @@ def filter_personal_activity(
 ) -> Dict[str, Any]:
     """Drill-down lists for My Dashboard activity boxes — counts match stats_me."""
     key = (metric_key or "").strip().lower()
-    rows = dedupe_leads(emp_leads)
-    if key in ("total", "all", "leads_total", "assigned_total"):
-        return {"kind": "leads", "items": filter_employee_backlog_leads(rows)}
-    if key in ("new_leads", "new", "assigned_new"):
-        return {"kind": "leads", "items": filter_employee_new_leads(rows)}
-    if key in ("queue", "assigned_queue"):
-        items = filter_employee_queue_leads(filter_employee_backlog_leads(rows), role)
-        return {"kind": "leads", "items": items}
-    if key in ("follow_ups", "followups", "assigned_follow_ups"):
-        items = filter_employee_follow_up_leads(filter_employee_backlog_leads(rows))
-        return {"kind": "leads", "items": items}
-    if key in ("completed", "assigned_completed", "closed_deals"):
-        items = [l for l in rows if l.get("stage") == "closed"]
-        return {"kind": "leads", "items": items}
-    if key in ("positive", "positives"):
-        items = [
-            l for l in rows
-            if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"]
-            and l.get("status") != "negative"
-        ]
-        return {"kind": "leads", "items": items}
-    if key in ("negatives", "not_interested"):
-        items = filter_employee_metric_leads(filter_employee_backlog_leads(rows), "not_interested")
-        return {"kind": "leads", "items": items}
-    if key == "call_notes":
-        items = [a for a in activities if "call" in str(a.get("type", "")).lower()]
-        return {"kind": "activities", "items": items}
-    if key == "bookings_done":
-        items = [a for a in activities if "booking" in str(a.get("type", "")).lower()]
-        return {"kind": "activities", "items": items}
-    if key == "loans_done":
-        items = [a for a in activities if "loan" in str(a.get("type", "")).lower()]
-        return {"kind": "activities", "items": items}
-    if key in ("missed_leads", "missed"):
-        return {"kind": "leads", "items": filter_employee_missed_leads(rows)}
-    if key in EMPLOYEE_METRIC_KEYS:
-        backlog = filter_employee_backlog_leads(rows)
-        return {"kind": "leads", "items": filter_employee_metric_leads(backlog, key)}
-    raise HTTPException(400, detail=f"Unknown activity metric: {key}")
+    items = personal_dashboard_metric_items(key, emp_leads, role, activities)
+    if not items and key not in PERSONAL_ACTIVITY_METRICS:
+        raise HTTPException(400, detail=f"Unknown activity metric: {key}")
+    return {"kind": personal_dashboard_metric_kind(key), "items": items}
 
 
 @api_router.get("/stats/me/activity/{metric_key}")

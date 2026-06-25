@@ -8,7 +8,9 @@
 --   • Excel import auto-assign (source = bulk_import, Assign to column)
 --   • Workflow: Ringing, Visited, Hot, Not Interested, Follow Up
 --   • Missed Lead (24h no employee response after assign)
---   • Employee performance + My Dashboard KPI boxes
+--   • Employee performance + My Dashboard KPI boxes (count = drill-down list)
+--   • My Dashboard: New Leads = assigned in last 24h; Total Leads = backlog 24h+
+--   • Workflow pills (Hot, Ringing, Missed, etc.) count backlog only — not new assignments
 --   • Visit follow-ups, call_status, priority
 --
 -- Excel import (no extra columns — uses fields below):
@@ -280,7 +282,7 @@ comment on column leads.assigned_by is 'user_id or employee_id of who assigned';
 comment on column leads.last_employee_action_at is 'Last employee workflow action — Missed Lead if null 24h after assigned_at';
 comment on column leads.follow_up_at is 'Next follow-up datetime — Follow Up dashboard box';
 comment on column leads.call_status is 'ringing | call_back | out_of_service | disconnect';
-comment on column leads.priority is 'hot | low_budget | handoff_booking | handoff_loan | etc.';
+comment on column leads.priority is 'hot | low_budget | not_searching | handoff_booking | handoff_loan | etc.';
 comment on column leads.external_created_at is 'Real enquiry date — Housing, Meta, or Excel Lead Date column';
 comment on column leads.source is 'bulk_import = Excel/CSV upload';
 

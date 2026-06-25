@@ -154,14 +154,6 @@ export default function MyDashboard() {
   const missedLeads = Array.isArray(data.missed_leads) ? data.missed_leads : [];
 
   const handleKpiPress = (metric: string) => {
-    if (metric === 'total') {
-      setActivityMetric('total');
-      return;
-    }
-    if (metric === 'new_leads') {
-      setActivityMetric('new_leads');
-      return;
-    }
     setActivityMetric(metric);
   };
 
@@ -231,7 +223,7 @@ export default function MyDashboard() {
           {/* New leads + backlog summary */}
           <View style={styles.scoreWrap}>
             <Pressable
-              onPress={() => setActivityMetric('new_leads')}
+              onPress={() => handleKpiPress('new_leads')}
               style={[styles.newLeadsCard, { backgroundColor: accent + '12', borderColor: accent + '40' }]}
             >
               <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>NEW LEADS</Text>
@@ -241,7 +233,7 @@ export default function MyDashboard() {
               </Text>
             </Pressable>
             <Pressable
-              onPress={() => setActivityMetric('total')}
+              onPress={() => handleKpiPress('total')}
               style={[styles.backlogCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
             >
               <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>TOTAL LEADS</Text>
@@ -259,7 +251,7 @@ export default function MyDashboard() {
             <Text style={[styles.section, { color: colors.textMuted }]}>MY PERFORMANCE — TAP A BOX FOR LIST</Text>
             {missedCount > 0 ? (
               <Pressable
-                onPress={() => setActivityMetric('missed_leads')}
+                onPress={() => handleKpiPress('missed_leads')}
                 style={[styles.missedBanner, { backgroundColor: colors.negative + '12', borderColor: colors.negative + '55' }]}
               >
                 <Ionicons name="alert-circle" size={20} color={colors.negative} />
@@ -319,7 +311,7 @@ export default function MyDashboard() {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <Text style={[styles.section, { color: missedCount > 0 ? colors.negative : colors.textMuted, marginBottom: 0 }]}>MY MISSED LEADS</Text>
               {missedCount > 0 ? (
-                <Pressable onPress={() => setActivityMetric('missed_leads')}>
+                <Pressable onPress={() => handleKpiPress('missed_leads')}>
                   <Text style={{ color: colors.negative, fontSize: 12, fontWeight: '700' }}>Open all →</Text>
                 </Pressable>
               ) : null}
@@ -331,7 +323,7 @@ export default function MyDashboard() {
               total={missedCount}
               refreshKey={refreshKey}
               onOpenLead={setOpenLead}
-              onViewAll={missedCount > 0 ? () => setActivityMetric('missed_leads') : undefined}
+              onViewAll={missedCount > 0 ? () => handleKpiPress('missed_leads') : undefined}
               onRefresh={load}
             />
           </View>

@@ -49,7 +49,9 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.title, { color: colors.text }]}>{label || 'My Activity'}</Text>
-              <Text style={{ color: colors.textMuted, fontSize: 12 }}>{total} item{total === 1 ? '' : 's'} · tap to open lead</Text>
+              <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                {total} lead{total === 1 ? '' : 's'} · tap to open
+              </Text>
             </View>
             <PanelRefreshButton onPress={load} loading={loading} testID="my-activity-refresh" />
             <Pressable onPress={onClose} style={[styles.close, { borderColor: colors.border }]}>
