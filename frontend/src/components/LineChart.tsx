@@ -114,7 +114,7 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID, d
   });
 
   return (
-    <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]} testID={testID}>
+    <View style={[styles.card, simple && styles.cardFull, { backgroundColor: colors.surface, borderColor: colors.border }]} testID={testID}>
       {/* Header with Title & Segments */}
       <View style={styles.header}>
         <View style={{ flex: 1 }}>
@@ -304,6 +304,7 @@ export function LineChart({ title, subtitle, data, color, formatValue, testID, d
 
 const styles = StyleSheet.create({
   card: { padding: 20, borderRadius: 14, borderWidth: 1, flex: 1, minWidth: 340, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.02, shadowRadius: 8 },
+  cardFull: { minWidth: '100%', width: '100%', flex: undefined },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, flexWrap: 'wrap' },
   title: { fontSize: 16, fontWeight: '700' },
   subtitle: { fontSize: 11, marginTop: 2 },

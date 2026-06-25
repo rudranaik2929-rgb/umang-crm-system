@@ -1398,7 +1398,7 @@ def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
         if "my-dashboard" not in pages:
             pages = ["my-dashboard", *pages]
         if "tracking" not in pages:
-            pages = [...pages, "tracking"]
+            pages = [*pages, "tracking"]
     elif role == "admin":
         u["dashboard_type"] = u.get("dashboard_type") or "admin"
         if "dashboard" not in pages:
@@ -2457,7 +2457,19 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
     city = clean_text(pick_first(payload, ["city_name", "city", "contact.city"]))
     location = clean_text(pick_first(payload, [
         "city", "location", "locality", "project_locality", "address", "contact.city",
+        "preferred_locality", "preferred_location", "area", "locality_name", "city_name",
     ])) or ", ".join(part for part in [locality, city] if part)
+    if not location and source == "Facebook":
+        for key, val in payload.items():
+            if key in ("field_data", "leadgen_id", "form_id", "page_id", "created_time", "id"):
+                continue
+            if _meta_key_has_any(str(key), (
+                "location", "locality", "area", "city", "township", "region", "address",
+                "place", "preferred", "where", "locality_name", "city_name", "street_address",
+            )):
+                location = clean_text(val)
+                if location:
+                    break
     min_price = pick_first(payload, ["min_price", "min_budget"])
     max_price = pick_first(payload, ["max_price", "max_budget"])
     budget = clean_text(pick_first(payload, [
@@ -2583,7 +2595,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
     if existing:
         update_data = {"updated_at": now_utc().isoformat()}
         for key in ("email", "budget", "location", "property_type", "notes"):
-            if normalized.get(key) and not existing.get(key):
+            if normalized.get(key) and not clean_text(existing.get(key)):
                 update_data[key] = normalized[key]
         updated = sb_update("leads", "lead_id", existing["lead_id"], update_data) if len(update_data) > 1 else existing
         merged = {**existing, **update_data}
@@ -2692,22 +2704,75 @@ def facebook_fields_to_payload(data: Dict[str, Any], leadgen_id: Optional[str] =
     payload.update({k: v for k, v in data.items() if k not in {"field_data"}})
     return normalize_meta_field_payload(payload)
 
+def _meta_key_tokens(key: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "_", (key or "").lower()).strip("_")
+
+
+def _meta_key_has_any(key: str, fragments: tuple) -> bool:
+    tokens = _meta_key_tokens(key)
+    return any(fragment in tokens for fragment in fragments)
+
+
 def normalize_meta_field_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Map Meta custom form fields (question1, etc.) to name/phone/email."""
+    """Map Meta Lead Ad custom form fields to CRM name/phone/email/location/budget/type."""
     out = dict(payload)
+
+    identity_keys = ("email", "mail", "phone", "mobile", "contact", "whatsapp", "name", "full_name", "customer", "first_name", "last_name")
+    location_keys = (
+        "location", "locality", "localities", "area", "city", "township", "region", "address",
+        "place", "pincode", "pin_code", "preferred_area", "preferred_locality", "project_locality",
+        "which_area", "which_locality", "where", "neighborhood", "locality_name", "city_name",
+        "street_address", "state", "zip_code",
+    )
+    budget_keys = ("budget", "price", "investment", "afford", "lakh", "lakhs", "crore", "rupee", "amount")
+    property_keys = ("bhk", "configuration", "config", "property_type", "unit_type", "bedroom", "flat_type", "requirement", "property")
+
     for key, val in list(out.items()):
         if val is None:
             continue
         text = clean_text(str(val))
         if not text:
             continue
-        k = key.lower()
-        if any(t in k for t in ("email", "mail")) and not out.get("email"):
+        if _meta_key_has_any(key, ("email", "mail")) and not out.get("email"):
             out["email"] = text
-        elif any(t in k for t in ("phone", "mobile", "contact", "whatsapp", "number")) and not out.get("phone"):
+        elif _meta_key_has_any(key, ("phone", "mobile", "contact", "whatsapp")) and not out.get("phone"):
             out["phone"] = text
-        elif any(t in k for t in ("name", "full_name", "customer", "first_name")) and not out.get("full_name"):
+        elif _meta_key_has_any(key, ("name", "full_name", "customer", "first_name")) and not out.get("full_name"):
             out["full_name"] = text
+        elif _meta_key_has_any(key, location_keys) and not out.get("location"):
+            out["location"] = text
+        elif _meta_key_has_any(key, budget_keys) and not out.get("budget"):
+            out["budget"] = text
+        elif _meta_key_has_any(key, property_keys) and not out.get("property_type"):
+            bhk = extract_bhk_configuration({key: text})
+            out["property_type"] = bhk or text
+
+    # Second pass: slug-style custom questions (e.g. in_which_locality_are_you_looking?)
+    for key, val in list(out.items()):
+        if key in ("email", "phone", "full_name", "location", "budget", "property_type"):
+            continue
+        if _meta_key_has_any(key, identity_keys):
+            continue
+        text = clean_text(str(val))
+        if not text:
+            continue
+        if not out.get("location") and _meta_key_has_any(key, location_keys):
+            out["location"] = text
+        elif not out.get("budget") and _meta_key_has_any(key, budget_keys):
+            out["budget"] = text
+        elif not out.get("property_type") and _meta_key_has_any(key, property_keys):
+            bhk = extract_bhk_configuration({key: text})
+            out["property_type"] = bhk or text
+
+    if not out.get("location"):
+        locality = clean_text(
+            pick_first(out, ["locality_name", "locality", "preferred_locality", "project_locality", "area"])
+        )
+        city = clean_text(pick_first(out, ["city_name", "city", "state"]))
+        combined = ", ".join(part for part in [locality, city] if part)
+        if combined:
+            out["location"] = combined
+
     for val in out.values():
         if not isinstance(val, str):
             continue
@@ -2720,6 +2785,10 @@ def normalize_meta_field_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
             digits = re.sub(r"\D", "", s)
             if len(digits) >= 10:
                 out["phone"] = s
+        if not out.get("property_type"):
+            bhk = extract_bhk_configuration({"value": s})
+            if bhk:
+                out["property_type"] = bhk
     return out
 
 def facebook_graph_get(path: str, params: Optional[Dict[str, Any]] = None, access_token: Optional[str] = None) -> Dict[str, Any]:
@@ -6289,11 +6358,22 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
     leads_by_day = [{"date": d, "count": cnt} for d, cnt in sorted(days_map.items())]
 
     months_map = {k: 0 for k in _last_n_month_keys(12)}
+    platform_months = {mk: {"housing": 0, "meta": 0, "manual": 0} for mk in _last_n_month_keys(12)}
     for l in pipeline_leads:
         mk = (l.get("created_at") or "")[:7]
         if mk in months_map:
             months_map[mk] += 1
+        if mk in platform_months:
+            platform = classify_lead_platform(l.get("source"))
+            if platform in platform_months[mk]:
+                platform_months[mk][platform] += 1
+            elif platform not in ("brokerage",):
+                platform_months[mk]["manual"] += 1
     leads_by_month = [{"month": mk, "count": months_map[mk]} for mk in sorted(months_map.keys())]
+    leads_by_month_platform = [
+        {"month": mk, **platform_months[mk], "total": sum(platform_months[mk].values())}
+        for mk in sorted(platform_months.keys())
+    ]
 
     bookings = graph_data["bookings"]
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
@@ -6311,6 +6391,7 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
     return {
         "leads_by_day": leads_by_day,
         "leads_by_month": leads_by_month,
+        "leads_by_month_platform": leads_by_month_platform,
         "revenue_by_month": rev_by_month,
         "total_leads_in_chart": sum(months_map.values()),
     }

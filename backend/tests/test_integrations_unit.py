@@ -358,6 +358,35 @@ def test_normalize_meta_page_id_prefers_real_page_over_zero(monkeypatch):
     assert main.normalize_meta_page_id("0", None) == "ENV_PAGE_77"
 
 
+def test_normalize_meta_field_payload_maps_location_budget_bhk():
+    graph_lead = {
+        "id": "123",
+        "field_data": [
+            {"name": "full_name", "values": ["Rahul Sharma"]},
+            {"name": "phone_number", "values": ["+919876543210"]},
+            {"name": "in_which_locality_are_you_looking?", "values": ["Virar West"]},
+            {"name": "what_is_your_budget?", "values": ["50 - 60 Lakhs"]},
+            {"name": "configuration", "values": ["2 BHK"]},
+        ],
+    }
+    payload = main.facebook_fields_to_payload(graph_lead, "123")
+    lead = main.lead_from_payload(payload, "Facebook")
+    assert lead["location"] == "Virar West"
+    assert lead["budget"] == "50 - 60 Lakhs"
+    assert lead["property_type"] == "2 BHK"
+
+
+def test_normalize_meta_field_payload_city_locality_combo():
+    payload = main.normalize_meta_field_payload({
+        "full_name": "Test User",
+        "phone": "9876543210",
+        "city": "Vasai",
+        "locality_name": "Naigaon",
+    })
+    lead = main.lead_from_payload(payload, "Facebook")
+    assert lead["location"] in ("Vasai", "Naigaon, Vasai", "Naigaon")
+
+
 def test_resolve_page_access_token_uses_me_accounts_for_user_token(monkeypatch):
     monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "user-token")
     monkeypatch.setattr(main, "FACEBOOK_PAGE_ID", "PAGE_99")

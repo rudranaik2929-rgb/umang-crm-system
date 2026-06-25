@@ -11,11 +11,12 @@ import { DashboardLeadsModal } from '../../src/components/DashboardLeadsModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { LineChart } from '../../src/components/LineChart';
+import { StackedBarChart } from '../../src/components/StackedBarChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { EmployeeMetricModal } from '../../src/components/EmployeeMetricModal';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
-import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel } from '../../src/lib/constants';
+import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel, platformLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
@@ -174,10 +175,28 @@ export default function Dashboard() {
       : '-';
     return { label, value: Number(d.count || 0) };
   });
-  const chartRevenueData = (graphData?.revenue_by_month || []).map((d: any) => ({
-    label: new Date(`${d.month}-01T12:00:00`).toLocaleString('en-IN', { month: 'short' }),
-    value: Number(d.revenue || 0),
-  }));
+
+  const LEAD_SOURCE_SERIES = [
+    { key: 'housing', label: platformLabel('housing'), color: '#1B3A5C' },
+    { key: 'meta', label: platformLabel('meta'), color: '#2563EB' },
+    { key: 'manual', label: platformLabel('manual'), color: '#93C5FD' },
+  ] as const;
+
+  const chartLeadsBySourceMonth = (graphData?.leads_by_month_platform || []).map((d: any) => {
+    const mk = String(d.month || '');
+    const label = mk
+      ? new Date(`${mk}-01T12:00:00`).toLocaleString('en-IN', { month: 'short', year: '2-digit' })
+      : '-';
+    return {
+      label,
+      total: Number(d.total || 0),
+      segments: {
+        housing: Number(d.housing || 0),
+        meta: Number(d.meta || 0),
+        manual: Number(d.manual || 0),
+      },
+    };
+  });
 
   const showLeadAlerts = isManager || canAccessOwnerDashboard(user?.role, user?.email);
   const showAssignPanel = isManager || canAccessOwnerDashboard(user?.role, user?.email);
@@ -242,7 +261,7 @@ export default function Dashboard() {
           />
         </View>
 
-        <View style={styles.chartRow}>
+        <View style={styles.chartRowSingle}>
           <LineChart
             title="Leads per Month"
             subtitle="New enquiries received each month — last 12 months"
@@ -253,18 +272,6 @@ export default function Dashboard() {
             simple
             testID="leads-per-month-chart"
           />
-          {canSeeRevenue(user?.role, user?.email) && chartRevenueData.some((d) => d.value > 0) ? (
-            <LineChart
-              title="Brokerage per Month"
-              subtitle="Total brokerage collected — last 12 months"
-              data={chartRevenueData}
-              color={colors.warning}
-              formatValue={formatCompact}
-              defaultType="bar"
-              simple
-              testID="revenue-chart"
-            />
-          ) : null}
         </View>
 
         <Pressable
@@ -308,23 +315,6 @@ export default function Dashboard() {
             <AssignLeadsPanel compact />
           </View>
         )}
-
-        {showAssignPanel ? (
-          <Pressable
-            onPress={() => router.push('/(app)/admin-tracking' as any)}
-            style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}
-          >
-            <View style={styles.panelHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={[styles.panelTitle, { color: colors.text }]}>Employee Tracking</Text>
-                <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                  Live GPS map — see where your team is working right now
-                </Text>
-              </View>
-              <Ionicons name="map-outline" size={22} color={colors.primary} />
-            </View>
-          </Pressable>
-        ) : null}
 
         <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={styles.panelHeader}>
@@ -386,6 +376,15 @@ export default function Dashboard() {
             </View>
           </ScrollView>
         </View>
+
+        <StackedBarChart
+          title="Leads by Source"
+          subtitle="Size, by platform — last 12 months (Housing.com · Meta · Database)"
+          series={[...LEAD_SOURCE_SERIES]}
+          data={chartLeadsBySourceMonth.length ? chartLeadsBySourceMonth : [{ label: '-', total: 0, segments: { housing: 0, meta: 0, manual: 0 } }]}
+          yAxisLabel="Leads"
+          testID="leads-by-source-stacked-chart"
+        />
 
       </ScrollView>
 
@@ -617,6 +616,7 @@ const styles = StyleSheet.create({
   moreText: { fontSize: 11, fontWeight: '700', marginTop: 2 },
   emptyText: { fontSize: 11, fontStyle: 'italic', paddingVertical: 18, textAlign: 'center' },
   chartRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  chartRowSingle: { width: '100%' },
   chartFull: { flex: 1, minWidth: 320 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   followModal: { width: '92%', maxWidth: 560, maxHeight: '82%', borderWidth: 1, borderRadius: 12, padding: 18 },
