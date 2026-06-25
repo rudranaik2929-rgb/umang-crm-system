@@ -10,7 +10,6 @@ import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { DashboardLeadsModal } from '../../src/components/DashboardLeadsModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
-import { LineChart } from '../../src/components/LineChart';
 import { StackedBarChart } from '../../src/components/StackedBarChart';
 import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { EmployeeMetricModal } from '../../src/components/EmployeeMetricModal';
@@ -168,14 +167,6 @@ export default function Dashboard() {
     );
   }
 
-  const chartLeadsPerMonth = (graphData?.leads_by_month || []).map((d: any) => {
-    const mk = String(d.month || '');
-    const label = mk
-      ? new Date(`${mk}-01T12:00:00`).toLocaleString('en-IN', { month: 'short' })
-      : '-';
-    return { label, value: Number(d.count || 0) };
-  });
-
   const LEAD_SOURCE_SERIES = [
     { key: 'housing', label: platformLabel('housing'), color: '#1B3A5C' },
     { key: 'meta', label: platformLabel('meta'), color: '#2563EB' },
@@ -258,19 +249,6 @@ export default function Dashboard() {
             accent="#14B8A6"
             helper={model.campaigns ? `${model.campaigns} campaigns` : 'Team members'}
             onPress={() => router.push('/(app)/employees' as any)}
-          />
-        </View>
-
-        <View style={styles.chartRowSingle}>
-          <LineChart
-            title="Leads per Month"
-            subtitle="New enquiries received each month — last 12 months"
-            data={chartLeadsPerMonth.length ? chartLeadsPerMonth : [{ label: '-', value: 0 }]}
-            color={colors.primary}
-            unitLabel="leads"
-            defaultType="bar"
-            simple
-            testID="leads-per-month-chart"
           />
         </View>
 
@@ -616,7 +594,6 @@ const styles = StyleSheet.create({
   moreText: { fontSize: 11, fontWeight: '700', marginTop: 2 },
   emptyText: { fontSize: 11, fontStyle: 'italic', paddingVertical: 18, textAlign: 'center' },
   chartRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
-  chartRowSingle: { width: '100%' },
   chartFull: { flex: 1, minWidth: 320 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 20 },
   followModal: { width: '92%', maxWidth: 560, maxHeight: '82%', borderWidth: 1, borderRadius: 12, padding: 18 },
