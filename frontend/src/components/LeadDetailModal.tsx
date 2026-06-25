@@ -9,10 +9,12 @@ import { WorkflowStatusBadge } from './Badge';
 import { STAGES, isAdmin } from '../lib/constants';
 import {
   CALL_STATUS_OPTIONS,
+  NOT_INTERESTED_OPTIONS,
   formatBudgetRangeLakhs,
   formatBudgetStringLakhs,
   formatHousingConfiguration,
   formatHousingLeadDate,
+  stripActivityActorPrefix,
 } from '../lib/leadFormat';
 import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
@@ -77,6 +79,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(false);
   const [note, setNote] = useState('');
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
@@ -128,8 +131,22 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setFollowUpPayload(null);
       setFollowUpAction(null);
       setActiveCategory(null);
+      setNote('');
+      setEditingNoteId(null);
     }
   }, [visible, leadId, load]);
+
+  useEffect(() => {
+    const timeline = data?.timeline || [];
+    const latestCallNote = timeline.find((t: any) => t.type === 'call_note');
+    if (latestCallNote) {
+      setNote(stripActivityActorPrefix(latestCallNote.text));
+      setEditingNoteId(latestCallNote.activity_id || null);
+    } else {
+      setNote('');
+      setEditingNoteId(null);
+    }
+  }, [data?.timeline]);
 
   useEffect(() => {
     if (data?.lead?.brokerage_amount) {
@@ -207,9 +224,14 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     if (!leadId || !note.trim()) return;
     setBusy('note');
     try {
-      await api.post(`/leads/${leadId}/notes`, { text: note, type: 'call_note' });
-      setNote('');
+      if (editingNoteId) {
+        await api.patch(`/leads/${leadId}/notes/${editingNoteId}`, { text: note.trim() });
+      } else {
+        const res = await api.post(`/leads/${leadId}/notes`, { text: note.trim(), type: 'call_note' });
+        setEditingNoteId(res.data?.activity_id || null);
+      }
       await load(true);
+      onChanged?.();
     } finally {
       setBusy(null);
     }
@@ -680,33 +702,19 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
 
                       {activeCategory === 'negative' && (
                         <View style={styles.subGrid}>
-                          <SubActionBtn 
-                            label="Low Budget" 
-                            onPress={async () => {
-                              await updateLead({ status: 'negative', priority: 'low_budget' }, 'low_budget');
-                              onClose();
-                            }}
-                            busy={busy === 'low_budget'}
-                            color={colors.negative}
-                          />
-                          <SubActionBtn 
-                            label="Other Location" 
-                            onPress={async () => {
-                              await updateLead({ status: 'negative', priority: 'other_location' }, 'other_loc');
-                              onClose();
-                            }}
-                            busy={busy === 'other_loc'}
-                            color={colors.negative}
-                          />
-                          <SubActionBtn 
-                            label="Already Purchased" 
-                            onPress={async () => {
-                              await updateLead({ status: 'negative', priority: 'already_purchased' }, 'purchased');
-                              onClose();
-                            }}
-                            busy={busy === 'purchased'}
-                            color={colors.negative}
-                          />
+                          {NOT_INTERESTED_OPTIONS.map((opt) => (
+                            <SubActionBtn
+                              key={opt.key}
+                              label={opt.label}
+                              sub={lead.status === 'negative' && String(lead.priority || '') === opt.key ? 'Currently selected' : undefined}
+                              onPress={async () => {
+                                await updateLead({ status: 'negative', priority: opt.key }, opt.key);
+                                onClose();
+                              }}
+                              busy={busy === opt.key}
+                              color={colors.negative}
+                            />
+                          ))}
                         </View>
                       )}
 
@@ -786,11 +794,14 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
 
                 {/* Add note */}
                 <View style={[styles.block, { borderColor: colors.border }]}>
-                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>ADD CALL / VISIT NOTE</Text>
+                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>
+                    {editingNoteId ? 'EDIT CALL / VISIT NOTE' : 'ADD CALL / VISIT NOTE'}
+                  </Text>
                   <TextInput
                     testID="lead-note-input"
                     value={note}
                     onChangeText={setNote}
+                    editable={busy !== 'note'}
                     multiline
                     placeholder="e.g. Customer wants to revisit on Saturday..."
                     placeholderTextColor={colors.textMuted}
@@ -799,16 +810,31 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 13, marginTop: 8,
                     }}
                   />
-                  <Pressable
-                    testID="lead-note-save"
-                    onPress={addNote}
-                    disabled={!note.trim() || busy === 'note'}
-                    style={[styles.saveBtn, { backgroundColor: colors.primary, opacity: !note.trim() ? 0.5 : 1 }]}
-                  >
-                    {busy === 'note' ? <ActivityIndicator color="#fff" size="small" /> : (
-                      <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Save Note</Text>
-                    )}
-                  </Pressable>
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                    {editingNoteId ? (
+                      <Pressable
+                        onPress={() => {
+                          setEditingNoteId(null);
+                          setNote('');
+                        }}
+                        style={[styles.saveBtn, { flex: 1, backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border }]}
+                      >
+                        <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 13 }}>Add New Note</Text>
+                      </Pressable>
+                    ) : null}
+                    <Pressable
+                      testID="lead-note-save"
+                      onPress={addNote}
+                      disabled={!note.trim() || busy === 'note'}
+                      style={[styles.saveBtn, { flex: 1, backgroundColor: colors.primary, opacity: !note.trim() ? 0.5 : 1 }]}
+                    >
+                      {busy === 'note' ? <ActivityIndicator color="#fff" size="small" /> : (
+                        <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>
+                          {editingNoteId ? 'Update Note' : 'Save Note'}
+                        </Text>
+                      )}
+                    </Pressable>
+                  </View>
                 </View>
 
                 {/* Timeline */}

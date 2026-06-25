@@ -793,9 +793,9 @@ def normalize_employee_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, 
 def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
     """One bucket per lead — same priority as assign-workspace inquiry filters."""
     if lead.get("status") == "negative":
+        if _lead_priority(lead) == "low_budget":
+            return "low_budget"
         return "not_interested"
-    if _lead_priority(lead) == "low_budget":
-        return "low_budget"
     if clean_text(lead.get("call_status")):
         return "ringing"
     if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
@@ -889,6 +889,7 @@ NEGATIVE_PRIORITY_LABELS: Dict[str, str] = {
     "low_budget": "Low Budget",
     "other_location": "Other Location",
     "already_purchased": "Already Purchased",
+    "not_searching": "Not Searching",
 }
 
 
@@ -938,9 +939,10 @@ def enrich_leads_display_fields(leads: List[Dict[str, Any]]) -> List[Dict[str, A
 def classify_inquiry_status(lead: Dict[str, Any]) -> str:
     """Primary inquiry bucket for manager assign workspace filters."""
     if lead.get("status") == "negative":
+        pr = _lead_priority(lead)
+        if pr in NEGATIVE_PRIORITY_LABELS:
+            return pr
         return "not_interested"
-    if _lead_priority(lead) == "low_budget":
-        return "low_budget"
     if clean_text(lead.get("call_status")):
         return "ringing"
     if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
@@ -1279,6 +1281,7 @@ class LeadUpdate(BaseModel):
     brokerage_amount: Optional[float]=None
     call_status: Optional[str]=None
 class NoteCreate(BaseModel): text: str; type: str="call_note"
+class NoteUpdate(BaseModel): text: str
 class SiteVisitCreate(BaseModel): lead_id: str; scheduled_at: datetime; assigned_to: Optional[str]=None
 class SiteVisitUpdate(BaseModel):
     status: Optional[str]=None; feedback: Optional[str]=None; interested: Optional[bool]=None
@@ -1308,7 +1311,7 @@ class BulkLeadManageRequest(BaseModel):
 
 ASSIGN_INQUIRY_STATUSES = [
     "all", "active", "new", "hot", "visited", "booked", "ringing",
-    "not_interested", "low_budget", "unassigned",
+    "not_interested", "low_budget", "other_location", "already_purchased", "not_searching", "unassigned",
 ]
 ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
 INQUIRY_ACTION_PRESETS: Dict[str, Dict[str, Any]] = {
@@ -1322,6 +1325,9 @@ INQUIRY_ACTION_PRESETS: Dict[str, Dict[str, Any]] = {
     "ringing": {"status": "active", "call_status": "ringing"},
     "hot": {"status": "active", "stage": "positive", "priority": "hot"},
     "low_budget": {"status": "negative", "priority": "low_budget"},
+    "other_location": {"status": "negative", "priority": "other_location"},
+    "already_purchased": {"status": "negative", "priority": "already_purchased"},
+    "not_searching": {"status": "negative", "priority": "not_searching"},
 }
 class BookingCreate(BaseModel):
     lead_id: str; property_name: str; booking_amount: float=0; token_received: float=0
@@ -1541,6 +1547,11 @@ def inquiry_preset_to_patch(preset: Dict[str, Any], inquiry_action: Optional[str
             patch["stage"] = "assigned"
     elif action == "not_interested":
         patch.setdefault("status", "negative")
+        patch["call_status"] = None
+        patch["follow_up_at"] = None
+    elif action in ("low_budget", "other_location", "already_purchased", "not_searching"):
+        patch.setdefault("status", "negative")
+        patch.setdefault("priority", action)
         patch["call_status"] = None
         patch["follow_up_at"] = None
     return patch
@@ -1991,6 +2002,26 @@ def log_activity(actor, type_, text, lead_id=None):
     }
     sb_insert("activities", act)
     return act
+
+def _activity_actor_name(actor: Optional[User]) -> str:
+    if not actor:
+        return "System"
+    if actor.acting_as_employee_id:
+        emps = sb_select("employees", {"employee_id": f"eq.{actor.acting_as_employee_id}", "select": "name"})
+        if emps:
+            return emps[0]["name"]
+    return actor.name or "User"
+
+def strip_activity_actor_prefix(text: str) -> str:
+    raw = str(text or "")
+    m = re.match(r"^\[[^\]]+\]\s*", raw)
+    return raw[m.end():] if m else raw
+
+def format_activity_note_text(actor: Optional[User], body: str) -> str:
+    clean = (body or "").strip()
+    if not clean:
+        return ""
+    return f"[{_activity_actor_name(actor)}] {clean}"
 
 def get_lead_record(lead_id: str, select: str = "*"):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": select})
@@ -5364,9 +5395,46 @@ async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_curren
     if not leads:
         cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
         if not cache_match: raise HTTPException(404, "Lead not found")
-    activity = log_activity(cu, p.type, p.text, lead_id=lead_id)
+    body = (p.text or "").strip()
+    if not body:
+        raise HTTPException(400, detail="Note text is required.")
+    activity = log_activity(cu, p.type, body, lead_id=lead_id)
     if activity: SESSION_CACHE["activities"].insert(0, activity)
     return activity
+
+@api_router.patch("/leads/{lead_id}/notes/{activity_id}")
+async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: User = Depends(get_current_user)):
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id"})
+    if not leads:
+        cache_match = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id]
+        if not cache_match:
+            raise HTTPException(404, "Lead not found")
+    body = format_activity_note_text(cu, p.text)
+    if not body:
+        raise HTTPException(400, detail="Note text is required.")
+    rows = sb_select("activities", {
+        "activity_id": f"eq.{activity_id}",
+        "lead_id": f"eq.{lead_id}",
+        "select": "activity_id,type,text,lead_id",
+        "limit": "1",
+    })
+    activity = rows[0] if rows else None
+    if not activity:
+        cache_match = [a for a in SESSION_CACHE["activities"] if a.get("activity_id") == activity_id and a.get("lead_id") == lead_id]
+        activity = cache_match[0] if cache_match else None
+    if not activity:
+        raise HTTPException(404, "Note not found.")
+    if str(activity.get("type") or "") != "call_note":
+        raise HTTPException(400, detail="Only call / visit notes can be edited.")
+    updated = sb_update("activities", "activity_id", activity_id, {"text": body})
+    if not updated:
+        raise HTTPException(500, detail="Could not update note.")
+    merged = {**activity, **updated}
+    SESSION_CACHE["activities"] = [
+        merged if a.get("activity_id") == activity_id else a
+        for a in SESSION_CACHE["activities"]
+    ]
+    return merged
 
 @api_router.post("/leads/{lead_id}/advance")
 async def advance_lead(lead_id: str, cu: User=Depends(get_current_user)):

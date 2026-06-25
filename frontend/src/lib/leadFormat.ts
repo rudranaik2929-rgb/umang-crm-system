@@ -18,7 +18,21 @@ const NEGATIVE_PRIORITY_LABELS: Record<string, string> = {
   low_budget: 'Low Budget',
   other_location: 'Other Location',
   already_purchased: 'Already Purchased',
+  not_searching: 'Not Searching',
 };
+
+export const NOT_INTERESTED_OPTIONS = [
+  { key: 'low_budget', label: 'Low Budget' },
+  { key: 'other_location', label: 'Other Location' },
+  { key: 'already_purchased', label: 'Already Purchased' },
+  { key: 'not_searching', label: 'Not Searching' },
+] as const;
+
+export function stripActivityActorPrefix(text?: string | null): string {
+  const raw = String(text || '');
+  const m = raw.match(/^\[[^\]]+\]\s*/);
+  return m ? raw.slice(m[0].length) : raw;
+}
 
 const WORKFLOW_STATUS_COLORS: Record<string, string> = {
   missed_lead: '#DC2626',
