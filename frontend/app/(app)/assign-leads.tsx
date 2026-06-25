@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, TextInput } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
@@ -15,6 +15,7 @@ import {
 } from '../../src/components/AssignLeadsAdvancedModal';
 import { Ionicons } from '@expo/vector-icons';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
+import { leadIdsFromSelectionIndices, parseCustomLeadSelection } from '../../src/lib/assignLeadSelection';
 
 const DEFAULT_FILTERS: AssignWorkspaceFilters = {
   inquiry_status: 'all',
@@ -72,6 +73,7 @@ export default function AssignLeads() {
   const [bulkEmployeeId, setBulkEmployeeId] = useState<string | null>(null);
   const [bulkStatusAction, setBulkStatusAction] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [customSelectInput, setCustomSelectInput] = useState('');
 
   const load = useCallback(async (activeFilters = filters) => {
     try {
@@ -145,6 +147,35 @@ export default function AssignLeads() {
   const toggleSelectAll = () => {
     if (allSelected) setSelected(new Set());
     else setSelected(new Set(leads.map((l) => l.lead_id)));
+  };
+
+  const applyCustomSelection = (merge: boolean) => {
+    const { indices, error } = parseCustomLeadSelection(customSelectInput, leads.length);
+    if (error) {
+      setMessage(error);
+      return;
+    }
+    const ids = leadIdsFromSelectionIndices(leads, indices);
+    if (ids.length === 0) {
+      setMessage('No leads matched that selection.');
+      return;
+    }
+    setSelected((prev) => {
+      if (!merge) return new Set(ids);
+      const next = new Set(prev);
+      ids.forEach((id) => next.add(id));
+      return next;
+    });
+    const first = indices[0] + 1;
+    const last = indices[indices.length - 1] + 1;
+    const rangeLabel = indices.length === 1
+      ? `#${first}`
+      : first === 1 && last === indices.length
+        ? `first ${indices.length}`
+        : `#${first}–#${last}`;
+    setMessage(merge
+      ? `Added ${ids.length} lead(s) (${rangeLabel}) to selection.`
+      : `Selected ${ids.length} lead(s) (${rangeLabel}).`);
   };
 
   const applyFilters = (next: AssignWorkspaceFilters) => {
@@ -309,12 +340,43 @@ export default function AssignLeads() {
               </Text>
 
               {leads.length > 0 ? (
-                <Pressable onPress={toggleSelectAll} style={styles.selectAllRow}>
-                  <Ionicons name={allSelected ? 'checkbox' : 'square-outline'} size={20} color={colors.primary} />
-                  <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>
-                    {allSelected ? 'Clear selection' : `Select all on screen (${leads.length})`}
+                <View style={styles.selectToolbar}>
+                  <Pressable onPress={toggleSelectAll} style={styles.selectAllRow}>
+                    <Ionicons name={allSelected ? 'checkbox' : 'square-outline'} size={20} color={colors.primary} />
+                    <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>
+                      {allSelected ? 'Clear selection' : `Select all on screen (${leads.length})`}
+                    </Text>
+                  </Pressable>
+                  <View style={[styles.customSelectRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+                    <Ionicons name="filter-outline" size={16} color={colors.textMuted} />
+                    <TextInput
+                      testID="custom-lead-selection-input"
+                      value={customSelectInput}
+                      onChangeText={setCustomSelectInput}
+                      placeholder="10 or 40-50"
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="default"
+                      style={[styles.customSelectInput, { color: colors.text, borderColor: colors.border }]}
+                    />
+                    <Pressable
+                      testID="custom-lead-selection-apply"
+                      onPress={() => applyCustomSelection(false)}
+                      style={[styles.customSelectBtn, { backgroundColor: colors.primary }]}
+                    >
+                      <Text style={{ color: '#fff', fontSize: 11, fontWeight: '700' }}>Select</Text>
+                    </Pressable>
+                    <Pressable
+                      testID="custom-lead-selection-add"
+                      onPress={() => applyCustomSelection(true)}
+                      style={[styles.customSelectBtnOutline, { borderColor: colors.primary }]}
+                    >
+                      <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>Add</Text>
+                    </Pressable>
+                  </View>
+                  <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>
+                    Custom: type 10 for first 10 leads, or 40-50 for leads #40 to #50 on this screen. Use Add to keep current picks.
                   </Text>
-                </Pressable>
+                </View>
               ) : null}
 
               {leads.length === 0 ? (
@@ -325,7 +387,7 @@ export default function AssignLeads() {
                 </Text>
               ) : (
                 <View style={{ gap: 10, marginTop: 8 }}>
-                  {leads.map((lead) => {
+                  {leads.map((lead, index) => {
                     const isSelected = selected.has(lead.lead_id);
                     const statusLabel = workflowStatusLabel(lead);
                     const badgeColor = workflowStatusColor(lead);
@@ -337,6 +399,7 @@ export default function AssignLeads() {
                           backgroundColor: isSelected ? colors.primary + '08' : colors.surfaceAlt,
                         }]}
                       >
+                        <Text style={[styles.rowIndex, { color: colors.textMuted }]}>#{index + 1}</Text>
                         <Pressable onPress={() => toggleLead(lead.lead_id)} style={styles.checkHit}>
                           <Ionicons name={isSelected ? 'checkbox' : 'square-outline'} size={22} color={isSelected ? colors.primary : colors.textMuted} />
                         </Pressable>
@@ -516,7 +579,19 @@ const styles = StyleSheet.create({
   panel: { padding: 16, borderRadius: 12, borderWidth: 1 },
   panelTitle: { fontSize: 15, fontWeight: '700' },
   panelSub: { fontSize: 12, marginTop: 4, lineHeight: 18 },
-  selectAllRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 12 },
+  selectAllRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  selectToolbar: { marginTop: 12, gap: 8 },
+  customSelectRow: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, borderWidth: 1, flexWrap: 'wrap',
+  },
+  customSelectInput: {
+    flex: 1, minWidth: 100, height: 36, borderWidth: 1, borderRadius: 8,
+    paddingHorizontal: 10, fontSize: 13,
+  },
+  customSelectBtn: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8 },
+  customSelectBtnOutline: { paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
+  rowIndex: { fontSize: 10, fontWeight: '700', width: 28, marginTop: 4, textAlign: 'right' },
   leadRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, flexWrap: 'wrap' },
   checkHit: { padding: 2, marginTop: 2 },
   leadName: { fontSize: 14, fontWeight: '700' },
