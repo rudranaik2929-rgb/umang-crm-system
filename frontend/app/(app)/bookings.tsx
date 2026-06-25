@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
 import { canViewBookingFinance } from '../../src/lib/constants';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
+import { RegistrationReceiptModal } from '../../src/components/RegistrationReceiptModal';
 
 function leadInBookingQueue(lead: any) {
   const pr = String(lead?.priority || '').toLowerCase();
@@ -72,6 +73,8 @@ export default function Bookings() {
   const [localBrokerage, setLocalBrokerage] = useState<Record<string, string>>({});
   const [localCharges, setLocalCharges] = useState<Record<string, Record<string, string>>>({});
   const [openChargesId, setOpenChargesId] = useState<string | null>(null);
+  const [registrationReceiptBooking, setRegistrationReceiptBooking] = useState<any | null>(null);
+  const [registrationMarkComplete, setRegistrationMarkComplete] = useState(false);
   const canFinance = canViewBookingFinance(user?.role, user?.email);
 
   const load = useCallback(async () => {
@@ -142,6 +145,11 @@ export default function Bookings() {
   const saveChargeField = async (bookingId: string, field: string, raw: string) => {
     const parsed = raw.trim() === '' ? 0 : parseFloat(raw);
     await update(bookingId, { [field]: Number.isFinite(parsed) ? parsed : 0 }, field);
+  };
+
+  const openRegistrationReceipt = (booking: any, markComplete: boolean) => {
+    setRegistrationMarkComplete(markComplete);
+    setRegistrationReceiptBooking(booking);
   };
 
   const cancelBooking = async (booking: any) => {
@@ -308,10 +316,16 @@ export default function Bookings() {
             {completedLabels.length === 0 ? (
               <Text style={{ color: colors.textMuted, fontSize: 11 }}>Complete each task below</Text>
             ) : completedLabels.map((task) => (
-              <View key={task.key} style={[styles.doneChip, { borderColor: task.color + '55', backgroundColor: task.color + '10' }]}>
+              <Pressable
+                key={task.key}
+                onPress={task.key === 'registration' ? () => openRegistrationReceipt(b, false) : undefined}
+                style={[styles.doneChip, { borderColor: task.color + '55', backgroundColor: task.color + '10' }]}
+              >
                 <Ionicons name="checkmark" size={11} color={task.color} />
-                <Text style={{ color: task.color, fontSize: 10, fontWeight: '800' }}>{task.label}</Text>
-              </View>
+                <Text style={{ color: task.color, fontSize: 10, fontWeight: '800' }}>
+                  {task.key === 'registration' ? `${task.label} · Receipt` : task.label}
+                </Text>
+              </Pressable>
             ))}
           </View>
         </View>
@@ -358,22 +372,33 @@ export default function Bookings() {
           <View style={styles.actions}>
             {BOOKING_TASKS.map((task) => {
               const done = completedSet.has(task.key);
+              const isRegistration = task.key === 'registration';
               return (
                 <Pressable
                   key={task.key}
                   testID={`booking-task-${task.key}-${b.booking_id}`}
-                  onPress={() => completeTask(b, task)}
-                  disabled={done || busy !== null}
+                  onPress={() => {
+                    if (isRegistration) {
+                      openRegistrationReceipt(b, !done);
+                      return;
+                    }
+                    if (!done) completeTask(b, task);
+                  }}
+                  disabled={!isRegistration && (done || busy !== null)}
                   style={[styles.act, {
                     borderColor: done ? colors.positive + '70' : task.color + '60',
                     backgroundColor: done ? colors.positive + '14' : task.color + '10',
-                    opacity: busy !== null && !done ? 0.65 : 1,
+                    opacity: !isRegistration && busy !== null && !done ? 0.65 : 1,
                   }]}
                 >
                   {busy === `${b.booking_id}-${task.key}` ? <ActivityIndicator size="small" color={task.color} /> : <>
-                    <Ionicons name={done ? 'checkmark-circle' : task.icon as any} size={13} color={done ? colors.positive : task.color} />
-                    <Text style={{ color: done ? colors.positive : task.color, fontSize: 11, fontWeight: '700' }}>
-                      {done ? 'Done' : task.label}
+                    <Ionicons
+                      name={isRegistration ? 'receipt-outline' : done ? 'checkmark-circle' : task.icon as any}
+                      size={13}
+                      color={done && !isRegistration ? colors.positive : task.color}
+                    />
+                    <Text style={{ color: done && !isRegistration ? colors.positive : task.color, fontSize: 11, fontWeight: '700' }}>
+                      {isRegistration ? (done ? 'View Receipt' : task.label) : done ? 'Done' : task.label}
                     </Text>
                   </>}
                 </Pressable>
@@ -485,6 +510,24 @@ export default function Bookings() {
         onClose={() => setEditingBooking(null)}
         onSaved={async () => { setEditingBooking(null); await load(); }}
         colors={colors}
+      />
+      <RegistrationReceiptModal
+        visible={registrationReceiptBooking !== null}
+        booking={registrationReceiptBooking}
+        colors={colors}
+        markTaskComplete={registrationMarkComplete}
+        onClose={() => {
+          setRegistrationReceiptBooking(null);
+          setRegistrationMarkComplete(false);
+        }}
+        onSaved={async (updated) => {
+          if (updated?.booking_id) {
+            setBookings((items) => items.map((item) => (
+              item.booking_id === updated.booking_id ? { ...item, ...updated } : item
+            )));
+          }
+          await load();
+        }}
       />
     </View>
   );

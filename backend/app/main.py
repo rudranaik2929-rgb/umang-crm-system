@@ -1474,6 +1474,7 @@ class BookingCreate(BaseModel):
     gst: Optional[float]=None; society_charges: Optional[float]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
+    registration_receipt: Optional[Dict[str, Any]]=None
 class BookingUpdate(BaseModel):
     token_received: Optional[float]=None; agreement_status: Optional[str]=None; status: Optional[str]=None
     property_name: Optional[str]=None; booking_amount: Optional[float]=None
@@ -1484,6 +1485,7 @@ class BookingUpdate(BaseModel):
     brokerage_amount: Optional[float]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
+    registration_receipt: Optional[Dict[str, Any]]=None
 class LoanCreate(BaseModel):
     lead_id: str; amount: float; bank_name: Optional[str]=None
     documents_status: Optional[str]=None; pending_documents: Optional[List[str]]=None

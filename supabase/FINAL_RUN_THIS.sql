@@ -14,6 +14,7 @@
 --   • Workflow pills (Hot, Ringing, Missed, etc.) count actioned leads only
 --   • Visited box = stage site_visit only (Mark Visited button)
 --   • Today Activity box = employee work log in last 24 hours
+--   • Bookings registration_receipt jsonb = saved basic invoice on Registration task
 --   • Visit follow-ups, call_status, priority
 --
 -- Excel import (no extra columns — uses fields below):
@@ -96,6 +97,7 @@ alter table visit_followups add column if not exists created_at timestamptz defa
 -- 4. BOOKINGS
 -- ---------------------------------------------------------------------
 alter table bookings add column if not exists brokerage_amount numeric not null default 0;
+alter table bookings add column if not exists registration_receipt jsonb;
 
 -- ---------------------------------------------------------------------
 -- 5. INTEGRATION EVENTS (Housing sync checkpoint, Meta webhooks)
