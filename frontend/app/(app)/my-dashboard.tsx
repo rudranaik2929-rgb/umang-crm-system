@@ -211,6 +211,16 @@ export default function MyDashboard() {
               <Text style={styles.ctaText}>{cta.label}</Text>
               <Ionicons name="arrow-forward" size={14} color="#fff" />
             </Pressable>
+            {role === 'manager' ? (
+              <Pressable
+                testID="my-dashboard-tracking-cta"
+                onPress={() => router.push('/(app)/admin-tracking' as any)}
+                style={[styles.ctaBtnOutline, { borderColor: accent, marginTop: 10 }]}
+              >
+                <Ionicons name="map-outline" size={14} color={accent} />
+                <Text style={[styles.ctaText, { color: accent }]}>Employee Tracking (live GPS map)</Text>
+              </Pressable>
+            ) : null}
           </View>
 
           {/* Score ring */}
@@ -466,6 +476,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center', gap: 8,
     alignSelf: 'flex-start',
     paddingHorizontal: 18, height: 42, borderRadius: 10, marginTop: 18,
+  },
+  ctaBtnOutline: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 18, height: 42, borderRadius: 10,
+    borderWidth: 1,
   },
   ctaText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   scoreWrap: { alignItems: 'center', gap: 8, width: 200 },

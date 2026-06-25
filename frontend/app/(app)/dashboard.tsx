@@ -309,6 +309,23 @@ export default function Dashboard() {
           </View>
         )}
 
+        {showAssignPanel ? (
+          <Pressable
+            onPress={() => router.push('/(app)/admin-tracking' as any)}
+            style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}
+          >
+            <View style={styles.panelHeader}>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.panelTitle, { color: colors.text }]}>Employee Tracking</Text>
+                <Text style={[styles.panelSub, { color: colors.textMuted }]}>
+                  Live GPS map — see where your team is working right now
+                </Text>
+              </View>
+              <Ionicons name="map-outline" size={22} color={colors.primary} />
+            </View>
+          </Pressable>
+        ) : null}
+
         <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
           <View style={styles.panelHeader}>
             <View>

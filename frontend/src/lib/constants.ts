@@ -34,8 +34,12 @@ export const ROLES = [
 ];
 
 export function roleLabel(role?: string | null): string {
-  const r = ROLES.find((x) => x.key === role);
+  const r = ROLES.find((x) => x.key === (role || '').toLowerCase());
   return r?.label || 'Member';
+}
+
+function normalizeRole(role?: string | null): string {
+  return (role || '').trim().toLowerCase();
 }
 
 export function stageLabel(stage?: string): string {
@@ -119,23 +123,24 @@ const ADMIN_MANAGER_ONLY_PAGES = new Set(['tracking']);
 const DEPRECATED_PAGE_KEYS = ['follow-ups', 'visits'];
 
 export function effectivePages(role?: string | null, email?: string | null, allowedPages?: string[] | null): string[] {
+  const normalizedRole = normalizeRole(role);
   const strip = (keys: string[]) => keys.filter((k) => !DEPRECATED_PAGE_KEYS.includes(k));
   let pages: string[];
-  if (isOwner(role, email)) {
+  if (isOwner(normalizedRole, email)) {
     pages = strip(NAV_ITEMS.map((n) => n.key));
   } else if (Array.isArray(allowedPages) && allowedPages.length > 0) {
     pages = strip(Array.from(new Set(['my-dashboard', ...allowedPages])));
   } else {
-    pages = strip(ROLE_ACCESS[role || 'admin'] || ROLE_ACCESS.admin);
+    pages = strip(ROLE_ACCESS[normalizedRole] || ROLE_ACCESS.admin);
   }
-  // Manager gets main Dashboard + My Dashboard (not owner revenue controls).
-  if (role === 'manager') {
+  // Manager gets main Dashboard + My Dashboard + Employee Tracking (not owner revenue controls).
+  if (normalizedRole === 'manager') {
     if (!pages.includes('dashboard')) pages = ['dashboard', ...pages];
     if (!pages.includes('my-dashboard')) pages = ['my-dashboard', ...pages];
     if (!pages.includes('tracking')) pages = [...pages, 'tracking'];
   }
   // Employee Tracking — admin & manager only (never from per-employee grants).
-  if (role !== 'admin' && role !== 'manager') {
+  if (normalizedRole !== 'admin' && normalizedRole !== 'manager') {
     pages = pages.filter((p) => !ADMIN_MANAGER_ONLY_PAGES.has(p));
   }
   return pages;
@@ -172,11 +177,12 @@ export function canViewBookingFinance(role?: string | null, email?: string | nul
 }
 
 export function canAccess(role: string | null | undefined, page: string, email?: string | null, allowedPages?: string[] | null): boolean {
+  const normalizedRole = normalizeRole(role);
   if (ADMIN_MANAGER_ONLY_PAGES.has(page)) {
-    return role === 'admin' || role === 'manager';
+    return normalizedRole === 'admin' || normalizedRole === 'manager';
   }
-  if (page === 'dashboard') return canAccessMainDashboard(role, email);
-  return effectivePages(role, email, allowedPages).includes(page);
+  if (page === 'dashboard') return canAccessMainDashboard(normalizedRole, email);
+  return effectivePages(normalizedRole, email, allowedPages).includes(page);
 }
 
 export function pageKeyFromPathname(pathname?: string | null): string | null {

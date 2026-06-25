@@ -1373,7 +1373,7 @@ HARDCODED_USERS = {
         "dashboard_type": "manager",
         "allowed_pages": [
             "dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans",
-            "integrations", "broker", "employees",
+            "integrations", "broker", "employees", "tracking",
         ],
         "created_at": "2026-01-01T00:00:00+00:00",
     },
@@ -1384,7 +1384,7 @@ def public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 
 def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize role, sidebar pages, and dashboard landing for session/JWT payloads."""
-    role = (u.get("role") or "telecaller").strip()
+    role = (u.get("role") or "telecaller").strip().lower()
     u["role"] = role
     pages = u.get("allowed_pages")
     if pages is None:
@@ -1397,6 +1397,8 @@ def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
             pages = ["dashboard", *pages]
         if "my-dashboard" not in pages:
             pages = ["my-dashboard", *pages]
+        if "tracking" not in pages:
+            pages = [...pages, "tracking"]
     elif role == "admin":
         u["dashboard_type"] = u.get("dashboard_type") or "admin"
         if "dashboard" not in pages:
@@ -5810,9 +5812,11 @@ def _sanitize_assignable_pages(pages: List[str]) -> List[str]:
 
 def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
     """Employee row is the source of truth for sidebar access after login."""
-    role = (u.get("role") or "").strip()
-    if role == "admin":
-        return u
+    role = (u.get("role") or "").strip().lower()
+    u["role"] = role
+    # Admin/manager sidebar is role-based (includes Employee Tracking) — not employee checkboxes.
+    if role in ("admin", "manager"):
+        return _finalize_user_session(u)
     emp_id = u.get("employee_id")
     if not emp_id and u.get("email"):
         emps = sb_select("employees", {
@@ -5862,7 +5866,7 @@ def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
         "admin": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "employees"],
+        "manager": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "tracking", "employees"],
         "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
         "site_visit": ["my-dashboard", "sales-executive", "pipeline"],
         "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline"],
@@ -5972,18 +5976,25 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
 async def list_employees(cu: User=Depends(get_current_user)):
     now = time.time()
     if _employees_cache["ts"] and (now - float(_employees_cache["ts"])) < _EMPLOYEES_CACHE_TTL:
-        return _employees_cache["data"]
-    rows = sb_select("employees", {
-        "select": (
-            "employee_id,name,email,phone,role,department,active,user_id,allowed_pages,created_at,"
-            "last_lat,last_lng,last_seen_at"
-        ),
-        "order": "created_at.desc",
-    })
-    for row in rows:
-        row["allowed_pages"] = _employee_allowed_pages(row)
-    _employees_cache.update({"ts": now, "data": rows})
-    return rows
+        rows = _employees_cache["data"]
+    else:
+        rows = sb_select("employees", {
+            "select": (
+                "employee_id,name,email,phone,role,department,active,user_id,allowed_pages,created_at,"
+                "last_lat,last_lng,last_seen_at"
+            ),
+            "order": "created_at.desc",
+        })
+        for row in rows:
+            row["allowed_pages"] = _employee_allowed_pages(row)
+        _employees_cache.update({"ts": now, "data": rows})
+    can_see_location = cu.role in ("admin", "manager")
+    if can_see_location:
+        return rows
+    return [
+        {k: v for k, v in row.items() if k not in ("last_lat", "last_lng", "last_seen_at")}
+        for row in rows
+    ]
 
 @api_router.patch("/employees/{eid}")
 async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_current_user)):
