@@ -124,6 +124,11 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
                     <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 2 }}>
                       {[l.property_type, l.location].filter(Boolean).join(' · ') || l.source || '—'}
                     </Text>
+                    {metric === 'today_follow_ups' && l.follow_up_at ? (
+                      <Text style={{ color: colors.accent, fontSize: 10, marginTop: 4, fontWeight: '600' }}>
+                        Due {formatWhen(l.follow_up_at)}
+                      </Text>
+                    ) : null}
                     {l.budget ? (
                       <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 2 }}>
                         {formatBudgetStringLakhs(l.budget) ? `${formatBudgetStringLakhs(l.budget)} L` : l.budget}

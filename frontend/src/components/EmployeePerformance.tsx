@@ -27,6 +27,7 @@ const WORKFLOW_METRICS = [
   { key: 'emp_booking_done', apiKey: 'booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },
   { key: 'emp_low_budget', apiKey: 'low_budget', label: 'Low Budget', icon: 'wallet' as const, colorKey: 'accent' },
   { key: 'emp_follow_ups', apiKey: 'follow_ups', label: 'Follow Up', icon: 'calendar' as const, colorKey: 'warning' },
+  { key: 'emp_today_follow_ups', apiKey: 'today_follow_ups', label: 'Today Follow Up', icon: 'alarm' as const, colorKey: 'accent' },
   { key: 'emp_ringing', apiKey: 'ringing', label: 'Ringing', icon: 'call' as const, colorKey: 'warning' },
   { key: 'emp_today_activity', apiKey: 'today_activity', label: 'Today Activity', icon: 'today' as const, colorKey: 'positive' },
 ];

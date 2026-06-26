@@ -12,7 +12,8 @@ from io import BytesIO
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Iterable, Tuple
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone, timedelta, date
+from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -343,6 +344,24 @@ def sb_delete(table, pk_col, pk_val):
     return r.status_code < 400
 
 def now_utc(): return datetime.now(timezone.utc)
+
+APP_TZ = ZoneInfo("Asia/Kolkata")
+
+
+def app_today() -> date:
+    """Calendar today in India — matches follow-up date picker (en-IN)."""
+    return datetime.now(APP_TZ).date()
+
+
+def follow_up_calendar_date(value: Optional[str]) -> Optional[date]:
+    """Date portion of follow_up_at for dashboard due-today filters."""
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.date()
+    return parsed.astimezone(APP_TZ).date()
 def gen_id(p="id"): return f"{p}_{uuid.uuid4().hex[:12]}"
 def model_payload(model: BaseModel) -> dict:
     data = {}
@@ -884,6 +903,24 @@ def filter_employee_follow_up_leads(emp_leads: List[Dict[str, Any]]) -> List[Dic
     ]
 
 
+def filter_employee_today_follow_up_leads(
+    emp_leads: List[Dict[str, Any]],
+    *,
+    on_date: Optional[date] = None,
+) -> List[Dict[str, Any]]:
+    """Leads with follow-up scheduled for today (IST) — not tomorrow or later."""
+    target = on_date or app_today()
+    rows = normalize_employee_leads(emp_leads)
+    due = [
+        l for l in rows
+        if l.get("follow_up_at")
+        and l.get("status") != "negative"
+        and follow_up_calendar_date(l.get("follow_up_at")) == target
+    ]
+    due.sort(key=lambda l: l.get("follow_up_at") or "")
+    return due
+
+
 def _lead_priority(lead: Dict[str, Any]) -> str:
     return str(lead.get("priority") or "").strip().lower()
 
@@ -943,6 +980,8 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
         return [l for l in rows if l.get("status") != "negative" and l.get("stage") != "closed"]
     if key in ("follow_ups", "follow_up", "assigned_follow_ups"):
         return filter_employee_follow_up_leads(emp_leads)
+    if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):
+        return filter_employee_today_follow_up_leads(emp_leads)
     if key == "ringing":
         return [
             l for l in rows
@@ -971,6 +1010,7 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
         "emp_low_budget": len(filter_employee_metric_leads(emp_leads, "low_budget")),
         "emp_ringing": len(filter_employee_metric_leads(emp_leads, "ringing")),
         "emp_follow_ups": len(filter_employee_follow_up_leads(emp_leads)),
+        "emp_today_follow_ups": len(filter_employee_today_follow_up_leads(emp_leads)),
         "emp_missed_leads": len(filter_employee_missed_leads(emp_leads)),
     }
 
@@ -7013,6 +7053,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "emp_low_budget": metric_counts["low_budget"],
             "emp_ringing": metric_counts["ringing"],
             "emp_today_activity": metric_counts["today_activity"],
+            "emp_today_follow_ups": metric_counts["today_follow_ups"],
             "emp_follow_ups": metric_counts["follow_ups"],
             "emp_missed_leads": metric_counts["missed_leads"],
             "metric_counts": metric_counts,
@@ -7037,12 +7078,13 @@ async def stats_me(cu: User=Depends(get_current_user)):
 
 EMPLOYEE_METRIC_KEYS = [
     "total", "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
-    "ringing", "follow_ups", "missed_leads", "new_leads", "today_activity",
+    "ringing", "follow_ups", "today_follow_ups", "missed_leads", "new_leads", "today_activity",
 ]
 
 MY_DASHBOARD_METRICS = [
     "new_leads", "total", "missed_leads", "hot", "visited",
-    "not_interested", "booking_done", "low_budget", "follow_ups", "ringing", "today_activity",
+    "not_interested", "booking_done", "low_budget", "follow_ups", "today_follow_ups",
+    "ringing", "today_activity",
 ]
 
 PERSONAL_ACTIVITY_METRICS = list(dict.fromkeys(
@@ -7057,6 +7099,7 @@ PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
     "new_leads": "New Leads — Not Yet Updated",
     "queue": "My Queue",
     "follow_ups": "Follow-ups",
+    "today_follow_ups": "Today Follow Up",
     "completed": "Completed",
     "closed_deals": "Closed Deals",
     "positive": "Positive Leads",
@@ -7104,6 +7147,8 @@ def personal_dashboard_metric_items(
         return filter_employee_queue_leads(backlog, role)
     if key in ("follow_ups", "followups", "assigned_follow_ups"):
         return filter_employee_follow_up_leads(backlog)
+    if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):
+        return filter_employee_today_follow_up_leads(backlog)
     if key in ("missed_leads", "missed"):
         return filter_employee_missed_leads(rows)
     if key in ("completed", "assigned_completed", "closed_deals"):
@@ -7202,9 +7247,11 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
         items = result["items"][:limit]
         action_total = sum(int(r.get("action_count") or 0) for r in items)
     elif result["kind"] == "leads":
-        items = enrich_leads_display_fields(
-            sorted(result["items"], key=lambda l: l.get("created_at") or "", reverse=True)[:limit]
-        )
+        if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):
+            lead_rows = result["items"][:limit]
+        else:
+            lead_rows = sorted(result["items"], key=lambda l: l.get("created_at") or "", reverse=True)[:limit]
+        items = enrich_leads_display_fields(lead_rows)
     else:
         items = sorted(result["items"], key=lambda a: a.get("created_at") or "", reverse=True)[:limit]
         for act in items:
@@ -7275,7 +7322,10 @@ async def list_employee_metric_leads(
         filtered = filter_employee_metric_leads(filter_employee_backlog_leads(emp_leads), key)
     else:
         filtered = []
-    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):
+        filtered.sort(key=lambda l: l.get("follow_up_at") or "")
+    else:
+        filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     return {
         "employee_id": employee_id,
         "metric": key,
