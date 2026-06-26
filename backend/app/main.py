@@ -363,8 +363,15 @@ def sb_update(table, pk_col, pk_val, data):
     if r.status_code >= 400:
         logging.error(f"Supabase UPDATE {table}: {r.status_code} {r.text[:300]}")
         return None
-    rows = r.json()
-    return rows[0] if isinstance(rows, list) and rows else rows
+    if not r.text or not r.text.strip():
+        return {pk_col: pk_val, **data}
+    try:
+        rows = r.json()
+        if isinstance(rows, list):
+            return rows[0] if rows else None
+        return rows if isinstance(rows, dict) else None
+    except Exception:
+        return {pk_col: pk_val, **data}
 
 def sb_delete(table, pk_col, pk_val):
     r = _http.delete(f"{sb_url(table)}?{pk_col}=eq.{pk_val}", headers=sb_headers())
@@ -1762,17 +1769,31 @@ def _can_reactivate_negative_lead(cu: User) -> bool:
     return _can_manage_all_leads(cu) or cu.role == "marketing"
 
 
+def ensure_lead_note_access(cu: User, lead: Dict[str, Any]) -> None:
+    """Call / visit notes — any logged-in user may add or edit on an existing lead."""
+    if not lead:
+        raise HTTPException(status_code=404, detail="Lead not found.")
+
+
 def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
     """Employees may only edit leads assigned to them; managers/admins edit any."""
     if _can_manage_all_leads(cu):
         return
     if cu.role == "marketing" and lead.get("status") == "negative":
         return
+    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
+    if emp_id:
+        emps = sb_select("employees", {
+            "employee_id": f"eq.{emp_id}",
+            "select": "employee_id,name,user_id",
+            "limit": "1",
+        })
+        if emps and lead_assigned_to_employee(lead, emps[0]):
+            return
     assignee_ids = employee_assignee_ids(cu)
     assigned = clean_text(lead.get("assigned_to"))
     if assigned and assigned in assignee_ids:
         return
-    emp_id = resolve_employee_id(cu) or cu.employee_id
     if emp_id:
         emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "name", "limit": "1"})
         if emps and assigned.lower() == clean_text(emps[0].get("name")).lower():
@@ -5758,7 +5779,7 @@ async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_curren
     lead = get_lead_record(lead_id, "lead_id,assigned_to")
     if not lead:
         raise HTTPException(404, detail="Lead not found")
-    ensure_lead_edit_access(cu, lead)
+    ensure_lead_note_access(cu, lead)
     clean = strip_activity_actor_prefix((p.text or "").strip())
     if not clean:
         raise HTTPException(400, detail="Note text is required.")
@@ -5788,7 +5809,7 @@ async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: Us
     lead = get_lead_record(lead_id, "lead_id,assigned_to")
     if not lead:
         raise HTTPException(404, detail="Lead not found")
-    ensure_lead_edit_access(cu, lead)
+    ensure_lead_note_access(cu, lead)
     clean = strip_activity_actor_prefix((p.text or "").strip())
     if not clean:
         raise HTTPException(400, detail="Note text is required.")
@@ -5809,18 +5830,27 @@ async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: Us
         raise HTTPException(400, detail="Only call / visit notes can be edited.")
     updated = sb_update("activities", "activity_id", activity_id, {"text": body})
     if not updated:
-        upsert_row = {
-            "activity_id": activity_id,
-            "lead_id": lead_id,
-            "user_id": activity.get("user_id") or cu.acting_as_employee_id or cu.employee_id or cu.user_id,
-            "type": activity.get("type") or "call_note",
-            "text": body,
-            "created_at": activity.get("created_at") or now_utc().isoformat(),
-        }
-        inserted = sb_insert("activities", upsert_row)
-        if inserted is None:
-            raise HTTPException(500, detail="Could not update note. Please try again.")
-        updated = {**upsert_row, **inserted} if isinstance(inserted, dict) else upsert_row
+        refetched = sb_select("activities", {
+            "activity_id": f"eq.{activity_id}",
+            "lead_id": f"eq.{lead_id}",
+            "select": "activity_id,type,text,lead_id,user_id,created_at",
+            "limit": "1",
+        })
+        if refetched:
+            updated = {**refetched[0], "text": body}
+        else:
+            upsert_row = {
+                "activity_id": activity_id,
+                "lead_id": lead_id,
+                "user_id": activity.get("user_id") or cu.acting_as_employee_id or cu.employee_id or cu.user_id,
+                "type": activity.get("type") or "call_note",
+                "text": body,
+                "created_at": activity.get("created_at") or now_utc().isoformat(),
+            }
+            inserted = sb_insert("activities", upsert_row)
+            if inserted is None:
+                raise HTTPException(500, detail="Could not update note. Please try again.")
+            updated = {**upsert_row, **inserted} if isinstance(inserted, dict) else upsert_row
     else:
         updated = {**activity, **updated}
     SESSION_CACHE["activities"] = [

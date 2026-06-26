@@ -144,14 +144,14 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     });
   }, [leadId]);
 
-  const load = useCallback(async (isBackground = false, hydrateNote = false) => {
+  const load = useCallback(async (isBackground = false, hydrateNote = false, preferNoteId?: string | null) => {
     if (!leadId) return;
     if (!isBackground) setLoading(true);
     try {
-      const r = await api.get(`/leads/${leadId}`, { params: { _t: Date.now() } });
+      const r = await api.get(`/leads/${leadId}`, { params: { _t: Date.now() }, bypassCache: true } as any);
       setData(r.data);
       if (hydrateNote && !noteDirtyRef.current) {
-        applyNoteFromTimeline(r.data?.timeline || []);
+        applyNoteFromTimeline(r.data?.timeline || [], preferNoteId ?? undefined);
       }
     } finally {
       if (!isBackground) setLoading(false);
@@ -294,6 +294,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       mergeSavedNoteIntoTimeline({ ...saved, text: saved.text || `[Note] ${body}` });
       setNoteSaved(wasEditing ? 'Note updated.' : 'Note saved.');
       onChanged?.();
+      await load(true, true, saved.activity_id);
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
       setNoteError(typeof detail === 'string' ? detail : e?.message || 'Could not save note. Please try again.');
