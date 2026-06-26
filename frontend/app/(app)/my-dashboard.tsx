@@ -5,7 +5,8 @@ import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot, clearGetCache } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot, broadcastDataChanged } from '../../src/lib/api';
+import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
 import { roleLabel } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
@@ -93,33 +94,10 @@ export default function MyDashboard() {
     } finally { setLoading(false); }
   }, []);
   useEffect(() => {
-    clearGetCache();
     load();
   }, [load]);
 
-  // Refresh when tab is visible — pause polling in background tabs.
-  useEffect(() => {
-    if (typeof document === 'undefined') {
-      const interval = setInterval(() => { load(); }, 90000);
-      return () => clearInterval(interval);
-    }
-    let interval: ReturnType<typeof setInterval> | null = null;
-    const start = () => {
-      if (interval) return;
-      interval = setInterval(() => {
-        if (document.visibilityState === 'visible') load();
-      }, 90000);
-    };
-    const onVis = () => {
-      if (document.visibilityState === 'visible') load();
-    };
-    start();
-    document.addEventListener('visibilitychange', onVis);
-    return () => {
-      if (interval) clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVis);
-    };
-  }, [load]);
+  useLiveRefresh(load);
 
   if (loading && !data) {
     return (

@@ -1,13 +1,15 @@
 import axios from 'axios';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { notifyLiveDataChanged } from './liveSync';
 
 // Default: Render URL until api.umanghometechllp.in custom domain is live on Render.
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-systemumang-home-tech.onrender.com').replace(/\/$/, '');
 
 const REQUEST_TIMEOUT_MS = 15000;
 const AUTH_TIMEOUT_MS = 90000;
-const GET_CACHE_MS = 120000;
+/** Short TTL for non-live endpoints only (auth, static config). */
+const GET_CACHE_MS = 15000;
 const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
 const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v1';
 const GET_STORAGE_KEY = 'umang_get_cache_v1';
@@ -76,8 +78,24 @@ export function clearGetCache() {
     } catch {}
 }
 
+/** Call after local mutations so every open screen reloads immediately. */
+export function broadcastDataChanged() {
+    clearGetCache();
+    notifyLiveDataChanged();
+}
+
+const LIVE_GET_PREFIXES = ['/stats', '/leads', '/employees', '/activities', '/bookings', '/loans', '/visits', '/notifications'];
+
+function isLiveGetUrl(url: string) {
+    const path = String(url || '').split('?')[0];
+    return LIVE_GET_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
 const _axiosGet = api.get.bind(api);
 api.get = function getWithCache(url: string, config?: any) {
+    if (config?.bypassCache || isLiveGetUrl(url)) {
+        return _axiosGet(url, config);
+    }
     const key = getCacheKey(url, config?.params);
     const hit = _getCache.get(key);
     if (hit && Date.now() - hit.ts < GET_CACHE_MS) {
@@ -111,7 +129,7 @@ api.interceptors.response.use(
     (response) => {
         const method = String(response.config?.method || 'get').toLowerCase();
         if (method !== 'get' && method !== 'head') {
-            clearGetCache();
+            broadcastDataChanged();
         }
         return response;
     },
@@ -284,6 +302,8 @@ export function clearSnapshots() {
         }
     } catch {}
 }
+
+export { LIVE_REFRESH_MS } from './liveSync';
 
 export const META_INTEGRATION_TIMEOUT_MS = 180000;
 export const AUTH_REQUEST_TIMEOUT_MS = AUTH_TIMEOUT_MS;

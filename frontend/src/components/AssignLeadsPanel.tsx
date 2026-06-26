@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api, getSnapshot, setSnapshot } from '../lib/api';
+import { useLiveRefresh } from '../hooks/useLiveRefresh';
 import { roleLabel } from '../lib/constants';
 
 type Props = { compact?: boolean };
@@ -26,11 +27,8 @@ export function AssignLeadsPanel({ compact = false }: Props) {
     }
   }, [stats]);
 
-  useEffect(() => {
-    load();
-    const id = setInterval(() => load(true), 90000);
-    return () => clearInterval(id);
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
+  useLiveRefresh(() => load(true));
 
   if (loading && !stats) return <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />;
 

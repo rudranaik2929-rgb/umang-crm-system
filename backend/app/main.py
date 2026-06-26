@@ -223,7 +223,7 @@ def sb_url(table: str) -> str:
 _http = httpx.Client(timeout=20, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
 
 # Short-lived caches — cut repeated full-table Supabase reads on dashboard/login.
-LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "300"))
+LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "15"))
 _USER_CACHE_TTL_SEC = int(os.environ.get("USER_CACHE_TTL_SEC", "300"))
 _leads_cache: Dict[str, Any] = {"ts": 0.0, "select": "", "data": []}
 _user_profile_cache: Dict[str, Dict[str, Any]] = {}
@@ -232,7 +232,7 @@ _EMPLOYEES_CACHE_TTL = 60
 _assignment_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _employee_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _dashboard_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
-_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "120"))
+_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "8"))
 _leads_cache_lock = threading.Lock()
 _leads_cache_loading = threading.Event()
 
@@ -5557,6 +5557,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     else:
         SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
     update_cached_lead(lead_id, data)
+    invalidate_leads_cache()
     updated = new_lead
     
     # Log activity for stage/status changes
@@ -5866,6 +5867,7 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
     }
     sb_update("leads", "lead_id", lead_id, lead_update)
     update_cached_lead(lead_id, lead_update)
+    invalidate_leads_cache()
     detail = f"Follow-up scheduled for {parts['follow_up_day']} {parts['follow_up_date']} at {parts['follow_up_time']}."
     if clean_text(p.reason):
         detail += f" Reason: {clean_text(p.reason)}."

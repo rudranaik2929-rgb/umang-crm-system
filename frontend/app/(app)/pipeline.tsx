@@ -4,6 +4,7 @@ import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { STAGES, STAGE_COLORS, stageLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
 import { EmptyState } from '../../src/components/EmptyState';
@@ -31,6 +32,7 @@ export default function Pipeline() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useLiveRefresh(load);
 
   const grouped = STAGES.reduce<Record<string, any[]>>((acc, s) => {
     acc[s.key] = leads.filter((l) => pipelineStageMatch(l, s.key));

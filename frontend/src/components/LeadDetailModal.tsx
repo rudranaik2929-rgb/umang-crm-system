@@ -4,7 +4,7 @@ import { useRouter } from 'expo-router';
 import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api, clearGetCache } from '../lib/api';
+import { api, broadcastDataChanged } from '../lib/api';
 import { WorkflowStatusBadge } from './Badge';
 import { STAGES, isAdmin } from '../lib/constants';
 import {
@@ -234,6 +234,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
         triggerConfetti();
       }
       onChanged?.();
+      broadcastDataChanged();
       if (opts?.closeAfter) {
         onClose();
         return;
@@ -251,6 +252,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       await api.post(`/leads/${leadId}/advance`);
       await load(true);
       onChanged?.();
+      broadcastDataChanged();
     } finally {
       setBusy(null);
     }
@@ -284,7 +286,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       if (!saved?.activity_id) {
         throw new Error('Note saved but server returned no id.');
       }
-      clearGetCache();
+      broadcastDataChanged();
       noteDirtyRef.current = false;
       const displayText = stripActivityActorPrefix(saved.text || body);
       setEditingNoteId(saved.activity_id);
@@ -337,6 +339,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setShowAssignDropdown(false);
       await load(true);
       onChanged?.();
+      broadcastDataChanged();
     } finally {
       setBusy(null);
     }
@@ -349,6 +352,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       await api.post(`/leads/${leadId}/to-broker`);
       await load(true);
       onChanged?.();
+      broadcastDataChanged();
     } finally {
       setBusy(null);
     }
@@ -361,6 +365,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       await api.delete(`/leads/${leadId}`);
       setShowDeleteConfirm(false);
       onChanged?.();
+      broadcastDataChanged();
       onClose();
     } catch (e: any) {
       alert(e?.response?.data?.detail || 'Failed to delete lead');

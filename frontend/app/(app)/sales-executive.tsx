@@ -4,7 +4,8 @@ import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot, clearGetCache } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot, broadcastDataChanged } from '../../src/lib/api';
+import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LeadQueueTable } from '../../src/components/LeadQueueTable';
@@ -41,6 +42,7 @@ export default function SalesExecutive() {
   }, []);
 
   useEffect(() => { load(); }, [load]);
+  useLiveRefresh(load);
 
   const queueTotal = Number(stats?.assigned_queue ?? queueLeads.length);
   const followTotal = Number(stats?.assigned_follow_ups ?? 0);
@@ -85,8 +87,7 @@ export default function SalesExecutive() {
         onClose={() => setOpenLead(null)}
         onChanged={() => {
           load();
-          clearGetCache();
-          setSnapshot('my-dashboard', null);
+          broadcastDataChanged();
         }}
         userRole={user?.role}
         onGoFollowUps={() => setTab('followups')}

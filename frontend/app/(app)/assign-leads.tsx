@@ -4,6 +4,7 @@ import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { roleLabel } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { formatBudgetStringLakhs, workflowStatusColor, workflowStatusLabel } from '../../src/lib/leadFormat';
@@ -107,6 +108,7 @@ export default function AssignLeads() {
   }, [filters]);
 
   useEffect(() => { load(); }, [load]);
+  useLiveRefresh(load);
 
   const employeeOptions = useMemo(
     () => employees.map((e) => ({

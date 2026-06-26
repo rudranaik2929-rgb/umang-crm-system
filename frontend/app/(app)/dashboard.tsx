@@ -4,6 +4,7 @@ import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
@@ -101,8 +102,11 @@ export default function Dashboard() {
   useEffect(() => {
     if (!canLoadDashboard) return;
     load();
-    // Housing/Meta sync runs on the server every 5 min — no frontend poll (was slowing every click).
   }, [load, canLoadDashboard]);
+
+  useLiveRefresh(() => {
+    if (canLoadDashboard) load();
+  });
 
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
