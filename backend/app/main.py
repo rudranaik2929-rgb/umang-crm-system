@@ -565,6 +565,20 @@ def dedupe_leads(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out.append(lead)
     return out
 
+
+def dedupe_leads_by_external_id(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Collapse only Housing/Meta sync duplicates — every Excel/manual row keeps its own lead_id."""
+    seen: set = set()
+    out: List[Dict[str, Any]] = []
+    for lead in leads:
+        ext = str(lead.get("external_lead_id") or "").strip().lower()
+        if ext:
+            if ext in seen:
+                continue
+            seen.add(ext)
+        out.append(lead)
+    return out
+
 def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
     return SESSION_CACHE["leads"] + [l for l in db_leads if l.get("lead_id") not in cache_ids]
@@ -665,7 +679,7 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
 
 
 def clean_leads_for_platform_stats(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Same pre-processing as compute_platform_breakdown so totals match platform lists."""
+    """Pipeline leads for dashboard totals — count every DB row (no phone collapse)."""
     cleaned: List[Dict[str, Any]] = []
     for lead in leads:
         if classify_lead_platform(lead.get("source")) == "meta" and not is_real_meta_lead(lead):
@@ -673,7 +687,7 @@ def clean_leads_for_platform_stats(leads: List[Dict[str, Any]]) -> List[Dict[str
         if is_broker_pool_lead(lead) or classify_lead_platform(lead.get("source")) == "brokerage":
             continue
         cleaned.append(lead)
-    return dedupe_leads(cleaned)
+    return dedupe_leads_by_external_id(cleaned)
 
 
 WORKSPACE_QUEUE_STAGES: Dict[str, List[str]] = {
@@ -1207,7 +1221,7 @@ def filter_assign_workspace_leads(
     location: str = "",
 ) -> List[Dict[str, Any]]:
     rows = [
-        l for l in dedupe_leads(all_leads)
+        l for l in dedupe_leads_by_external_id(all_leads)
         if is_pipeline_lead(l)
         and lead_matches_inquiry_filter(l, inquiry_status)
         and lead_matches_assign_source(l, source)
@@ -1224,7 +1238,7 @@ def filter_assign_workspace_leads(
 
 
 def compute_assign_workspace_facets(all_leads: List[Dict[str, Any]]) -> Dict[str, Any]:
-    pipeline = [l for l in dedupe_leads(all_leads) if is_pipeline_lead(l)]
+    pipeline = [l for l in dedupe_leads_by_external_id(all_leads) if is_pipeline_lead(l)]
     inquiry: Dict[str, int] = {k: 0 for k in ASSIGN_INQUIRY_STATUSES}
     source: Dict[str, int] = {k: 0 for k in ASSIGN_SOURCE_FILTERS}
     for lead in pipeline:
@@ -1415,7 +1429,7 @@ def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
         if classify_lead_platform(lead.get("source")) == "meta" and not is_real_meta_lead(lead):
             continue
         cleaned.append(lead)
-    leads = dedupe_leads(cleaned)
+    leads = dedupe_leads_by_external_id(cleaned)
 
     for lead in leads:
         raw_source = (lead.get("source") or "direct").strip()
@@ -5083,10 +5097,9 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
     elif bucket_key == "follow_up":
         filtered = [l for l in all_leads if l.get("follow_up_at") and l.get("status") != "negative"]
     else:
-        # Pipeline total — same scope as platform breakdown / Total Leads modal.
+        # Pipeline total — every lead row in Supabase (except broker pool / fake Meta tests).
         filtered = clean_leads_for_platform_stats(all_leads)
-    if bucket_key != "all":
-        filtered = dedupe_leads(filtered)
+    filtered = dedupe_leads_by_external_id(filtered)
     filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     return filtered
 
