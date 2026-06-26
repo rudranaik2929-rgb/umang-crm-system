@@ -8,6 +8,7 @@ const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-s
 
 const REQUEST_TIMEOUT_MS = 15000;
 const AUTH_TIMEOUT_MS = 90000;
+export const IMPORT_TIMEOUT_MS = 300000;
 /** Short TTL for non-live endpoints only (auth, static config). */
 const GET_CACHE_MS = 15000;
 const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
@@ -143,14 +144,22 @@ api.interceptors.response.use(
     const noResponse = !error?.response;
     const transientStatus = status === 502 || status === 503 || status === 504;
     const isSafe = method === 'get' || method === 'head';
+    const isFormUpload = typeof FormData !== 'undefined' && config.data instanceof FormData;
+    const isImportUpload = String(config.url || '').includes('/leads/import');
 
-    const shouldRetry = (noResponse && (isSafe || method === 'post')) || (transientStatus && isSafe);
+    // Never retry multipart uploads — FormData body cannot be replayed (shows as "Network Error").
+    const shouldRetry = !isFormUpload && !isImportUpload
+        && ((noResponse && (isSafe || method === 'post')) || (transientStatus && isSafe));
     if (!shouldRetry) {
         return Promise.reject(error);
     }
     config.__isRetry = true;
     const authPath = String(config.url || '').includes('/auth/');
-    config.timeout = authPath ? AUTH_TIMEOUT_MS : 30000;
+    const longRunning = isImportUpload || String(config.url || '').includes('/integrations/');
+    config.timeout = Math.max(
+        Number(config.timeout) || 0,
+        authPath ? AUTH_TIMEOUT_MS : (longRunning ? IMPORT_TIMEOUT_MS : 30000),
+    );
     await new Promise((r) => setTimeout(r, 600));
     return api(config);
 });
@@ -248,6 +257,10 @@ api.interceptors.request.use(async (config) => {
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {
         delete (config.headers as Record<string, unknown>)['Content-Type'];
         delete (config.headers as Record<string, unknown>)['content-type'];
+        config.timeout = Math.max(Number(config.timeout) || 0, IMPORT_TIMEOUT_MS);
+    }
+    if (url.includes('/leads/import')) {
+        config.timeout = Math.max(Number(config.timeout) || 0, IMPORT_TIMEOUT_MS);
     }
     if (t) {
           (config.headers as any)['Authorization'] = `Bearer ${t}`;

@@ -67,7 +67,7 @@ export const NAV_ITEMS = [
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
   admin: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees'],
+  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
   telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
   site_visit: ['my-dashboard', 'sales-executive', 'pipeline'],
   sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline'],
@@ -133,11 +133,12 @@ export function effectivePages(role?: string | null, email?: string | null, allo
   } else {
     pages = strip(ROLE_ACCESS[normalizedRole] || ROLE_ACCESS.admin);
   }
-  // Manager gets main Dashboard + My Dashboard + Employee Tracking (not owner revenue controls).
+  // Manager gets main Dashboard + My Dashboard + Employee Tracking + Not Interested.
   if (normalizedRole === 'manager') {
     if (!pages.includes('dashboard')) pages = ['dashboard', ...pages];
     if (!pages.includes('my-dashboard')) pages = ['my-dashboard', ...pages];
     if (!pages.includes('tracking')) pages = [...pages, 'tracking'];
+    if (!pages.includes('negative')) pages = [...pages, 'negative'];
   }
   // Employee Tracking — admin & manager only (never from per-employee grants).
   if (normalizedRole !== 'admin' && normalizedRole !== 'manager') {

@@ -79,19 +79,25 @@ def test_normalize_import_source_empty_defaults_bulk():
     assert main.normalize_import_source("  ") == "bulk_import"
 
 
+def test_parse_import_lead_date_mar_format():
+    parsed = main.parse_import_lead_date("01-Mar-26")
+    assert parsed is not None
+    assert "2026" in parsed
+
+
 def test_import_leads_endpoint_accepts_excel(monkeypatch):
-    inserted = []
+    inserted_leads = []
 
     def fake_select_all(table, params=None):
         return [{"employee_id": "emp1", "name": "Khyati Shah", "email": "k@test.com", "active": True}]
 
-    def fake_insert(table, data):
-        row = dict(data)
-        inserted.append(row)
-        return row
+    def fake_insert_many(table, rows):
+        if table == "leads":
+            inserted_leads.extend(rows)
+        return list(rows)
 
     monkeypatch.setattr(main, "sb_select_all", fake_select_all)
-    monkeypatch.setattr(main, "sb_insert", fake_insert)
+    monkeypatch.setattr(main, "sb_insert_many", fake_insert_many)
     monkeypatch.setattr(main, "sb_update", lambda *args, **kwargs: {})
     monkeypatch.setattr(main, "log_activity", lambda *args, **kwargs: None)
     monkeypatch.setattr(main, "invalidate_leads_cache", lambda: None)
@@ -122,7 +128,7 @@ def test_import_leads_endpoint_accepts_excel(monkeypatch):
         body = res.json()
         assert body["status"] == "success"
         assert body["imported_count"] == 1
-        assert len(inserted) == 1
-        assert inserted[0]["name"] == "mukesh"
+        assert len(inserted_leads) == 1
+        assert inserted_leads[0]["name"] == "mukesh"
     finally:
         main.app.dependency_overrides.clear()

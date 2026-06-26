@@ -330,6 +330,33 @@ def sb_insert(table, data):
     except Exception:
         return data
 
+
+def sb_insert_many(table: str, rows: List[Dict[str, Any]], chunk_size: int = 40) -> List[Dict[str, Any]]:
+    """Batch insert — much faster than one HTTP call per row (Excel import)."""
+    if not rows:
+        return []
+    h = {**sb_headers(), "Prefer": "return=representation"}
+    inserted: List[Dict[str, Any]] = []
+    for i in range(0, len(rows), chunk_size):
+        chunk = rows[i : i + chunk_size]
+        r = _http.post(sb_url(table), headers=h, json=chunk)
+        if r.status_code >= 400:
+            logging.error(f"Supabase INSERT MANY {table}: {r.status_code} {r.text[:300]}")
+            for row in chunk:
+                one = sb_insert(table, row)
+                if one:
+                    inserted.append(one)
+            continue
+        try:
+            payload = r.json()
+            if isinstance(payload, list):
+                inserted.extend(payload)
+            elif isinstance(payload, dict):
+                inserted.append(payload)
+        except Exception:
+            inserted.extend(chunk)
+    return inserted
+
 def sb_update(table, pk_col, pk_val, data):
     h = {**sb_headers(), "Prefer": "return=representation"}
     r = _http.patch(f"{sb_url(table)}?{pk_col}=eq.{pk_val}", headers=h, json=data)
@@ -4475,7 +4502,10 @@ def parse_import_lead_date(value: Any) -> Optional[str]:
         except Exception:
             pass
     s = str(value).strip()
-    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y"):
+    for fmt in (
+        "%d/%m/%Y", "%d-%m-%Y", "%d/%m/%y", "%Y-%m-%d", "%m/%d/%Y", "%d.%m.%Y",
+        "%d-%b-%y", "%d-%b-%Y", "%d %b %y", "%d %b %Y",
+    ):
         try:
             return datetime.strptime(s, fmt).replace(tzinfo=timezone.utc).isoformat()
         except ValueError:
@@ -4528,6 +4558,163 @@ def normalize_import_source(raw: str) -> str:
     return raw.strip() or "bulk_import"
 
 
+def _import_actor_fields(actor: User) -> Tuple[Optional[str], str]:
+    user_id_to_log = None
+    actor_name = "System"
+    if actor:
+        user_id_to_log = actor.acting_as_employee_id or actor.employee_id or actor.user_id
+        actor_name = actor.name or actor_name
+        if actor.acting_as_employee_id:
+            emps = sb_select("employees", {"employee_id": f"eq.{actor.acting_as_employee_id}", "select": "name", "limit": "1"})
+            if emps:
+                actor_name = emps[0]["name"]
+    return user_id_to_log, actor_name
+
+
+def _commit_lead_import(
+    records: List[Dict[str, str]],
+    cu: User,
+    employee_exact: Dict[str, str],
+    employee_roster: List[Dict[str, str]],
+) -> Dict[str, Any]:
+    actor_id = cu.acting_as_employee_id or cu.user_id
+    actor_user_id, actor_name = _import_actor_fields(cu)
+
+    imported_count = 0
+    skipped_count = 0
+    assigned_count = 0
+    imported_leads: List[Dict[str, Any]] = []
+    assign_failed: List[Dict[str, str]] = []
+    assignment_breakdown: Dict[str, Dict[str, Any]] = {}
+    employees_touched: set = set()
+    has_assign_column = any(bool(r.get("assign_to", "").strip()) for r in records)
+
+    leads_batch: List[Dict[str, Any]] = []
+    activities_batch: List[Dict[str, Any]] = []
+
+    for r in records:
+        name = r["name"].strip()
+        phone = normalize_phone(r["phone"])
+
+        if not name or not phone:
+            skipped_count += 1
+            continue
+
+        lid = gen_id("lead")
+        now = now_utc().isoformat()
+        lead_created = r.get("lead_date") or now
+
+        pref_prop = r.get("preferred_property", "").strip()
+        r_notes = r.get("notes", "").strip()
+        if pref_prop:
+            lead_notes = f"Building/Project: {pref_prop}" + (f"\n{r_notes}" if r_notes else "")
+        else:
+            lead_notes = r_notes
+
+        assignee_name = r.get("assign_to", "").strip()
+        emp_id, matched_emp_name = resolve_import_assignee(assignee_name, employee_exact, employee_roster) if assignee_name else (None, "")
+
+        lead: Dict[str, Any] = {
+            "lead_id": lid,
+            "name": name,
+            "phone": phone,
+            "email": r.get("email", ""),
+            "budget": r.get("budget", ""),
+            "location": r.get("location", ""),
+            "property_type": r.get("property_type", ""),
+            "notes": lead_notes,
+            "source": normalize_import_source(r.get("source", "")),
+            "stage": "new",
+            "status": "active",
+            "created_at": lead_created,
+            "external_created_at": r.get("lead_date") or None,
+            "updated_at": now,
+        }
+
+        if emp_id:
+            lead.update(stamp_lead_assignment(emp_id, assigned_by=actor_id, current_stage="new"))
+
+        leads_batch.append(lead)
+        activities_batch.append({
+            "activity_id": gen_id("act"),
+            "lead_id": lid,
+            "user_id": actor_user_id,
+            "type": "bulk_import",
+            "text": f"[{actor_name}] Lead imported via Excel/CSV: {name}",
+            "created_at": now,
+        })
+
+        if emp_id:
+            if lead.get("assigned_to") == emp_id:
+                activities_batch.append({
+                    "activity_id": gen_id("act"),
+                    "lead_id": lid,
+                    "user_id": actor_user_id,
+                    "type": "bulk_import_assign",
+                    "text": f"[{actor_name}] Excel import assigned {name} → {matched_emp_name}",
+                    "created_at": now,
+                })
+                employees_touched.add(emp_id)
+                assigned_count += 1
+                bucket = assignment_breakdown.setdefault(emp_id, {
+                    "employee_id": emp_id,
+                    "employee_name": matched_emp_name,
+                    "count": 0,
+                })
+                bucket["count"] += 1
+            else:
+                assign_failed.append({
+                    "name": name,
+                    "assign_to": assignee_name,
+                    "reason": "assign_failed",
+                })
+        elif assignee_name:
+            assign_failed.append({
+                "name": name,
+                "assign_to": assignee_name,
+                "reason": "employee_not_found",
+            })
+
+        imported_count += 1
+
+    saved_rows = sb_insert_many("leads", leads_batch) if leads_batch else []
+    if len(saved_rows) < len(leads_batch):
+        skipped_count += len(leads_batch) - len(saved_rows)
+        imported_count = len(saved_rows)
+
+    if activities_batch and saved_rows:
+        sb_insert_many("activities", activities_batch)
+
+    for saved in saved_rows:
+        enriched = enrich_lead_display_fields(saved)
+        SESSION_CACHE["leads"].insert(0, enriched)
+        imported_leads.append(enriched)
+
+    for eid in employees_touched:
+        sb_update("employees", "employee_id", eid, {"last_assigned_at": now_utc().isoformat()})
+
+    invalidate_leads_cache()
+    invalidate_employees_cache()
+
+    breakdown_list = sorted(
+        assignment_breakdown.values(),
+        key=lambda x: (-int(x.get("count") or 0), str(x.get("employee_name") or "")),
+    )
+
+    return {
+        "status": "success",
+        "imported_count": imported_count,
+        "skipped_count": skipped_count,
+        "assigned_count": assigned_count,
+        "assign_failed_count": len(assign_failed),
+        "assign_failed": assign_failed[:20],
+        "assignment_breakdown": breakdown_list,
+        "has_assign_column": has_assign_column,
+        "available_employees": [r["name"] for r in employee_roster],
+        "leads": imported_leads[:10],
+    }
+
+
 @api_router.post("/leads/import")
 async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_current_user)):
     contents = await file.read()
@@ -4571,127 +4758,12 @@ async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_curr
     employee_exact, employee_roster = build_employee_assign_lookup()
     if not employee_roster:
         logging.warning("Excel import: no employees found for auto-assign lookup")
-    actor_id = cu.acting_as_employee_id or cu.user_id
 
-    imported_count = 0
-    skipped_count = 0
-    assigned_count = 0
-    imported_leads: List[Dict[str, Any]] = []
-    assign_failed: List[Dict[str, str]] = []
-    assignment_breakdown: Dict[str, Dict[str, Any]] = {}
-    employees_touched: set = set()
-    has_assign_column = any(bool(r.get("assign_to", "").strip()) for r in records)
-
-    for r in records:
-        name = r["name"].strip()
-        phone = normalize_phone(r["phone"])
-        
-        if not name or not phone:
-            skipped_count += 1
-            continue
-
-        lid = gen_id("lead")
-        now = now_utc().isoformat()
-        lead_created = r.get("lead_date") or now
-        
-        pref_prop = r.get("preferred_property", "").strip()
-        r_notes = r.get("notes", "").strip()
-        if pref_prop:
-            lead_notes = f"Building/Project: {pref_prop}" + (f"\n{r_notes}" if r_notes else "")
-        else:
-            lead_notes = r_notes
-
-        assignee_name = r.get("assign_to", "").strip()
-        emp_id, matched_emp_name = resolve_import_assignee(assignee_name, employee_exact, employee_roster) if assignee_name else (None, "")
-
-        lead: Dict[str, Any] = {
-            "lead_id": lid,
-            "name": name,
-            "phone": phone,
-            "email": r.get("email", ""),
-            "budget": r.get("budget", ""),
-            "location": r.get("location", ""),
-            "property_type": r.get("property_type", ""),
-            "notes": lead_notes,
-            "source": normalize_import_source(r.get("source", "")),
-            "stage": "new",
-            "status": "active",
-            "created_at": lead_created,
-            "external_created_at": r.get("lead_date") or None,
-            "updated_at": now,
-        }
-
-        if emp_id:
-            lead.update(stamp_lead_assignment(emp_id, assigned_by=actor_id, current_stage="new"))
-
-        result = sb_insert("leads", lead)
-        if not result:
-            skipped_count += 1
-            if assignee_name and not emp_id:
-                assign_failed.append({
-                    "name": name,
-                    "assign_to": assignee_name,
-                    "reason": "insert_failed",
-                })
-            continue
-
-        saved = enrich_lead_display_fields(result)
-        SESSION_CACHE["leads"].insert(0, saved)
-
-        if emp_id:
-            if saved.get("assigned_to") != emp_id:
-                saved = assign_lead_to_employee(lid, saved, emp_id, cu, reactivate=False)
-                saved = enrich_lead_display_fields(saved)
-            if saved.get("assigned_to") == emp_id:
-                log_activity(cu, "bulk_import_assign", f"Excel import assigned {name} → {matched_emp_name}", lead_id=lid)
-                employees_touched.add(emp_id)
-                assigned_count += 1
-                bucket = assignment_breakdown.setdefault(emp_id, {
-                    "employee_id": emp_id,
-                    "employee_name": matched_emp_name,
-                    "count": 0,
-                })
-                bucket["count"] += 1
-            else:
-                assign_failed.append({
-                    "name": name,
-                    "assign_to": assignee_name,
-                    "reason": "assign_failed",
-                })
-        elif assignee_name:
-            assign_failed.append({
-                "name": name,
-                "assign_to": assignee_name,
-                "reason": "employee_not_found",
-            })
-
-        log_activity(cu, "bulk_import", f"Lead imported via Excel/CSV: {name}", lead_id=lid)
-        imported_leads.append(saved)
-        imported_count += 1
-
-    for eid in employees_touched:
-        sb_update("employees", "employee_id", eid, {"last_assigned_at": now_utc().isoformat()})
-
-    invalidate_leads_cache()
-    invalidate_employees_cache()
-
-    breakdown_list = sorted(
-        assignment_breakdown.values(),
-        key=lambda x: (-int(x.get("count") or 0), str(x.get("employee_name") or "")),
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        _read_pool,
+        lambda: _commit_lead_import(records, cu, employee_exact, employee_roster),
     )
-
-    return {
-        "status": "success",
-        "imported_count": imported_count,
-        "skipped_count": skipped_count,
-        "assigned_count": assigned_count,
-        "assign_failed_count": len(assign_failed),
-        "assign_failed": assign_failed[:20],
-        "assignment_breakdown": breakdown_list,
-        "has_assign_column": has_assign_column,
-        "available_employees": [r["name"] for r in employee_roster],
-        "leads": imported_leads[:10],
-    }
 
 def _admin_can_reset(cu: User) -> bool:
     return cu.role == "admin" or cu.email == "htshpatil13@gmail.com"
@@ -6361,7 +6433,7 @@ def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
         "admin": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "tracking", "employees"],
+        "manager": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
         "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
         "site_visit": ["my-dashboard", "sales-executive", "pipeline"],
         "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline"],

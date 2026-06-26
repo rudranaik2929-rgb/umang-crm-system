@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal, ActivityIndicator, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api } from '../lib/api';
+import { api, warmUpBackend, IMPORT_TIMEOUT_MS } from '../lib/api';
 
 interface Props {
   visible: boolean;
@@ -37,7 +37,10 @@ function importErrorMessage(error: any): string {
   }
   if (!error?.response) {
     const hint = error?.message || 'network error';
-    return `Cannot reach server (${hint}). Check your internet connection and retry.`;
+    if (hint === 'Network Error' || error?.code === 'ERR_NETWORK') {
+      return 'Cannot reach CRM server. The API may be waking up (Render) — wait 30 seconds and try again. If this keeps happening, ask admin to verify EXPO_PUBLIC_BACKEND_URL on Vercel points to the live Render API URL.';
+    }
+    return `Cannot reach server (${hint}). Wait 30 seconds and retry — large Excel files can take 1–2 minutes on first upload.`;
   }
   return 'Upload failed. Check Excel headers and try again.';
 }
@@ -49,6 +52,7 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [result, setResult] = useState<ImportResult | null>(null);
   const [step, setStep] = useState<'upload' | 'summary'>('upload');
+  const [statusLine, setStatusLine] = useState<string | null>(null);
 
   useEffect(() => {
     if (!visible) {
@@ -57,6 +61,7 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
       setErrorMsg(null);
       setResult(null);
       setLoading(false);
+      setStatusLine(null);
     }
   }, [visible]);
 
@@ -88,14 +93,17 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
     setLoading(true);
     setErrorMsg(null);
     setResult(null);
+    setStatusLine('Connecting to server…');
 
     const formData = new FormData();
     const uploadName = selectedFile.name || 'leads.xlsx';
     formData.append('file', selectedFile, uploadName);
 
     try {
+      await warmUpBackend();
+      setStatusLine('Uploading and importing leads — please wait…');
       const res = await api.post('/leads/import', formData, {
-        timeout: 180000,
+        timeout: IMPORT_TIMEOUT_MS,
       });
 
       if (res.data && res.data.status === 'success') {
@@ -125,6 +133,7 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
       setErrorMsg(importErrorMessage(e));
     } finally {
       setLoading(false);
+      setStatusLine(null);
     }
   };
 
@@ -283,6 +292,10 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
                     </Pressable>
                   </View>
                 )}
+
+                {statusLine ? (
+                  <Text style={{ color: colors.textMuted, fontSize: 12, textAlign: 'center' }}>{statusLine}</Text>
+                ) : null}
 
                 {selectedFile ? (
                   <Pressable
