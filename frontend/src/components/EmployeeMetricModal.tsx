@@ -144,6 +144,7 @@ export function EmployeeMetricModal({
         onClose={() => setOpenLead(null)}
         onChanged={() => { load(); onChanged?.(); }}
         userRole={userRole}
+        overlayZIndex={20000}
       />
     </Modal>
   );

@@ -20,3 +20,9 @@ def test_format_activity_note_text_strips_existing_prefix():
 
     body = main.format_activity_note_text(Actor(), "[Ravi] Customer callback tomorrow")
     assert body == "[Ravi] Customer callback tomorrow"
+
+
+def test_is_editable_lead_note_activity():
+    assert main.is_editable_lead_note_activity({"type": "call_note"})
+    assert main.is_editable_lead_note_activity({"type": "visit_note"})
+    assert not main.is_editable_lead_note_activity({"type": "stage_change_positive"})

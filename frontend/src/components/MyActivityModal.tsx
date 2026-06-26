@@ -174,6 +174,7 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
         onClose={() => setOpenLead(null)}
         onChanged={() => { load(); onChanged?.(); }}
         userRole={userRole}
+        overlayZIndex={20000}
       />
     </Modal>
   );

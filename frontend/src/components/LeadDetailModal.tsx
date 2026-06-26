@@ -82,6 +82,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
   const [noteError, setNoteError] = useState<string | null>(null);
   const [noteSaved, setNoteSaved] = useState<string | null>(null);
+  const [savingNote, setSavingNote] = useState(false);
   const noteDirtyRef = React.useRef(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [activeCategory, setActiveCategory] = useState<string | null>(null);
@@ -108,24 +109,46 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     }
   };
 
-  const applyNoteFromTimeline = useCallback((timeline: any[]) => {
-    const latestCallNote = [...(timeline || [])]
+  const applyNoteFromTimeline = useCallback((timeline: any[], preferId?: string | null) => {
+    const notes = [...(timeline || [])]
       .filter((t: any) => t.type === 'call_note' || t.type === 'visit_note')
-      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime())[0];
-    if (latestCallNote) {
-      setNote(stripActivityActorPrefix(latestCallNote.text));
-      setEditingNoteId(latestCallNote.activity_id || null);
+      .sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+    const picked = (preferId && notes.find((t: any) => t.activity_id === preferId)) || notes[0];
+    if (picked) {
+      setNote(stripActivityActorPrefix(picked.text));
+      setEditingNoteId(picked.activity_id || null);
     } else {
       setNote('');
       setEditingNoteId(null);
     }
   }, []);
 
+  const mergeSavedNoteIntoTimeline = useCallback((saved: any) => {
+    if (!saved?.activity_id) return;
+    setData((prev: any) => {
+      if (!prev) return prev;
+      const timeline = [...(prev.timeline || [])];
+      const idx = timeline.findIndex((t: any) => t.activity_id === saved.activity_id);
+      const row = {
+        activity_id: saved.activity_id,
+        lead_id: saved.lead_id || leadId,
+        type: saved.type || 'call_note',
+        text: saved.text,
+        created_at: saved.created_at || new Date().toISOString(),
+        user_id: saved.user_id,
+      };
+      if (idx >= 0) timeline[idx] = { ...timeline[idx], ...row };
+      else timeline.unshift(row);
+      timeline.sort((a: any, b: any) => new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime());
+      return { ...prev, timeline };
+    });
+  }, [leadId]);
+
   const load = useCallback(async (isBackground = false, hydrateNote = false) => {
     if (!leadId) return;
     if (!isBackground) setLoading(true);
     try {
-      const r = await api.get(`/leads/${leadId}`, hydrateNote ? { params: { _t: Date.now() } } : undefined);
+      const r = await api.get(`/leads/${leadId}`, { params: { _t: Date.now() } });
       setData(r.data);
       if (hydrateNote && !noteDirtyRef.current) {
         applyNoteFromTimeline(r.data?.timeline || []);
@@ -234,11 +257,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   };
 
   const addNote = async () => {
-    if (!leadId || !note.trim()) return;
-    setBusy('note');
+    if (!leadId || !note.trim() || savingNote) return;
+    setSavingNote(true);
     setNoteError(null);
     setNoteSaved(null);
     const body = note.trim();
+    const wasEditing = Boolean(editingNoteId);
     try {
       let saved: any;
       if (editingNoteId) {
@@ -262,18 +286,27 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       }
       clearGetCache();
       noteDirtyRef.current = false;
+      const displayText = stripActivityActorPrefix(saved.text || body);
       setEditingNoteId(saved.activity_id);
-      setNote(stripActivityActorPrefix(saved.text || body));
-      const r = await api.get(`/leads/${leadId}`, { params: { _t: Date.now() } });
-      setData(r.data);
-      setNoteSaved('Note saved.');
+      setNote(displayText);
+      mergeSavedNoteIntoTimeline({ ...saved, text: saved.text || `[Note] ${body}` });
+      setNoteSaved(wasEditing ? 'Note updated.' : 'Note saved.');
       onChanged?.();
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
-      setNoteError(typeof detail === 'string' ? detail : 'Could not save note. Please try again.');
+      setNoteError(typeof detail === 'string' ? detail : e?.message || 'Could not save note. Please try again.');
     } finally {
-      setBusy(null);
+      setSavingNote(false);
     }
+  };
+
+  const selectNoteForEdit = (entry: any) => {
+    if (!entry || (entry.type !== 'call_note' && entry.type !== 'visit_note')) return;
+    noteDirtyRef.current = false;
+    setNote(stripActivityActorPrefix(entry.text));
+    setEditingNoteId(entry.activity_id || null);
+    setNoteError(null);
+    setNoteSaved(null);
   };
 
   const startNewNote = () => {
@@ -459,7 +492,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 </View>
               )}
 
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, gap: 16 }}>
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, gap: 16 }} keyboardShouldPersistTaps="handled">
                 {/* AI Magic Summary */}
                 <View style={[styles.aiBlock, { borderColor: colors.primary + '40', backgroundColor: colors.primary + '08' }]}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -665,6 +698,63 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   <DetailRow label="Notes" value={cleanNotes} colors={colors} />
                 </View>
 
+                {/* Call / visit note — editable anytime */}
+                <View style={[styles.block, { borderColor: colors.primary + '40', backgroundColor: colors.primary + '06' }]}>
+                  <Text style={[styles.blockTitle, { color: colors.primary }]}>
+                    {editingNoteId ? 'EDIT CALL / VISIT NOTE' : 'ADD CALL / VISIT NOTE'}
+                  </Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                    Type or edit anytime · tap a note in timeline below to switch
+                  </Text>
+                  <TextInput
+                    testID="lead-note-input"
+                    value={note}
+                    onChangeText={(text) => {
+                      noteDirtyRef.current = true;
+                      setNote(text);
+                      setNoteError(null);
+                      setNoteSaved(null);
+                    }}
+                    editable={!savingNote}
+                    multiline
+                    placeholder="e.g. Customer wants to revisit on Saturday..."
+                    placeholderTextColor={colors.textMuted}
+                    style={{
+                      minHeight: 88, padding: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
+                      color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 14, marginTop: 10,
+                      textAlignVertical: 'top',
+                    }}
+                  />
+                  {noteError ? (
+                    <Text style={{ color: colors.negative, fontSize: 12, marginTop: 8 }}>{noteError}</Text>
+                  ) : noteSaved ? (
+                    <Text style={{ color: colors.positive, fontSize: 12, marginTop: 8 }}>{noteSaved}</Text>
+                  ) : null}
+                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+                    {editingNoteId ? (
+                      <Pressable
+                        onPress={startNewNote}
+                        disabled={savingNote}
+                        style={[styles.saveBtn, { flex: 1, backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border, opacity: savingNote ? 0.6 : 1 }]}
+                      >
+                        <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 13 }}>Add New Note</Text>
+                      </Pressable>
+                    ) : null}
+                    <Pressable
+                      testID="lead-note-save"
+                      onPress={addNote}
+                      disabled={!note.trim() || savingNote}
+                      style={[styles.saveBtn, { flex: 1, backgroundColor: colors.primary, opacity: !note.trim() || savingNote ? 0.5 : 1 }]}
+                    >
+                      {savingNote ? <ActivityIndicator color="#fff" size="small" /> : (
+                        <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>
+                          {editingNoteId ? 'Update Note' : 'Save Note'}
+                        </Text>
+                      )}
+                    </Pressable>
+                  </View>
+                </View>
+
                 {actionMessage ? (
                   <View style={[styles.block, { borderColor: colors.positive + '50', backgroundColor: colors.positive + '10' }]}>
                     <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>{actionMessage}</Text>
@@ -839,87 +929,45 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   )}
                 </View>
 
-                {/* Add note */}
-                <View style={[styles.block, { borderColor: colors.border }]}>
-                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>
-                    {editingNoteId ? 'EDIT CALL / VISIT NOTE' : 'ADD CALL / VISIT NOTE'}
-                  </Text>
-                  <TextInput
-                    testID="lead-note-input"
-                    value={note}
-                    onChangeText={(text) => {
-                      noteDirtyRef.current = true;
-                      setNote(text);
-                      setNoteError(null);
-                      setNoteSaved(null);
-                    }}
-                    editable={busy !== 'note'}
-                    multiline
-                    placeholder="e.g. Customer wants to revisit on Saturday..."
-                    placeholderTextColor={colors.textMuted}
-                    style={{
-                      minHeight: 70, padding: 10, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
-                      color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 13, marginTop: 8,
-                    }}
-                  />
-                  {noteError ? (
-                    <Text style={{ color: colors.negative, fontSize: 12, marginTop: 8 }}>{noteError}</Text>
-                  ) : noteSaved ? (
-                    <Text style={{ color: colors.positive, fontSize: 12, marginTop: 8 }}>{noteSaved}</Text>
-                  ) : null}
-                  <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
-                    {editingNoteId ? (
-                      <Pressable
-                        onPress={startNewNote}
-                        style={[styles.saveBtn, { flex: 1, backgroundColor: colors.surfaceAlt, borderWidth: 1, borderColor: colors.border }]}
-                      >
-                        <Text style={{ color: colors.textSecondary, fontWeight: '600', fontSize: 13 }}>Add New Note</Text>
-                      </Pressable>
-                    ) : null}
-                    <Pressable
-                      testID="lead-note-save"
-                      onPress={addNote}
-                      disabled={!note.trim() || busy === 'note'}
-                      style={[styles.saveBtn, { flex: 1, backgroundColor: colors.primary, opacity: !note.trim() ? 0.5 : 1 }]}
-                    >
-                      {busy === 'note' ? <ActivityIndicator color="#fff" size="small" /> : (
-                        <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>
-                          {editingNoteId ? 'Update Note' : 'Save Note'}
-                        </Text>
-                      )}
-                    </Pressable>
-                  </View>
-                </View>
-
                 {/* Timeline */}
                 <View style={[styles.block, { borderColor: colors.border }]}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>ACTIVITY TIMELINE</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                    Tap a call / visit note to edit it
+                  </Text>
                   {timeline.length === 0 ? (
                     <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 8 }}>No activity yet.</Text>
                   ) : (
                     <View style={{ marginTop: 8 }}>
-                      {timeline.map((t: any) => (
-                        <Pressable
-                          key={t.activity_id}
-                          onPress={() => {
-                            if (t.type !== 'call_note' && t.type !== 'visit_note') return;
-                            noteDirtyRef.current = false;
-                            setNote(stripActivityActorPrefix(t.text));
-                            setEditingNoteId(t.activity_id || null);
-                            setNoteError(null);
-                            setNoteSaved(null);
-                          }}
-                          style={[styles.timeItem, { borderLeftColor: colors.border }]}
-                        >
-                          <View style={[styles.timeDot, { backgroundColor: colors.primary, borderColor: colors.surface }]} />
-                          <View style={{ flex: 1 }}>
-                            <Text style={{ color: colors.text, fontSize: 13 }}>{t.text}</Text>
-                            <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                              {new Date(t.created_at).toLocaleString()}
-                            </Text>
-                          </View>
-                        </Pressable>
-                      ))}
+                      {timeline.map((t: any) => {
+                        const isNote = t.type === 'call_note' || t.type === 'visit_note';
+                        const isSelected = isNote && editingNoteId === t.activity_id;
+                        return (
+                          <Pressable
+                            key={t.activity_id || `${t.type}-${t.created_at}`}
+                            onPress={() => isNote && selectNoteForEdit(t)}
+                            style={[
+                              styles.timeItem,
+                              {
+                                borderLeftColor: isSelected ? colors.primary : colors.border,
+                                backgroundColor: isSelected ? colors.primary + '10' : 'transparent',
+                                borderRadius: isSelected ? 6 : 0,
+                              },
+                            ]}
+                          >
+                            <View style={[styles.timeDot, { backgroundColor: isNote ? colors.primary : colors.textMuted, borderColor: colors.surface }]} />
+                            <View style={{ flex: 1 }}>
+                              <Text style={{ color: colors.text, fontSize: 13 }}>
+                                {isNote ? stripActivityActorPrefix(t.text) : t.text}
+                              </Text>
+                              <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                                {new Date(t.created_at).toLocaleString('en-IN')}
+                                {isNote ? ' · tap to edit' : ''}
+                              </Text>
+                            </View>
+                          </Pressable>
+                        );
+                      })}
                     </View>
                   )}
                 </View>
@@ -967,12 +1015,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
 
   const sheet = (
     <Pressable style={styles.backdrop} onPress={onClose}>
-      <Pressable
+      <View
         style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
-        onPress={(e: any) => e?.stopPropagation?.()}
+        {...(Platform.OS === 'web' ? { onClick: (e: any) => e?.stopPropagation?.() } as any : {})}
       >
         {renderBody()}
-      </Pressable>
+      </View>
     </Pressable>
   );
 

@@ -2207,6 +2207,21 @@ def format_activity_note_text(actor: Optional[User], body: str) -> str:
         return ""
     return f"[{_activity_actor_name(actor)}] {clean}"
 
+
+def is_editable_lead_note_activity(activity: Dict[str, Any]) -> bool:
+    t = str(activity.get("type") or "").strip().lower()
+    return t in ("call_note", "visit_note") or t.endswith("_note")
+
+
+def touch_lead_employee_action(lead_id: str, cu: User) -> None:
+    """Note saves count as employee work on the lead."""
+    patch: Dict[str, Any] = {
+        "last_employee_action_at": now_utc().isoformat(),
+        "updated_at": now_utc().isoformat(),
+    }
+    sb_update("leads", "lead_id", lead_id, patch)
+    update_cached_lead(lead_id, patch)
+
 def get_lead_record(lead_id: str, select: str = "*"):
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": select})
     if leads:
@@ -5601,6 +5616,7 @@ async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_curren
     saved = {**act, **inserted} if isinstance(inserted, dict) else act
     SESSION_CACHE["activities"] = [a for a in SESSION_CACHE["activities"] if a.get("activity_id") != saved.get("activity_id")]
     SESSION_CACHE["activities"].insert(0, saved)
+    touch_lead_employee_action(lead_id, cu)
     return saved
 
 @api_router.patch("/leads/{lead_id}/notes/{activity_id}")
@@ -5625,7 +5641,7 @@ async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: Us
         activity = cache_match[0] if cache_match else None
     if not activity:
         raise HTTPException(404, detail="Note not found.")
-    if str(activity.get("type") or "") not in ("call_note", "visit_note"):
+    if not is_editable_lead_note_activity(activity):
         raise HTTPException(400, detail="Only call / visit notes can be edited.")
     updated = sb_update("activities", "activity_id", activity_id, {"text": body})
     if not updated:
@@ -5649,6 +5665,7 @@ async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: Us
     ]
     if not any(a.get("activity_id") == activity_id for a in SESSION_CACHE["activities"]):
         SESSION_CACHE["activities"].insert(0, updated)
+    touch_lead_employee_action(lead_id, cu)
     return updated
 
 @api_router.post("/leads/{lead_id}/advance")
