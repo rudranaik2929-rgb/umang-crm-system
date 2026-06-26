@@ -925,7 +925,7 @@ def filter_employee_my_queue_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict
 def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[str]) -> List[Dict[str, Any]]:
     """Exact filter used by Telecaller / Sales Executive queue tabs."""
     stages = workspace_queue_stages(role)
-    return dedupe_leads([
+    return dedupe_leads_by_external_id([
         l for l in emp_leads
         if l.get("status") == "active"
         and l.get("stage") in stages
@@ -992,8 +992,8 @@ def lead_ready_for_loan_queue(lead: Dict[str, Any]) -> bool:
 
 
 def normalize_employee_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Assigned leads for performance stats — pipeline only, deduped."""
-    return dedupe_leads([l for l in emp_leads if is_pipeline_lead(l)])
+    """Assigned leads for performance stats — pipeline only; keep every imported row."""
+    return dedupe_leads_by_external_id([l for l in emp_leads if is_pipeline_lead(l)])
 
 
 def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
@@ -1061,7 +1061,7 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
     rows = normalize_employee_leads(emp_leads)
     new_rows = filter_employee_new_leads(rows)
     backlog_rows = filter_employee_backlog_leads(rows)
-    queue_rows = filter_employee_queue_leads(new_rows, role)
+    queue_rows = filter_employee_queue_leads(rows, role)
     follow_rows = filter_employee_follow_up_leads(backlog_rows)
     in_progress = sum(
         1 for l in backlog_rows
@@ -1376,35 +1376,47 @@ def lead_assigned_to_employee(lead: Dict[str, Any], employee: Dict[str, Any]) ->
     match_values = employee_record_match_values(employee)
     if assigned in match_values:
         return True
+    assigned_norm = re.sub(r"\s+", " ", assigned.lower())
+    for val in match_values:
+        if val and re.sub(r"\s+", " ", str(val).lower()) == assigned_norm:
+            return True
     emp_name = clean_text(employee.get("name"))
-    return bool(emp_name and assigned.lower() == emp_name.lower())
+    return bool(emp_name and assigned_norm == re.sub(r"\s+", " ", emp_name.lower()))
+
+
+def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
+    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
+    if emp_id:
+        emps = sb_select("employees", {
+            "employee_id": f"eq.{emp_id}",
+            "select": "employee_id,name,email,user_id,active",
+            "limit": "1",
+        })
+        if emps:
+            return emps[0]
+    if cu.email:
+        emps = sb_select("employees", {
+            "email": f"eq.{normalize_email(cu.email)}",
+            "select": "employee_id,name,email,user_id,active",
+            "limit": "1",
+        })
+        if emps:
+            return emps[0]
+    return None
+
+
+def fetch_employee_assigned_leads(cu: User, select: str) -> List[Dict[str, Any]]:
+    """Leads assigned to the logged-in employee — same matching as manager assignment stats."""
+    employee = _employee_record_for_user(cu)
+    if not employee:
+        return []
+    matched = [l for l in fetch_all_leads_merged(select) if lead_assigned_to_employee(l, employee)]
+    matched.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    return matched
 
 
 def leads_for_employee_record(employee: Dict[str, Any], all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return [l for l in all_leads if lead_assigned_to_employee(l, employee)]
-
-
-def fetch_employee_assigned_leads(cu: User, select: str) -> List[Dict[str, Any]]:
-    """Leads assigned to the logged-in employee (My Dashboard / workspace)."""
-    assignee_ids = employee_assignee_ids(cu)
-    if not assignee_ids:
-        return []
-    merged: List[Dict[str, Any]] = []
-    seen: set = set()
-    for emp_id in assignee_ids:
-        db_leads = sb_select_all("leads", {
-            "select": select,
-            "assigned_to": f"eq.{emp_id}",
-            "order": "created_at.desc",
-        })
-        for lead in db_leads:
-            lid = lead.get("lead_id")
-            if lid and lid not in seen:
-                seen.add(lid)
-                merged.append(lead)
-    cache_slice = [l for l in SESSION_CACHE["leads"] if l.get("assigned_to") in assignee_ids]
-    cache_ids = {l.get("lead_id") for l in cache_slice}
-    return cache_slice + [l for l in merged if l.get("lead_id") not in cache_ids]
 
 
 def compute_platform_breakdown(leads: List[Dict[str, Any]]) -> Dict[str, Any]:
