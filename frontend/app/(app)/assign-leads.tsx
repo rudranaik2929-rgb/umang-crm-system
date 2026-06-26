@@ -3,9 +3,9 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, TextI
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot, broadcastDataChanged } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
-import { roleLabel } from '../../src/lib/constants';
+import { roleLabel, isAdmin } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { formatBudgetStringLakhs, workflowStatusColor, workflowStatusLabel } from '../../src/lib/leadFormat';
 import {
@@ -75,6 +75,9 @@ export default function AssignLeads() {
   const [bulkStatusAction, setBulkStatusAction] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [customSelectInput, setCustomSelectInput] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+
+  const canDeleteLeads = isAdmin(user?.role);
 
   const load = useCallback(async (activeFilters = filters) => {
     try {
@@ -240,6 +243,35 @@ export default function AssignLeads() {
     }
   };
 
+  const confirmDelete = (count: number, nameHint?: string) => {
+    const label = count === 1 && nameHint ? `"${nameHint}"` : `${count} lead(s)`;
+    const msg = `Permanently delete ${label}? This removes visits, bookings, loans, and activity history. This cannot be undone.`;
+    if (typeof window !== 'undefined' && window.confirm) {
+      return window.confirm(msg);
+    }
+    return true;
+  };
+
+  const deleteLeads = async (leadIds: string[], nameHint?: string) => {
+    if (!canDeleteLeads || leadIds.length < 1) return;
+    if (!confirmDelete(leadIds.length, nameHint)) return;
+    setDeleteBusy(true);
+    setMessage(null);
+    try {
+      const r = await api.post('/leads/bulk-delete', { lead_ids: leadIds });
+      const n = Number(r.data?.deleted_count ?? 0);
+      const skipped = (r.data?.skipped || []).length;
+      setMessage(skipped > 0 ? `Deleted ${n} lead(s). ${skipped} skipped (not found).` : `Deleted ${n} lead(s).`);
+      setSelected(new Set());
+      broadcastDataChanged();
+      await load();
+    } catch (e: any) {
+      setMessage(e?.response?.data?.detail || 'Delete failed.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   const isUnassignedView = filters.assigned_to === 'unassigned';
 
   return (
@@ -343,12 +375,40 @@ export default function AssignLeads() {
 
               {leads.length > 0 ? (
                 <View style={styles.selectToolbar}>
-                  <Pressable onPress={toggleSelectAll} style={styles.selectAllRow}>
-                    <Ionicons name={allSelected ? 'checkbox' : 'square-outline'} size={20} color={colors.primary} />
-                    <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>
-                      {allSelected ? 'Clear selection' : `Select all on screen (${leads.length})`}
-                    </Text>
-                  </Pressable>
+                  <View style={styles.selectToolbarTop}>
+                    <Pressable onPress={toggleSelectAll} style={styles.selectAllRow}>
+                      <Ionicons name={allSelected ? 'checkbox' : 'square-outline'} size={20} color={colors.primary} />
+                      <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '600' }}>
+                        {allSelected ? 'Clear selection' : `Select all on screen (${leads.length})`}
+                      </Text>
+                    </Pressable>
+                    {canDeleteLeads ? (
+                      <Pressable
+                        testID="delete-selected-leads-toolbar"
+                        onPress={() => {
+                          const ids = selectedIds.length > 0 ? selectedIds : leads.map((l) => l.lead_id);
+                          deleteLeads(ids);
+                        }}
+                        disabled={deleteBusy}
+                        style={[styles.deleteBtn, {
+                          borderColor: colors.negative + '55',
+                          backgroundColor: colors.negative + '12',
+                          opacity: deleteBusy ? 0.6 : 1,
+                        }]}
+                      >
+                        {deleteBusy ? (
+                          <ActivityIndicator color={colors.negative} size="small" />
+                        ) : (
+                          <>
+                            <Ionicons name="trash-outline" size={16} color={colors.negative} />
+                            <Text style={{ color: colors.negative, fontSize: 12, fontWeight: '700' }}>
+                              {selectedIds.length > 0 ? `Delete (${selectedIds.length})` : 'Delete all on screen'}
+                            </Text>
+                          </>
+                        )}
+                      </Pressable>
+                    ) : null}
+                  </View>
                   <View style={[styles.customSelectRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
                     <Ionicons name="filter-outline" size={16} color={colors.textMuted} />
                     <TextInput
@@ -446,6 +506,16 @@ export default function AssignLeads() {
                         >
                           <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>Open</Text>
                         </Pressable>
+                        {canDeleteLeads ? (
+                          <Pressable
+                            testID={`delete-lead-${lead.lead_id}`}
+                            onPress={() => deleteLeads([lead.lead_id], lead.name)}
+                            disabled={deleteBusy}
+                            style={[styles.deleteIconBtn, { borderColor: colors.negative + '44', opacity: deleteBusy ? 0.5 : 1 }]}
+                          >
+                            <Ionicons name="trash-outline" size={16} color={colors.negative} />
+                          </Pressable>
+                        ) : null}
                       </View>
                     );
                   })}
@@ -500,18 +570,39 @@ export default function AssignLeads() {
                   />
                 </View>
               </View>
-              <Pressable
-                onPress={bulkApply}
-                disabled={bulkBusy || (!bulkEmployeeId && !bulkStatusAction)}
-                style={[styles.bulkGoBtn, {
-                  backgroundColor: (bulkEmployeeId || bulkStatusAction) ? colors.primary : colors.textMuted,
-                  opacity: bulkBusy ? 0.7 : 1,
-                }]}
-              >
-                {bulkBusy ? <ActivityIndicator color="#fff" size="small" /> : (
-                  <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Apply</Text>
-                )}
-              </Pressable>
+              <View style={styles.bulkActionsRow}>
+                <Pressable
+                  onPress={bulkApply}
+                  disabled={bulkBusy || deleteBusy || (!bulkEmployeeId && !bulkStatusAction)}
+                  style={[styles.bulkGoBtn, {
+                    backgroundColor: (bulkEmployeeId || bulkStatusAction) ? colors.primary : colors.textMuted,
+                    opacity: bulkBusy || deleteBusy ? 0.7 : 1,
+                  }]}
+                >
+                  {bulkBusy ? <ActivityIndicator color="#fff" size="small" /> : (
+                    <Text style={{ color: '#fff', fontSize: 12, fontWeight: '700' }}>Apply</Text>
+                  )}
+                </Pressable>
+                {canDeleteLeads ? (
+                  <Pressable
+                    testID="bulk-delete-selected-leads"
+                    onPress={() => deleteLeads(selectedIds)}
+                    disabled={deleteBusy || bulkBusy}
+                    style={[styles.bulkDeleteBtn, {
+                      borderColor: colors.negative + '55',
+                      backgroundColor: colors.negative + '10',
+                      opacity: deleteBusy || bulkBusy ? 0.6 : 1,
+                    }]}
+                  >
+                    {deleteBusy ? <ActivityIndicator color={colors.negative} size="small" /> : (
+                      <>
+                        <Ionicons name="trash-outline" size={16} color={colors.negative} />
+                        <Text style={{ color: colors.negative, fontSize: 12, fontWeight: '700' }}>Delete</Text>
+                      </>
+                    )}
+                  </Pressable>
+                ) : null}
+              </View>
             </View>
           ) : null}
         </View>
@@ -583,6 +674,9 @@ const styles = StyleSheet.create({
   panelSub: { fontSize: 12, marginTop: 4, lineHeight: 18 },
   selectAllRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   selectToolbar: { marginTop: 12, gap: 8 },
+  selectToolbarTop: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  deleteBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, borderWidth: 1 },
+  deleteIconBtn: { width: 36, height: 36, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   customSelectRow: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     paddingHorizontal: 10, paddingVertical: 8, borderRadius: 10, borderWidth: 1, flexWrap: 'wrap',
@@ -609,11 +703,16 @@ const styles = StyleSheet.create({
     borderTopWidth: 1, paddingHorizontal: 12, paddingVertical: 10, gap: 8,
   },
   bulkFilters: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  bulkActionsRow: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 10 },
   bulkSection: { marginBottom: 4 },
   bulkLabel: { fontSize: 9, fontWeight: '700', letterSpacing: 0.8, marginBottom: 4 },
   bulkEmpRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   bulkEmpChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
-  bulkGoBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, alignItems: 'center', alignSelf: 'flex-end' },
+  bulkGoBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  bulkDeleteBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1,
+  },
   iconBtn: {
     width: 34, height: 34, borderRadius: 8, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',

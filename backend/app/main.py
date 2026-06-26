@@ -1486,6 +1486,10 @@ class BulkLeadManageRequest(BaseModel):
     reactivate: bool = True
 
 
+class BulkLeadDeleteRequest(BaseModel):
+    lead_ids: List[str]
+
+
 ASSIGN_INQUIRY_STATUSES = [
     "all", "active", "new", "hot", "visited", "booked", "ringing",
     "not_interested", "low_budget", "other_location", "already_purchased", "not_searching", "unassigned",
@@ -5416,17 +5420,16 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     
     return {"lead": lead, "timeline": all_timeline}
 
-@api_router.delete("/leads/{lead_id}")
-async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
-    if cu.role != "admin":
-        raise HTTPException(status_code=403, detail="Only admins can delete leads")
 
+def _purge_lead_record(lead_id: str) -> bool:
+    """Delete lead and all related rows — used by single + bulk delete."""
     lead_rows = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id,source,external_lead_id", "limit": "1"})
-    lead_row = lead_rows[0] if lead_rows else None
+    lead_row = lead_rows[0] if lead_rows else next(
+        (l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None
+    )
     if lead_row:
         suppress_integrated_lead(lead_row)
 
-    # 1. Delete associated data first
     sb_delete("visit_followups", "lead_id", lead_id)
     sb_delete("visits", "lead_id", lead_id)
     sb_delete("bookings", "lead_id", lead_id)
@@ -5435,12 +5438,8 @@ async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
     sb_delete("lead_notes", "lead_id", lead_id)
     sb_delete("customers", "lead_id", lead_id)
     sb_delete("notifications", "lead_id", lead_id)
-    
-    # 2. Delete the lead
-    res = sb_delete("leads", "lead_id", lead_id)
-    
-    # 3. Clean from session cache
-    global SESSION_CACHE
+    ok = sb_delete("leads", "lead_id", lead_id)
+
     if "leads" in SESSION_CACHE:
         SESSION_CACHE["leads"] = [l for l in SESSION_CACHE["leads"] if l.get("lead_id") != lead_id]
     if "visits" in SESSION_CACHE:
@@ -5457,8 +5456,45 @@ async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
         SESSION_CACHE["customers"] = [c for c in SESSION_CACHE["customers"] if c.get("lead_id") != lead_id]
     if "notifications" in SESSION_CACHE:
         SESSION_CACHE["notifications"] = [n for n in SESSION_CACHE["notifications"] if n.get("lead_id") != lead_id]
-    
+    return ok
+
+
+@api_router.delete("/leads/{lead_id}")
+async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
+    if not _can_manage_all_leads(cu):
+        raise HTTPException(status_code=403, detail="Only admin or manager can delete leads.")
+    if not _purge_lead_record(lead_id):
+        raise HTTPException(404, detail="Lead not found or could not be deleted.")
+    invalidate_leads_cache()
     return {"status": "deleted", "lead_id": lead_id}
+
+
+@api_router.post("/leads/bulk-delete")
+async def bulk_delete_leads(body: BulkLeadDeleteRequest, cu: User = Depends(get_current_user)):
+    """Manager assign workspace — delete one or many selected leads."""
+    ensure_roles(cu, ["admin", "manager"])
+    lead_ids = list(dict.fromkeys(lid.strip() for lid in (body.lead_ids or []) if lid and lid.strip()))
+    if len(lead_ids) < 1:
+        raise HTTPException(status_code=400, detail="Select at least one lead to delete.")
+
+    deleted: List[str] = []
+    skipped: List[Dict[str, str]] = []
+    for lead_id in lead_ids:
+        if _purge_lead_record(lead_id):
+            deleted.append(lead_id)
+            log_activity(cu, "lead_deleted", f"Lead deleted from assign workspace.", lead_id=lead_id)
+        else:
+            skipped.append({"lead_id": lead_id, "reason": "not_found"})
+
+    if deleted:
+        invalidate_leads_cache()
+
+    return {
+        "status": "success",
+        "deleted_count": len(deleted),
+        "deleted": deleted,
+        "skipped": skipped,
+    }
 
 @api_router.get("/leads/{lead_id}/ai-summary")
 async def get_lead_ai_summary(lead_id: str, cu: User=Depends(get_current_user)):

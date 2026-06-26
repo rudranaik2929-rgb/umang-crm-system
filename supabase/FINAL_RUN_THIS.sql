@@ -16,6 +16,9 @@
 --   • Today Activity box = employee work log in last 24 hours
 --   • Bookings registration_receipt jsonb = saved basic invoice on Registration task
 --   • Visit follow-ups, call_status, priority
+--   • My Dashboard: Today Follow Up = follow_up_at due today (IST)
+--   • Assign Leads: custom row selection (e.g. 10 or 40-50) + bulk/single delete
+--     (admin/manager only — backend purges lead + visits, bookings, loans, activities)
 --
 -- Excel import (no extra columns — uses fields below):
 --   Lead Date        → external_created_at + created_at
