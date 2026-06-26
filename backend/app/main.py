@@ -730,13 +730,15 @@ def parse_lead_ts(value: Any) -> Optional[datetime]:
 
 
 def effective_assigned_at(lead: Dict[str, Any]) -> Optional[datetime]:
-    """When assigned_at is missing on legacy rows, fall back like SQL backfill."""
+    """When assigned_at is missing, use updated_at only — never created_at (Excel enquiry date)."""
     if not lead.get("assigned_to"):
         return None
-    for key in ("assigned_at", "updated_at", "created_at"):
-        ts = parse_lead_ts(lead.get(key))
-        if ts:
-            return ts
+    ts = parse_lead_ts(lead.get("assigned_at"))
+    if ts:
+        return ts
+    ts = parse_lead_ts(lead.get("updated_at"))
+    if ts:
+        return ts
     return None
 
 
@@ -923,7 +925,7 @@ def filter_employee_my_queue_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict
 
 
 def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[str]) -> List[Dict[str, Any]]:
-    """Exact filter used by Telecaller / Sales Executive queue tabs."""
+    """Telecaller / Sales Executive new-enquiry tab — includes missed leads (still need a call)."""
     stages = workspace_queue_stages(role)
     return dedupe_leads_by_external_id([
         l for l in emp_leads
@@ -931,7 +933,6 @@ def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[
         and l.get("stage") in stages
         and not clean_text(l.get("call_status"))
         and not l.get("follow_up_at")
-        and not is_missed_lead(l)
     ])
 
 
@@ -1381,7 +1382,15 @@ def lead_assigned_to_employee(lead: Dict[str, Any], employee: Dict[str, Any]) ->
         if val and re.sub(r"\s+", " ", str(val).lower()) == assigned_norm:
             return True
     emp_name = clean_text(employee.get("name"))
-    return bool(emp_name and assigned_norm == re.sub(r"\s+", " ", emp_name.lower()))
+    if emp_name and assigned_norm == re.sub(r"\s+", " ", emp_name.lower()):
+        return True
+    # Partial name match — Excel "Assign to" may be first name only (e.g. "Trupti" vs "Trupti Lade").
+    emp_tokens = _name_tokens(emp_name)
+    assigned_tokens = _name_tokens(assigned)
+    if emp_tokens and assigned_tokens:
+        if all(t in assigned_tokens for t in emp_tokens) or all(t in emp_tokens for t in assigned_tokens):
+            return True
+    return False
 
 
 def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
@@ -5161,10 +5170,7 @@ async def workspace_leads(
         raise HTTPException(403, detail="Employee profile required for workspace")
 
     limit = min(max(limit, 1), 500)
-    select = (
-        "lead_id,name,phone,email,source,stage,status,priority,call_status,assigned_to,"
-        "follow_up_at,created_at,budget,location,property_type,raw_payload"
-    )
+    select = EMPLOYEE_WORKFLOW_LEAD_SELECT
     if cu.role in ["admin", "manager"] and not cu.acting_as_employee_id:
         all_leads = fetch_all_leads_merged(select)
         emp_leads = all_leads

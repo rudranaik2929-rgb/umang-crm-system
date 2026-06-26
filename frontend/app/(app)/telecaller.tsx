@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
@@ -19,8 +19,12 @@ export default function Telecaller() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const params = useLocalSearchParams<{ tab?: string }>();
+  const workspaceCacheKey = useMemo(
+    () => `telecaller-workspace-${user?.employee_id || user?.email || user?.user_id || 'anon'}`,
+    [user?.employee_id, user?.email, user?.user_id],
+  );
   const [tab, setTab] = useState<Tab>('queue');
-  const cached = getSnapshot<any>('telecaller-workspace');
+  const cached = getSnapshot<any>(workspaceCacheKey);
   const [queueLeads, setQueueLeads] = useState<any[]>(cached?.queueLeads ?? []);
   const [followUpLeads, setFollowUpLeads] = useState<any[]>(cached?.followUpLeads ?? []);
   const [stats, setStats] = useState<any>(cached?.stats ?? null);
@@ -33,17 +37,17 @@ export default function Telecaller() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads/workspace', { params: { limit: 200 } });
+      const r = await api.get('/leads/workspace', { params: { limit: 500 }, bypassCache: true });
       const data = r.data || {};
       setStats(data.stats || {});
       setQueueLeads(data.queue?.leads || []);
       const fu = (data.follow_ups?.leads || []).map(leadToFollowUpCard);
       setFollowUpLeads(fu);
-      setSnapshot('telecaller-workspace', { stats: data.stats, queueLeads: data.queue?.leads || [], followUpLeads: fu });
+      setSnapshot(workspaceCacheKey, { stats: data.stats, queueLeads: data.queue?.leads || [], followUpLeads: fu });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceCacheKey]);
 
   useEffect(() => { load(); }, [load]);
   useLiveRefresh(load);

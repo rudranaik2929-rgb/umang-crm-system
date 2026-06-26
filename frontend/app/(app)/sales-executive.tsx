@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
@@ -18,8 +18,12 @@ export default function SalesExecutive() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const params = useLocalSearchParams<{ tab?: string }>();
+  const workspaceCacheKey = useMemo(
+    () => `sales-workspace-${user?.employee_id || user?.email || user?.user_id || 'anon'}`,
+    [user?.employee_id, user?.email, user?.user_id],
+  );
   const [tab, setTab] = useState<Tab>('queue');
-  const cached = getSnapshot<any>('sales-workspace');
+  const cached = getSnapshot<any>(workspaceCacheKey);
   const [queueLeads, setQueueLeads] = useState<any[]>(cached?.queueLeads ?? []);
   const [stats, setStats] = useState<any>(cached?.stats ?? null);
   const [loading, setLoading] = useState(!cached);
@@ -31,15 +35,15 @@ export default function SalesExecutive() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads/workspace', { params: { limit: 200 } });
+      const r = await api.get('/leads/workspace', { params: { limit: 500 }, bypassCache: true });
       const data = r.data || {};
       setStats(data.stats || {});
       setQueueLeads(data.queue?.leads || []);
-      setSnapshot('sales-workspace', { stats: data.stats, queueLeads: data.queue?.leads || [] });
+      setSnapshot(workspaceCacheKey, { stats: data.stats, queueLeads: data.queue?.leads || [] });
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [workspaceCacheKey]);
 
   useEffect(() => { load(); }, [load]);
   useLiveRefresh(load);

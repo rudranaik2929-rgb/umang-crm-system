@@ -54,6 +54,27 @@ def test_fetch_employee_assigned_leads_finds_name_assigned_rows(monkeypatch):
     assert matched[0]["lead_id"] == "l1"
 
 
+def test_telecaller_queue_includes_excel_import_without_assigned_at_column():
+    """Workspace used to omit assigned_at — old created_at must not hide queue leads."""
+    leads = [
+        {
+            "lead_id": "l1",
+            "assigned_to": "emp_trupti",
+            "stage": "assigned",
+            "status": "active",
+            "created_at": "2026-01-01T00:00:00+00:00",
+        }
+    ]
+    queue = main.filter_employee_queue_leads(leads, "telecaller")
+    assert len(queue) == 1
+
+
+def test_lead_assigned_to_employee_matches_partial_first_name():
+    employee = {"employee_id": "emp_t", "name": "Trupti Lade", "user_id": "user_t"}
+    lead = {"lead_id": "l1", "assigned_to": "Trupti", "stage": "assigned", "status": "active"}
+    assert main.lead_assigned_to_employee(lead, employee) is True
+
+
 def test_telecaller_queue_includes_assigned_name_matched_leads():
     employee = _employee()
     leads = [
