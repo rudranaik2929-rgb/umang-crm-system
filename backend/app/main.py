@@ -1177,15 +1177,35 @@ def classify_inquiry_status(lead: Dict[str, Any]) -> str:
     return "active"
 
 
-def lead_matches_inquiry_filter(lead: Dict[str, Any], inquiry_status: str) -> bool:
-    key = (inquiry_status or "all").strip().lower()
-    if key in ("", "all"):
+def parse_inquiry_status_filter(inquiry_status: str) -> List[str]:
+    """Comma-separated inquiry buckets from assign-workspace advanced search."""
+    raw = (inquiry_status or "all").strip().lower()
+    if raw in ("", "all"):
+        return []
+    keys: List[str] = []
+    for part in raw.split(","):
+        key = part.strip().lower()
+        if key and key != "all" and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def lead_matches_single_inquiry_filter(lead: Dict[str, Any], inquiry_status: str) -> bool:
+    key = (inquiry_status or "").strip().lower()
+    if not key or key == "all":
         return True
     if key == "unassigned":
         return not lead.get("assigned_to")
     if key == "booked":
         return lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]
     return classify_inquiry_status(lead) == key
+
+
+def lead_matches_inquiry_filter(lead: Dict[str, Any], inquiry_status: str) -> bool:
+    keys = parse_inquiry_status_filter(inquiry_status)
+    if not keys:
+        return True
+    return any(lead_matches_single_inquiry_filter(lead, key) for key in keys)
 
 
 def lead_matches_assign_source(lead: Dict[str, Any], source_key: str) -> bool:
@@ -5241,8 +5261,12 @@ async def list_assign_workspace(
     """Manager assign workspace — all leads with advanced filters."""
     ensure_roles(cu, ["admin", "manager"])
     inquiry_key = (inquiry_status or "all").strip().lower()
-    if inquiry_key not in ASSIGN_INQUIRY_STATUSES:
+    inquiry_keys = parse_inquiry_status_filter(inquiry_key)
+    if inquiry_key not in ("", "all") and not inquiry_keys:
         raise HTTPException(400, detail=f"inquiry_status must be one of: {', '.join(ASSIGN_INQUIRY_STATUSES)}")
+    for key in inquiry_keys:
+        if key not in ASSIGN_INQUIRY_STATUSES:
+            raise HTTPException(400, detail=f"Unknown inquiry_status '{key}'. Use: {', '.join(ASSIGN_INQUIRY_STATUSES)}")
     source_key = (source or "all").strip().lower()
     if source_key not in ASSIGN_SOURCE_FILTERS:
         raise HTTPException(400, detail=f"source must be one of: {', '.join(ASSIGN_SOURCE_FILTERS)}")

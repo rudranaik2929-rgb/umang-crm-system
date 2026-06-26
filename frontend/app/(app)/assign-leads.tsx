@@ -14,6 +14,7 @@ import {
   STATUS_ACTIONS,
   inquiryStatusLabel,
 } from '../../src/components/AssignLeadsAdvancedModal';
+import { parseInquiryStatusFilter } from '../../src/lib/inquiryStatusFilter';
 import { Ionicons } from '@expo/vector-icons';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
 import { leadIdsFromSelectionIndices, parseCustomLeadSelection } from '../../src/lib/assignLeadSelection';
@@ -128,7 +129,9 @@ export default function AssignLeads() {
 
   const activeFilterChips = useMemo(() => {
     const chips: string[] = [];
-    if (filters.inquiry_status !== 'all') chips.push(inquiryStatusLabel(filters.inquiry_status));
+    parseInquiryStatusFilter(filters.inquiry_status).forEach((key) => {
+      chips.push(inquiryStatusLabel(key));
+    });
     if (filters.source !== 'all') chips.push(filters.source === 'meta' ? 'Facebook' : filters.source);
     if (filters.assigned_to === 'unassigned') chips.push('Unassigned');
     else if (filters.assigned_to !== 'all') {
