@@ -6565,6 +6565,87 @@ def _merge_notifications_for_user(cu: User, db_rows: List[Dict[str, Any]]) -> Li
     return merged
 
 
+def _postgrest_filter_value(value: str) -> str:
+    """Quote PostgREST values that contain spaces or special characters."""
+    text = str(value or "").strip()
+    if not text:
+        return text
+    if re.search(r'[,\s"()]', text):
+        escaped = text.replace('"', '\\"')
+        return f'"{escaped}"'
+    return text
+
+
+def _notification_query_ids(cu: User) -> List[str]:
+    """Stable employee_id / user_id values for PostgREST filters (no display names)."""
+    ids: List[str] = []
+    for candidate in (
+        resolve_employee_id(cu),
+        cu.acting_as_employee_id,
+        cu.employee_id,
+        cu.user_id,
+    ):
+        if candidate and str(candidate) not in ids:
+            ids.append(str(candidate))
+    employee = _employee_record_for_user(cu)
+    if employee:
+        for candidate in (employee.get("employee_id"), employee.get("user_id")):
+            if candidate and str(candidate) not in ids:
+                ids.append(str(candidate))
+    return ids
+
+
+def _postgrest_user_id_filter(ids: List[str]) -> str:
+    clean = [i for i in ids if i]
+    if not clean:
+        return "eq.__none__"
+    if len(clean) == 1:
+        return f"eq.{_postgrest_filter_value(clean[0])}"
+    return f"in.({','.join(_postgrest_filter_value(i) for i in clean)})"
+
+
+def _notification_matches_type_filter(note: Dict[str, Any], type_filter: Optional[str]) -> bool:
+    if not type_filter:
+        return True
+    ntype = str(note.get("type") or "")
+    title = str(note.get("title") or "").lower()
+    if type_filter == "lead_assigned":
+        return ntype in ("lead_assigned", "lead_reassigned_removed", "workflow") and "assign" in title
+    if type_filter == "lead_updated":
+        return ntype in ("lead_updated", "lead_closed", "lead_won", "lead_lost", "workflow") and "assign" not in title
+    if type_filter == "note_added":
+        return ntype in ("note_added", "manager_comment", "workflow") and ("note" in title or "comment" in title)
+    return ntype == type_filter
+
+
+def _fetch_notifications_for_user(cu: User, *, select: str = "*", extra_params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+    """Load notifications for the logged-in user — fixes PostgREST filter bugs with employee names."""
+    params: Dict[str, Any] = {"select": select, "order": "created_at.desc"}
+    if extra_params:
+        params.update(extra_params)
+
+    ids = _notification_query_ids(cu)
+    rows: List[Dict[str, Any]] = []
+    if ids:
+        rows = sb_select("notifications", {**params, "user_id": _postgrest_user_id_filter(ids)}) or []
+
+    employee = _employee_record_for_user(cu)
+    name = clean_text(employee.get("name")) if employee else None
+    if name:
+        name_rows = sb_select(
+            "notifications",
+            {**params, "user_id": f"eq.{_postgrest_filter_value(name)}"},
+        ) or []
+        seen = {r.get("notification_id") for r in rows}
+        for row in name_rows:
+            nid = row.get("notification_id")
+            if nid and nid not in seen:
+                rows.append(row)
+                seen.add(nid)
+
+    return rows
+
+
 class FcmTokenRegister(BaseModel):
     fcm_token: str
     platform: str = "web"
@@ -6606,20 +6687,16 @@ async def list_notifications(
     unread_only: bool = False,
     read_only: bool = False,
 ):
-    params: Dict[str, Any] = {
-        "select": "*",
-        "order": "created_at.desc",
-        "limit": str(min(max(limit, 1), 100)),
-        "offset": str(max(offset, 0)),
-        "user_id": _notification_user_filter(cu),
-    }
+    extra: Dict[str, Any] = {}
     if unread_only:
-        params["is_read"] = "eq.false"
+        extra["is_read"] = "eq.false"
     if read_only:
-        params["is_read"] = "eq.true"
+        extra["is_read"] = "eq.true"
+
+    notifications = _fetch_notifications_for_user(cu, extra_params=extra)
     if type:
-        params["type"] = f"eq.{type}"
-    notifications = sb_select("notifications", params) or []
+        notifications = [n for n in notifications if _notification_matches_type_filter(n, type)]
+
     merged = _merge_notifications_for_user(cu, notifications)
     if search:
         q = search.strip().lower()
@@ -6642,12 +6719,11 @@ async def list_notifications(
 @api_router.get("/notifications/unread-count")
 async def notifications_unread_count(cu: User = Depends(get_current_user)):
     user_ids = set(_notification_user_ids(cu))
-    params = {
-        "select": "notification_id,is_read,user_id",
-        "is_read": "eq.false",
-        "user_id": _notification_user_filter(cu),
-    }
-    rows = sb_select("notifications", params) or []
+    rows = _fetch_notifications_for_user(
+        cu,
+        select="notification_id,is_read,user_id",
+        extra_params={"is_read": "eq.false"},
+    )
     cached = [n for n in SESSION_CACHE.get("notifications", []) if not n.get("is_read") and n.get("user_id") in user_ids]
     db_ids = {r.get("notification_id") for r in rows}
     extra = [n for n in cached if n.get("notification_id") not in db_ids]
@@ -6682,11 +6758,11 @@ async def mark_notification_read(notification_id: str, cu: User=Depends(get_curr
 async def mark_all_notifications_read(cu: User = Depends(get_current_user)):
     user_ids = set(_notification_user_ids(cu))
     stamp = now_utc().isoformat()
-    rows = sb_select("notifications", {
-        "user_id": _notification_user_filter(cu),
-        "is_read": "eq.false",
-        "select": "notification_id",
-    }) or []
+    rows = _fetch_notifications_for_user(
+        cu,
+        select="notification_id,user_id,is_read",
+        extra_params={"is_read": "eq.false"},
+    )
     for row in rows:
         sb_update("notifications", "notification_id", row["notification_id"], {"is_read": True, "read_at": stamp})
     SESSION_CACHE["notifications"] = [

@@ -330,21 +330,10 @@ def notify_lead_assigned(
 ) -> Optional[Dict[str, Any]]:
     name = lead.get("name") or "Customer"
     phone = lead.get("phone") or ""
-    prop = lead.get("property_type") or lead.get("location") or ""
-    budget = lead.get("budget") or ""
-    lines = [f"You have been assigned a new customer.", "", name]
-    if phone:
-        lines.append(phone)
-    if prop:
-        lines.append(str(prop))
-    if budget:
-        lines.append(f"Budget: {budget}")
-    lines.append("")
-    lines.append("Tap to open.")
     return create_notification(
         employee_id,
-        "🏠 New Lead Assigned" if not is_reassign else "🏠 New Lead Assigned",
-        "\n".join(lines),
+        "Lead assigned",
+        f"{name} has been assigned to you.",
         lead_id=lead.get("lead_id"),
         type_=TYPE_LEAD_ASSIGNED,
         sender_id=sender_id,

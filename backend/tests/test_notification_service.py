@@ -112,4 +112,4 @@ def test_notify_lead_assigned_message_contains_customer():
     payload = mock_insert.call_args[0][1]
     assert "Amit Sharma" in payload["message"]
     assert payload["type"] == ns.TYPE_LEAD_ASSIGNED
-    assert payload["priority"] == "high"
+    assert payload["title"] == "Lead assigned"

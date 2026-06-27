@@ -87,6 +87,7 @@ export const TYPE_ICONS: Record<string, string> = {
   lead_lost: 'close-circle-outline',
   broadcast: 'megaphone-outline',
   system: 'notifications-outline',
+  workflow: 'home-outline',
 };
 
 export const PRIORITY_COLORS: Record<string, string> = {
