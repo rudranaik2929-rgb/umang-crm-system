@@ -14,6 +14,7 @@ import { MissedLeadsPanel } from '../../src/components/MissedLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { MyActivityModal } from '../../src/components/MyActivityModal';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
+import { useResponsive } from '../../src/hooks/useResponsive';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -72,6 +73,7 @@ export default function MyDashboard() {
   const { user } = useAuth();
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
+  const { contentPadding } = useResponsive();
   const kpiCardWidth = screenWidth < 400 ? '48%' : screenWidth < 720 ? '31%' : '23%';
   const cached = getSnapshot<any>('my-dashboard');
   const hasFreshCache = cached?.data?.missed_leads_total != null || cached?.data?.missed_leads != null;
@@ -152,7 +154,7 @@ export default function MyDashboard() {
         </Pressable>
         <LivePulse />
       </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <ScrollView contentContainerStyle={[styles.content, { padding: contentPadding }]}>
         {/* Hero score card */}
         <View style={[styles.hero, { backgroundColor: colors.surface, borderColor: accent + '40' }]}>
           <View style={{ flex: 1 }}>
@@ -453,7 +455,7 @@ function LivePulse() {
 }
 
 const styles = StyleSheet.create({
-  content: { padding: 24, gap: 24 },
+  content: { gap: 24 },
   hero: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 24,
     padding: 28, borderRadius: 16, borderWidth: 1,

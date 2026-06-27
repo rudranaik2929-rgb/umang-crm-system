@@ -9,6 +9,7 @@ import { useRouter } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
 import { ImportLeadsModal } from './ImportLeadsModal';
 import { NotificationBell } from './NotificationBell';
+import { useResponsive } from '../hooks/useResponsive';
 
 const ACCENT_OPTIONS: AccentColor[] = ['mono', 'sky', 'forest', 'lavender', 'sunset', 'rose'];
 
@@ -21,6 +22,7 @@ interface Props {
 export function TopBar({ title, subtitle, rightAction }: Props) {
   const { colors, themeName, setThemeMode, accentColor, setAccentColor } = useTheme();
   const { user, logout, setRole, actAs } = useAuth();
+  const { isMobile } = useResponsive();
   const [menuOpen, setMenuOpen] = useState(false);
   const [roleOpen, setRoleOpen] = useState(false);
   const [actAsOpen, setActAsOpen] = useState(false);
@@ -101,11 +103,11 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   };
 
   return (
-    <View style={[styles.wrap, { borderBottomColor: colors.border, backgroundColor: colors.surface }]} testID="topbar">
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.title, { color: colors.text }]}>{title}</Text>
+    <View style={[styles.wrap, isMobile && styles.wrapMobile, { borderBottomColor: colors.border, backgroundColor: colors.surface }]} testID="topbar">
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={[styles.title, isMobile && styles.titleMobile, { color: colors.text }]} numberOfLines={2}>{title}</Text>
         {subtitle ? (
-          <Text style={[styles.subtitle, { color: colors.textMuted }]}>{subtitle}</Text>
+          <Text style={[styles.subtitle, { color: colors.textMuted }]} numberOfLines={1}>{subtitle}</Text>
         ) : null}
       </View>
 
@@ -113,7 +115,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         horizontal
         showsHorizontalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
-        style={styles.actionsScroll}
+        style={[styles.actionsScroll, isMobile && styles.actionsScrollMobile]}
         contentContainerStyle={styles.actions}
       >
         {rightAction}
@@ -187,10 +189,14 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         ) : user?.role ? (
           <View style={[styles.pill, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
             <Ionicons name="briefcase-outline" size={14} color={colors.textSecondary} />
-            <Text style={[styles.pillText, { color: colors.text }]}>{roleLabel(user?.role)}</Text>
+            {!isMobile ? (
+              <Text style={[styles.pillText, { color: colors.text }]}>{roleLabel(user?.role)}</Text>
+            ) : null}
           </View>
         ) : null}
 
+        {!isMobile ? (
+        <>
         <View style={[styles.themeModeGroup, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
           <Pressable
             onPress={() => { setThemeMode('dark'); setAccentColor('mono'); }}
@@ -255,6 +261,8 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
             );
           })}
         </View>
+        </>
+        ) : null}
 
         {/* User menu */}
         <Pressable
@@ -407,15 +415,25 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
 
 const styles = StyleSheet.create({
   wrap: {
-    height: 64,
+    minHeight: 64,
     paddingHorizontal: 24,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     flexDirection: 'row',
     alignItems: 'center',
   },
+  wrapMobile: {
+    minHeight: 52,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexWrap: 'wrap',
+    gap: 6,
+  },
   title: { fontSize: 17, fontWeight: '700' },
+  titleMobile: { fontSize: 15 },
   subtitle: { fontSize: 12, marginTop: 2 },
   actionsScroll: { flexGrow: 0, maxWidth: '78%' },
+  actionsScrollMobile: { maxWidth: '100%', flexGrow: 1 },
   actions: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: 12 },
   pill: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
