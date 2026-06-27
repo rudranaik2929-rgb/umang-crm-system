@@ -27,12 +27,13 @@ interface NotificationContextValue {
   markRead: (id: string) => Promise<void>;
   markAllRead: () => Promise<void>;
   deleteNotification: (id: string) => Promise<void>;
-  fetchList: (opts?: { search?: string; filter?: NotificationFilter; reset?: boolean }) => Promise<void>;
+  fetchList: (opts?: { search?: string; filter?: NotificationFilter; reset?: boolean; limit?: number }) => Promise<void>;
 }
 
 const NotificationContext = createContext<NotificationContextValue | null>(null);
 
-const PAGE_SIZE = 25;
+const PAGE_SIZE = 50;
+const DEFAULT_LIST_LIMIT = 100;
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
   const { user, loading: authLoading } = useAuth();
@@ -42,7 +43,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [error, setError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
-  const listOpts = useRef<{ search?: string; filter?: NotificationFilter }>({});
+  const listOpts = useRef<{ search?: string; filter?: NotificationFilter; limit?: number }>({});
   const offsetRef = useRef(0);
   const [pushEnabled, setPushEnabled] = useState(false);
 
@@ -65,22 +66,28 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [user, authLoading]);
 
   const fetchList = useCallback(
-    async (opts?: { search?: string; filter?: NotificationFilter; reset?: boolean }) => {
+    async (opts?: { search?: string; filter?: NotificationFilter; reset?: boolean; limit?: number }) => {
       if (!user || authLoading) return;
       const reset = opts?.reset !== false;
+      const pageLimit = opts?.limit ?? listOpts.current.limit ?? DEFAULT_LIST_LIMIT;
       if (opts) {
         listOpts.current = {
           search: opts.search ?? listOpts.current.search,
           filter: opts.filter ?? listOpts.current.filter,
+          limit: opts.limit ?? listOpts.current.limit,
         };
       }
       const nextOffset = reset ? 0 : offsetRef.current;
-      if (reset) setLoading(true);
+      if (reset) {
+        setLoading(true);
+        offsetRef.current = 0;
+        setOffset(0);
+      }
       try {
         setError(null);
         const filter = listOpts.current.filter || 'all';
         const params: Record<string, unknown> = {
-          limit: PAGE_SIZE,
+          limit: pageLimit,
           offset: nextOffset,
         };
         if (listOpts.current.search?.trim()) params.search = listOpts.current.search.trim();
@@ -100,7 +107,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         const newOffset = nextOffset + batch.length;
         offsetRef.current = newOffset;
         setOffset(newOffset);
-        setHasMore(batch.length >= PAGE_SIZE);
+        setHasMore(batch.length >= pageLimit);
         if (data?.error) setError(String(data.error));
       } catch (e: any) {
         const msg = e?.response?.data?.detail || e?.message || 'Could not load notifications';
@@ -114,7 +121,10 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   );
 
   const refresh = useCallback(async () => {
-    await Promise.all([fetchList({ reset: true }), refreshUnread()]);
+    await Promise.all([
+      fetchList({ reset: true, limit: listOpts.current.limit ?? DEFAULT_LIST_LIMIT }),
+      refreshUnread(),
+    ]);
   }, [fetchList, refreshUnread]);
 
   const loadMore = useCallback(async () => {

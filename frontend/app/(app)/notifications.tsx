@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -16,9 +16,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { useNotifications } from '../../src/notifications/NotificationContext';
 import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
-import { api } from '../../src/lib/api';
-import type { CrmNotification, NotificationFilter } from '../../src/notifications/types';
-import { FILTER_TYPE_MAP } from '../../src/notifications/types';
+import type { NotificationFilter } from '../../src/notifications/types';
 
 const FILTERS: { key: NotificationFilter; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -38,80 +36,41 @@ export default function NotificationsPage() {
   const router = useRouter();
   const params = useLocalSearchParams<{ lead?: string }>();
   const {
-    items: contextItems,
-    loading: contextLoading,
+    items,
+    loading,
     hasMore,
     fetchList,
     loadMore,
     markRead,
     markAllRead,
     deleteNotification,
-    unreadCount: contextUnread,
-    error: contextError,
+    unreadCount,
+    error,
     refresh,
   } = useNotifications();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<NotificationFilter>('all');
-  const [pageItems, setPageItems] = useState<CrmNotification[]>([]);
-  const [pageLoading, setPageLoading] = useState(true);
-  const [pageError, setPageError] = useState<string | null>(null);
-  const [pageUnread, setPageUnread] = useState(0);
 
-  const loadPage = useCallback(async () => {
-    if (!user) {
-      setPageItems([]);
-      setPageLoading(false);
-      return;
-    }
-    setPageLoading(true);
-    try {
-      const params: Record<string, unknown> = { limit: 100, offset: 0 };
-      if (search.trim()) params.search = search.trim();
-      if (filter === 'unread') params.unread_only = true;
-      if (filter === 'read') params.read_only = true;
-      const typeKey = FILTER_TYPE_MAP[filter];
-      if (typeKey) params.type = typeKey;
-
-      const r = await api.get('/notifications', { params, bypassCache: true } as any);
-      const batch = Array.isArray(r.data?.items) ? r.data.items : [];
-      setPageItems(batch);
-      setPageUnread(r.data?.unread_count ?? 0);
-      setPageError(r.data?.error || null);
-    } catch (e: any) {
-      const msg = e?.response?.data?.detail || e?.message || 'Could not load notifications';
-      setPageError(String(msg));
-      setPageItems([]);
-    } finally {
-      setPageLoading(false);
-    }
-  }, [user, search, filter]);
+  const reload = useCallback(() => {
+    fetchList({ search, filter, reset: true, limit: 100 });
+  }, [fetchList, search, filter]);
 
   useFocusEffect(
     useCallback(() => {
-      refresh();
-      loadPage();
-    }, [refresh, loadPage]),
+      fetchList({ search, filter, reset: true, limit: 100 });
+    }, [fetchList, search, filter]),
   );
 
   useEffect(() => {
-    const t = setTimeout(loadPage, filter === 'all' && !search ? 0 : 300);
+    const t = setTimeout(reload, search.trim() ? 350 : 0);
     return () => clearTimeout(t);
-  }, [filter, search, loadPage]);
+  }, [filter, search, reload]);
 
   useEffect(() => {
     if (params.lead) {
       router.push(leadDeepLinkPath(String(params.lead), user?.role, user?.email, user?.allowed_pages) as any);
     }
   }, [params.lead]);
-
-  const items = useMemo(() => {
-    if (pageItems.length > 0) return pageItems;
-    return contextItems;
-  }, [pageItems, contextItems]);
-
-  const loading = pageLoading && items.length === 0;
-  const unreadCount = pageUnread > 0 ? pageUnread : contextUnread;
-  const error = pageError || contextError;
 
   const onOpen = async (leadId?: string | null, id?: string) => {
     if (id) await markRead(id);
@@ -120,21 +79,15 @@ export default function NotificationsPage() {
     }
   };
 
-  const onMarkAllRead = async () => {
-    await markAllRead();
-    await loadPage();
-  };
-
-  const onDelete = async (id: string) => {
-    await deleteNotification(id);
-    setPageItems((prev) => prev.filter((n) => n.notification_id !== id));
-  };
-
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <TopBar
         title="Notifications"
-        subtitle={unreadCount > 0 ? `${unreadCount} unread` : 'All caught up'}
+        subtitle={
+          unreadCount > 0
+            ? `${unreadCount} unread · kept 24 hours`
+            : 'Stored for 24 hours'
+        }
         rightAction={
           <Pressable
             onPress={() => router.push('/(app)/notification-settings' as any)}
@@ -157,7 +110,7 @@ export default function NotificationsPage() {
           />
         </View>
         {unreadCount > 0 ? (
-          <Pressable onPress={onMarkAllRead} style={[styles.markAll, { borderColor: colors.primary }]}>
+          <Pressable onPress={markAllRead} style={[styles.markAll, { borderColor: colors.primary }]}>
             <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>Mark all read</Text>
           </Pressable>
         ) : null}
@@ -199,7 +152,7 @@ export default function NotificationsPage() {
         }}
         scrollEventThrottle={400}
       >
-        {loading ? (
+        {loading && items.length === 0 ? (
           <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
         ) : items.length === 0 ? (
           <View style={{ alignItems: 'center', marginTop: 48, paddingHorizontal: 24 }}>
@@ -207,18 +160,10 @@ export default function NotificationsPage() {
             <Text style={{ color: colors.textMuted, marginTop: 12, textAlign: 'center' }}>
               {error ? error : 'No notifications yet'}
             </Text>
-            {user?.employee_id ? (
-              <Text style={{ color: colors.textMuted, marginTop: 8, fontSize: 11, textAlign: 'center' }}>
-                Account: {user.email}
-              </Text>
-            ) : null}
-            <Pressable
-              onPress={() => {
-                refresh();
-                loadPage();
-              }}
-              style={{ marginTop: 12 }}
-            >
+            <Text style={{ color: colors.textMuted, marginTop: 8, fontSize: 11, textAlign: 'center' }}>
+              Lead assignments and updates appear here for 24 hours.
+            </Text>
+            <Pressable onPress={refresh} style={{ marginTop: 12 }}>
               <Text style={{ color: colors.primary, fontWeight: '700' }}>Retry</Text>
             </Pressable>
           </View>
@@ -228,7 +173,7 @@ export default function NotificationsPage() {
               key={n.notification_id}
               item={n}
               onPress={() => onOpen(n.lead_id, n.notification_id)}
-              onDelete={() => onDelete(n.notification_id)}
+              onDelete={() => deleteNotification(n.notification_id)}
             />
           ))
         )}

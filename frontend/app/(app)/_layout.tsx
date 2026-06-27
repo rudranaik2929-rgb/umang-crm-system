@@ -5,6 +5,7 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { Sidebar } from '../../src/components/Sidebar';
 import { LocationPermissionBanner } from '../../src/components/LocationPermissionBanner';
+import { NotificationToast } from '../../src/components/NotificationToast';
 import { shouldTrackEmployeeLocation } from '../../src/hooks/useEmployeeLocation';
 import { hasSessionToken } from '../../src/lib/api';
 import { canAccess, defaultRouteFor, pageKeyFromPathname } from '../../src/lib/constants';
@@ -57,6 +58,7 @@ export default function AppLayout() {
     <View style={[styles.shell, { backgroundColor: colors.background }]}>
       <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       <View style={{ flex: 1, height: '100%' }}>
+        <NotificationToast />
         {shouldTrackEmployeeLocation(user) ? (
           <LocationPermissionBanner status={locationStatus} onRequest={requestLocationAccess} />
         ) : null}
