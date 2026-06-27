@@ -349,18 +349,22 @@ def notify_bulk_leads_assigned(
     count: int,
     *,
     sender_id: Optional[str] = None,
+    manager_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     if count < 1:
         return None
+    assigner = (manager_name or "Manager").strip() or "Manager"
     label = "lead" if count == 1 else "leads"
+    title = "Lead assigned" if count == 1 else "Leads assigned"
+    message = f"{assigner} assigned {count} {label} to you."
     return create_notification(
         employee_id,
-        "Leads assigned",
-        f"You have been assigned {count} {label}.",
+        title,
+        message,
         type_=TYPE_LEAD_ASSIGNED,
         sender_id=sender_id,
         priority="high",
-        metadata={"assigned_count": count, "bulk": True},
+        metadata={"assigned_count": count, "bulk": count > 1, "manager": assigner},
     )
 
 

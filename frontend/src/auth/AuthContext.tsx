@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import { Platform } from 'react-native';
 import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots, getSnapshot, setSnapshot, USER_SNAPSHOT_KEY } from '../lib/api';
 import { useEmployeeLocation } from '../hooks/useEmployeeLocation';
+import { registerPushToken } from '../notifications/usePushNotifications';
 
 export interface User {
   user_id: string;
@@ -75,6 +77,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await refresh();
     })();
   }, [refresh]);
+
+  useEffect(() => {
+    if (!user || Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (!('Notification' in window) || Notification.permission === 'denied') return;
+    registerPushToken().catch(() => {});
+  }, [user?.user_id, user?.employee_id]);
 
   useEffect(() => {
     if (!user || typeof document === 'undefined') return;

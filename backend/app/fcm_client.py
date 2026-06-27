@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 
 FCM_PROJECT_ID = os.environ.get("FCM_PROJECT_ID", "")
 FCM_SERVICE_ACCOUNT_JSON = os.environ.get("FCM_SERVICE_ACCOUNT_JSON", "")
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://umanghometechllp.in").rstrip("/")
 
 _initialized = False
 _on_invalid_token: Optional[Callable[[str], None]] = None
@@ -85,7 +86,8 @@ def send_fcm_to_token(
     payload_data = {k: str(v) for k, v in (data or {}).items()}
     payload_data.setdefault("title", title)
     payload_data.setdefault("body", (body or "")[:500])
-    link = payload_data.get("url", "/notifications")
+    rel_link = payload_data.get("url", "/notifications")
+    link = rel_link if rel_link.startswith("http") else f"{FRONTEND_URL}{rel_link}"
 
     message = messaging.Message(
         notification=messaging.Notification(
@@ -95,14 +97,15 @@ def send_fcm_to_token(
         data=payload_data,
         token=token,
         webpush=messaging.WebpushConfig(
+            headers={"Urgency": "high", "TTL": "86400"},
             fcm_options=messaging.WebpushFCMOptions(link=link),
             notification=messaging.WebpushNotification(
                 title=title,
                 body=(body or "")[:500],
-                icon="/icons/icon-192.png",
+                icon=f"{FRONTEND_URL}/icons/icon-192.png",
             ),
         ),
-        android=messaging.AndroidConfig(priority="high"),
+        android=messaging.AndroidConfig(priority="high", ttl=86400),
     )
 
     try:

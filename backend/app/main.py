@@ -2361,9 +2361,8 @@ def assign_lead_to_employee(
     employee_id: str,
     actor: Optional[User],
     reactivate: bool = True,
-    skip_notify: bool = False,
 ) -> Dict[str, Any]:
-    """Single lead assignment — shared by PATCH and bulk assign."""
+    """Single lead assignment — shared by PATCH and bulk assign. No per-lead notification (use summary)."""
     emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "name", "limit": "1"})
     emp_name = emps[0]["name"] if emps else employee_id
     actor_id = None
@@ -2382,21 +2381,27 @@ def assign_lead_to_employee(
             old_lead,
             sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
         )
-    created = None
-    if not skip_notify:
-        created = notify_svc.notify_lead_assigned(
-            employee_id,
-            {**old_lead, **updated},
-            sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
-            is_reassign=bool(old_assignee and old_assignee != employee_id),
-        )
-    if not skip_notify and not created:
-        logging.error(
-            "assign_lead_to_employee: notification not saved lead=%s employee=%s",
-            lead_id,
-            employee_id,
-        )
     return updated
+
+
+def _notify_assignment_summary(employee_id: str, count: int, actor: Optional[User]) -> None:
+    """One notification per assign action — 1 lead or 400 leads, same short message."""
+    if count < 1 or not employee_id:
+        return
+    manager_name = (actor.name if actor else None) or "Manager"
+    sender_id = (actor.acting_as_employee_id or actor.user_id) if actor else None
+    created = notify_svc.notify_bulk_leads_assigned(
+        employee_id,
+        count,
+        sender_id=sender_id,
+        manager_name=manager_name,
+    )
+    if not created:
+        logging.error(
+            "assignment summary notification not saved employee=%s count=%s",
+            employee_id,
+            count,
+        )
 
 # ---- Activity Logger ----
 def log_activity(actor, type_, text, lead_id=None): 
@@ -5264,11 +5269,7 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
     update_cached_lead(lead_id, data)
     log_activity(cu, "broker_activated", f"Broker lead activated and assigned", lead_id=lead_id)
     if assigned_to:
-        notify_svc.notify_lead_assigned(
-            assigned_to,
-            {**lead, **updated},
-            sender_id=cu.acting_as_employee_id or cu.user_id,
-        )
+        _notify_assignment_summary(assigned_to, 1, cu)
     return updated
 
 LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up"]
@@ -5474,8 +5475,6 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
     skipped: List[Dict[str, str]] = []
     assigned_count = 0
     assign_employee = (body.assigned_to or "").strip() or None
-    bulk_assign = bool(assign_employee and len(lead_ids) > 1)
-    sender_id = cu.acting_as_employee_id or cu.user_id
 
     for lead_id in lead_ids:
         leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
@@ -5491,7 +5490,6 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
                 assign_employee,
                 cu,
                 reactivate=body.reactivate,
-                skip_notify=bulk_assign,
             )
             assigned_count += 1
             old_lead = {**old_lead, "assigned_to": assign_employee, "status": "active"}
@@ -5519,8 +5517,7 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
 
     if assign_employee:
         sb_update("employees", "employee_id", assign_employee, {"last_assigned_at": now_utc().isoformat()})
-        if bulk_assign and assigned_count > 0:
-            notify_svc.notify_bulk_leads_assigned(assign_employee, assigned_count, sender_id=sender_id)
+        _notify_assignment_summary(assign_employee, assigned_count, cu)
 
     return {"status": "success", "updated_count": len(updated), "updated": updated, "skipped": skipped}
 
@@ -5542,8 +5539,6 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
 
     assigned: List[str] = []
     skipped: List[Dict[str, str]] = []
-    bulk_assign = len(lead_ids) > 1
-    sender_id = cu.acting_as_employee_id or cu.user_id
     for lead_id in lead_ids:
         leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
         old_lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
@@ -5553,12 +5548,12 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
         if old_lead.get("assigned_to") == employee_id:
             skipped.append({"lead_id": lead_id, "reason": "already_assigned"})
             continue
-        assign_lead_to_employee(lead_id, old_lead, employee_id, cu, skip_notify=bulk_assign)
+        assign_lead_to_employee(lead_id, old_lead, employee_id, cu)
         assigned.append(lead_id)
 
     sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
-    if bulk_assign and assigned:
-        notify_svc.notify_bulk_leads_assigned(employee_id, len(assigned), sender_id=sender_id)
+    if assigned:
+        _notify_assignment_summary(employee_id, len(assigned), cu)
     return {
         "status": "success",
         "assigned": assigned,
@@ -5576,12 +5571,16 @@ async def auto_assign_queue(cu: User = Depends(get_current_user)):
     all_leads = fetch_all_leads_merged("lead_id,name,stage,status,assigned_to")
     queue = compute_unassigned_queue(all_leads)
     assigned: List[str] = []
+    per_employee: Dict[str, int] = {}
     for lead in queue:
         eid = assign_lead_round_robin()
         if not eid:
             break
         assign_lead_to_employee(lead["lead_id"], lead, eid, cu)
         assigned.append(lead["lead_id"])
+        per_employee[eid] = per_employee.get(eid, 0) + 1
+    for eid, count in per_employee.items():
+        _notify_assignment_summary(eid, count, cu)
     return {"status": "success", "assigned_count": len(assigned), "assigned": assigned}
 
 
@@ -5934,12 +5933,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             )
 
     if p.assigned_to and p.assigned_to != old_lead.get("assigned_to"):
-        notify_svc.notify_lead_assigned(
-            p.assigned_to,
-            new_lead,
-            sender_id=cu.acting_as_employee_id or cu.user_id,
-            is_reassign=bool(old_lead.get("assigned_to")),
-        )
+        _notify_assignment_summary(p.assigned_to, 1, cu)
 
     if p.status == "negative" and old_lead.get("status") != "negative":
         reason = (p.priority or "not_interested").replace("_", " ").title()

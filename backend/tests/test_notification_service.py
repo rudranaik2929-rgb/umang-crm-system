@@ -128,8 +128,8 @@ def test_notify_bulk_leads_assigned():
     )
     ns.get_active_fcm_tokens = MagicMock(return_value=[])
 
-    result = ns.notify_bulk_leads_assigned("emp_1", 34, sender_id="mgr_1")
+    result = ns.notify_bulk_leads_assigned("emp_1", 34, sender_id="mgr_1", manager_name="Rohit")
     assert result is not None
     payload = mock_insert.call_args[0][1]
-    assert "34 leads" in payload["message"]
+    assert "Rohit assigned 34 leads" in payload["message"]
     assert payload["type"] == ns.TYPE_LEAD_ASSIGNED
