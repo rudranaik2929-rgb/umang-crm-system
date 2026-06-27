@@ -8,7 +8,7 @@ import {
   Pressable,
   ActivityIndicator,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { TopBar } from '../../src/components/TopBar';
 import { NotificationCard } from '../../src/components/NotificationCard';
@@ -45,9 +45,17 @@ export default function NotificationsPage() {
     markAllRead,
     deleteNotification,
     unreadCount,
+    error,
+    refresh,
   } = useNotifications();
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<NotificationFilter>('all');
+
+  useFocusEffect(
+    useCallback(() => {
+      refresh();
+    }, [refresh]),
+  );
 
   const reload = useCallback(() => {
     fetchList({ search, filter, reset: true });
@@ -147,9 +155,16 @@ export default function NotificationsPage() {
         {loading && items.length === 0 ? (
           <ActivityIndicator color={colors.primary} style={{ marginTop: 40 }} />
         ) : items.length === 0 ? (
-          <View style={{ alignItems: 'center', marginTop: 48 }}>
+          <View style={{ alignItems: 'center', marginTop: 48, paddingHorizontal: 24 }}>
             <Ionicons name="notifications-off-outline" size={40} color={colors.textMuted} />
-            <Text style={{ color: colors.textMuted, marginTop: 12 }}>No notifications match your filters</Text>
+            <Text style={{ color: colors.textMuted, marginTop: 12, textAlign: 'center' }}>
+              {error ? error : 'No notifications match your filters'}
+            </Text>
+            {error ? (
+              <Pressable onPress={refresh} style={{ marginTop: 12 }}>
+                <Text style={{ color: colors.primary, fontWeight: '700' }}>Retry</Text>
+              </Pressable>
+            ) : null}
           </View>
         ) : (
           items.map((n) => (

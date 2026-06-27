@@ -1351,7 +1351,7 @@ def resolve_employee_id(cu: User) -> Optional[str]:
         return cu.employee_id
     if cu.email:
         emps = sb_select("employees", {
-            "email": f"eq.{cu.email}",
+            "email": f"eq.{normalize_email(cu.email)}",
             "select": "employee_id",
             "limit": "1",
         })
@@ -6619,30 +6619,31 @@ def _notification_matches_type_filter(note: Dict[str, Any], type_filter: Optiona
 
 
 def _fetch_notifications_for_user(cu: User, *, select: str = "*", extra_params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Load notifications for the logged-in user — fixes PostgREST filter bugs with employee names."""
+    """Load notifications — one eq query per user id (avoids broken PostgREST in.() filters)."""
     params: Dict[str, Any] = {"select": select, "order": "created_at.desc"}
     if extra_params:
         params.update(extra_params)
 
-    ids = _notification_query_ids(cu)
+    match_values = _notification_user_ids(cu)
     rows: List[Dict[str, Any]] = []
-    if ids:
-        rows = sb_select("notifications", {**params, "user_id": _postgrest_user_id_filter(ids)}) or []
+    seen: set = set()
 
-    employee = _employee_record_for_user(cu)
-    name = clean_text(employee.get("name")) if employee else None
-    if name:
-        name_rows = sb_select(
-            "notifications",
-            {**params, "user_id": f"eq.{_postgrest_filter_value(name)}"},
-        ) or []
-        seen = {r.get("notification_id") for r in rows}
-        for row in name_rows:
+    def _absorb(batch: Optional[List[Dict[str, Any]]]) -> None:
+        for row in batch or []:
             nid = row.get("notification_id")
-            if nid and nid not in seen:
-                rows.append(row)
-                seen.add(nid)
+            if not nid or nid in seen:
+                continue
+            rows.append(row)
+            seen.add(nid)
 
+    for value in match_values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        filt = f"eq.{_postgrest_filter_value(text)}"
+        _absorb(sb_select("notifications", {**params, "user_id": filt}))
+
+    rows.sort(key=lambda n: n.get("created_at") or "", reverse=True)
     return rows
 
 
@@ -6892,8 +6893,32 @@ def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
     """Employee row is the source of truth for sidebar access after login."""
     role = (u.get("role") or "").strip().lower()
     u["role"] = role
-    # Admin/manager sidebar is role-based (includes Employee Tracking) — not employee checkboxes.
+
+    def _link_employee_id_from_directory() -> None:
+        if u.get("employee_id"):
+            return
+        if u.get("email"):
+            emps = sb_select("employees", {
+                "email": f"eq.{normalize_email(u['email'])}",
+                "select": "employee_id,allowed_pages,active,role",
+                "limit": "1",
+            })
+            if emps and emps[0].get("employee_id"):
+                u["employee_id"] = emps[0]["employee_id"]
+        if not u.get("employee_id") and u.get("user_id"):
+            emps = sb_select("employees", {
+                "user_id": f"eq.{u['user_id']}",
+                "select": "employee_id,allowed_pages,active,role",
+                "limit": "1",
+            })
+            if emps and emps[0].get("employee_id"):
+                u["employee_id"] = emps[0]["employee_id"]
+        if u.get("employee_id") and role != "admin":
+            u["acting_as_employee_id"] = u.get("acting_as_employee_id") or u["employee_id"]
+
+    # Admin/manager sidebar is role-based — still link employee_id for notifications.
     if role in ("admin", "manager"):
+        _link_employee_id_from_directory()
         return _finalize_user_session(u)
     emp_id = u.get("employee_id")
     if not emp_id and u.get("email"):
@@ -6943,14 +6968,14 @@ def _employee_allowed_pages(employee: Dict[str, Any]) -> List[str]:
 def _default_pages_for_role(role: str) -> List[str]:
     """Sensible fallback service access when the manager doesn't tick any boxes."""
     defaults = {
-        "admin": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "telecaller": ["my-dashboard", "telecaller", "pipeline", "negative"],
-        "site_visit": ["my-dashboard", "sales-executive", "pipeline"],
-        "sales_executive": ["my-dashboard", "sales-executive", "telecaller", "pipeline"],
-        "booking": ["my-dashboard", "bookings", "pipeline"],
-        "loan": ["my-dashboard", "loans", "pipeline"],
-        "marketing": ["my-dashboard", "negative", "pipeline", "integrations"],
+        "admin": ["dashboard", "my-dashboard", "notifications", "pipeline", "assign-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        "manager": ["dashboard", "my-dashboard", "notifications", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        "telecaller": ["my-dashboard", "notifications", "telecaller", "pipeline", "negative"],
+        "site_visit": ["my-dashboard", "notifications", "sales-executive", "pipeline"],
+        "sales_executive": ["my-dashboard", "notifications", "sales-executive", "telecaller", "pipeline"],
+        "booking": ["my-dashboard", "notifications", "bookings", "pipeline"],
+        "loan": ["my-dashboard", "notifications", "loans", "pipeline"],
+        "marketing": ["my-dashboard", "notifications", "negative", "pipeline", "integrations"],
     }
     return defaults.get(role, ["my-dashboard", "pipeline"])
 

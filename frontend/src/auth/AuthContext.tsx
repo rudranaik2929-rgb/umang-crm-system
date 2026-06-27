@@ -8,6 +8,7 @@ export interface User {
   name: string;
   picture?: string | null;
   role?: string | null;
+  employee_id?: string | null;
   acting_as_employee_id?: string | null;
   allowed_pages?: string[] | null;
   dashboard_type?: string | null;

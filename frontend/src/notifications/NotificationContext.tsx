@@ -20,6 +20,7 @@ interface NotificationContextValue {
   items: CrmNotification[];
   unreadCount: number;
   loading: boolean;
+  error: string | null;
   refresh: () => Promise<void>;
   loadMore: () => Promise<void>;
   hasMore: boolean;
@@ -34,10 +35,11 @@ const NotificationContext = createContext<NotificationContextValue | null>(null)
 const PAGE_SIZE = 25;
 
 export function NotificationProvider({ children }: { children: React.ReactNode }) {
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [items, setItems] = useState<CrmNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const listOpts = useRef<{ search?: string; filter?: NotificationFilter }>({});
@@ -52,18 +54,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [user?.acting_as_employee_id, user?.employee_id, user?.user_id]);
 
   const refreshUnread = useCallback(async () => {
-    if (!user) return;
+    if (!user || authLoading) return;
     try {
       const r = await api.get('/notifications/unread-count', { bypassCache: true } as any);
       setUnreadCount(r.data?.unread_count ?? 0);
     } catch {
       /* ignore */
     }
-  }, [user]);
+  }, [user, authLoading]);
 
   const fetchList = useCallback(
     async (opts?: { search?: string; filter?: NotificationFilter; reset?: boolean }) => {
-      if (!user) return;
+      if (!user || authLoading) return;
       const reset = opts?.reset !== false;
       if (opts) {
         listOpts.current = {
@@ -74,6 +76,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       const nextOffset = reset ? 0 : offset;
       if (reset) setLoading(true);
       try {
+        setError(null);
         const filter = listOpts.current.filter || 'all';
         const params: Record<string, unknown> = {
           limit: PAGE_SIZE,
@@ -90,18 +93,20 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           bypassCache: true,
         } as any);
         const data = r.data;
-        const batch = data?.items || [];
+        const batch = Array.isArray(data?.items) ? data.items : [];
         setItems((prev) => (reset ? batch : [...prev, ...batch]));
         setUnreadCount(data?.unread_count ?? 0);
         setOffset(nextOffset + batch.length);
         setHasMore(batch.length >= PAGE_SIZE);
-      } catch (e) {
+      } catch (e: any) {
+        const msg = e?.response?.data?.detail || e?.message || 'Could not load notifications';
+        setError(String(msg));
         console.warn('Failed to load notifications', e);
       } finally {
         if (reset) setLoading(false);
       }
     },
-    [user, offset],
+    [user, authLoading, offset],
   );
 
   const refresh = useCallback(async () => {
@@ -137,17 +142,18 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, []);
 
   useEffect(() => {
+    if (authLoading) return;
     if (!user) {
       setItems([]);
       setUnreadCount(0);
+      setError(null);
       return;
     }
-    refreshUnread();
-    fetchList({ reset: true, filter: 'all' });
-  }, [user?.user_id, user?.acting_as_employee_id]);
+    refresh();
+  }, [user?.user_id, user?.employee_id, user?.acting_as_employee_id, authLoading]);
 
   useEffect(() => {
-    if (!user) return;
+    if (!user || authLoading) return;
     const unsubLive = subscribeLiveDataChanged(() => {
       refresh();
     });
@@ -156,19 +162,19 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       unsubLive();
       clearInterval(poll);
     };
-  }, [user, refresh]);
+  }, [user, authLoading, refresh]);
 
   useEffect(() => {
-    if (!user || Platform.OS !== 'web' || typeof document === 'undefined') return;
+    if (!user || authLoading || Platform.OS !== 'web' || typeof document === 'undefined') return;
     const onVisible = () => {
       if (document.visibilityState === 'visible') refresh();
     };
     document.addEventListener('visibilitychange', onVisible);
     return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [user, refresh]);
+  }, [user, authLoading, refresh]);
 
   useEffect(() => {
-    if (!user) {
+    if (!user || authLoading) {
       setPushEnabled(false);
       return;
     }
@@ -176,22 +182,25 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       .get('/notifications/preferences', { bypassCache: true } as any)
       .then((r) => setPushEnabled(Boolean(r.data?.push_enabled ?? true)))
       .catch(() => setPushEnabled(true));
-  }, [user?.user_id, user?.acting_as_employee_id]);
+  }, [user?.user_id, user?.employee_id, user?.acting_as_employee_id, authLoading]);
 
   usePushNotifications(pushEnabled, refresh);
 
   useEffect(() => {
-    if (!user || recipientIds.length === 0 || !isSupabaseRealtimeConfigured()) return;
+    if (!user || authLoading || recipientIds.length === 0 || !isSupabaseRealtimeConfigured()) return;
     const sb = getSupabaseClient();
     if (!sb) return;
 
+    const stableIds = recipientIds.filter((id) => id && !/\s/.test(id));
+    if (stableIds.length === 0) return;
+
     const filter =
-      recipientIds.length === 1
-        ? `user_id=eq.${recipientIds[0]}`
-        : `user_id=in.(${recipientIds.join(',')})`;
+      stableIds.length === 1
+        ? `user_id=eq.${stableIds[0]}`
+        : `user_id=in.(${stableIds.join(',')})`;
 
     const channel = sb
-      .channel(`notifications:${recipientIds.join('-')}`)
+      .channel(`notifications:${stableIds.join('-')}`)
       .on(
         'postgres_changes',
         {
@@ -216,13 +225,14 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     return () => {
       sb.removeChannel(channel);
     };
-  }, [user, recipientIds]);
+  }, [user, authLoading, recipientIds]);
 
   const value = useMemo(
     () => ({
       items,
       unreadCount,
       loading,
+      error,
       refresh,
       loadMore,
       hasMore,
@@ -231,7 +241,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       deleteNotification,
       fetchList,
     }),
-    [items, unreadCount, loading, refresh, loadMore, hasMore, markRead, markAllRead, deleteNotification, fetchList],
+    [items, unreadCount, loading, error, refresh, loadMore, hasMore, markRead, markAllRead, deleteNotification, fetchList],
   );
 
   return <NotificationContext.Provider value={value}>{children}</NotificationContext.Provider>;
