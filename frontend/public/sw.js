@@ -65,26 +65,9 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId) {
   });
 }
 
-self.addEventListener('push', (event) => {
-  if (!event.data) return;
-  try {
-    const payload = event.data.json();
-    const title = payload.notification?.title || payload.data?.title || 'Umang CRM';
-    const body = payload.notification?.body || payload.data?.body || '';
-    const url = payload.data?.url || '/notifications';
-    event.waitUntil(
-      self.registration.showNotification(title, {
-        body,
-        icon: '/icons/icon-192.png',
-        badge: '/icons/icon-192.png',
-        data: payload.data || { url },
-        tag: payload.data?.notification_id || 'umang-crm-push',
-      })
-    );
-  } catch (e) {
-    /* handled by Firebase onBackgroundMessage */
-  }
-});
+// NOTE: Background push display is handled solely by Firebase messaging
+// (onBackgroundMessage above). A second manual 'push' listener was removed
+// because it caused the same notification to appear twice on mobile.
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

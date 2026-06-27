@@ -3,7 +3,6 @@ import { View, Text, StyleSheet, Pressable, Image, ScrollView } from 'react-nati
 import { usePathname, useRouter } from 'expo-router';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
-import { useNotifications } from '../notifications/NotificationContext';
 import { visibleNavFor, ROLES } from '../lib/constants';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -33,7 +32,6 @@ interface Props {
 export function Sidebar({ collapsed, onToggle }: Props) {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const { unreadCount } = useNotifications();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -116,22 +114,6 @@ export function Sidebar({ collapsed, onToggle }: Props) {
                   {item.label}
                 </Text>
               )}
-              {item.key === 'notifications' && unreadCount > 0 ? (
-                <View
-                  style={[
-                    styles.navBadge,
-                    {
-                      backgroundColor: colors.negative,
-                      marginLeft: collapsed ? 0 : 'auto',
-                      position: collapsed ? 'absolute' : 'relative',
-                      top: collapsed ? 2 : 0,
-                      right: collapsed ? 6 : 0,
-                    },
-                  ]}
-                >
-                  <Text style={styles.navBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-                </View>
-              ) : null}
             </Pressable>
           );
         })}

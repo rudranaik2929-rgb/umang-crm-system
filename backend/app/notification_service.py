@@ -268,13 +268,17 @@ def send_push_for_notification(
     notification_type: str = TYPE_SYSTEM,
 ) -> None:
     if not fcm_configured():
+        logger.info("PUSH skip user=%s reason=fcm_not_configured", user_id)
         return
     prefs = get_user_preferences(user_id)
     if not prefs.get("push_enabled", True):
+        logger.info("PUSH skip user=%s reason=push_disabled_by_user", user_id)
         return
     tokens = get_active_fcm_tokens(user_id)
     if not tokens:
+        logger.info("PUSH skip user=%s reason=no_device_tokens", user_id)
         return
+    logger.info("PUSH send user=%s tokens=%d type=%s title=%r", user_id, len(tokens), notification_type, title)
     data = {
         "notification_id": notification_id,
         "type": notification_type,
@@ -284,6 +288,7 @@ def send_push_for_notification(
         ),
     }
     result = send_fcm_batch(tokens, title, message, data)
+    logger.info("PUSH result user=%s sent=%s failed=%s", user_id, result.get("sent"), result.get("failed"))
     for tok in result.get("failed_tokens") or []:
         enqueue_push_retry(notification_id, user_id, tok, data, "FCM send failed")
 

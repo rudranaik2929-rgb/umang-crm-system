@@ -50,7 +50,6 @@ export function stageLabel(stage?: string): string {
 export const NAV_ITEMS = [
   { key: 'dashboard', path: '/(app)/dashboard', label: 'Dashboard', icon: 'dashboard' },
   { key: 'my-dashboard', path: '/(app)/my-dashboard', label: 'My Dashboard', icon: 'person' },
-  { key: 'notifications', path: '/(app)/notifications', label: 'Notifications', icon: 'notifications' },
   { key: 'pipeline', path: '/(app)/pipeline', label: 'Lead Pipeline', icon: 'pipeline' },
   { key: 'assign-leads', path: '/(app)/assign-leads', label: 'Assign Leads', icon: 'assign' },
   { key: 'telecaller', path: '/(app)/telecaller', label: 'Telecaller', icon: 'phone' },
@@ -67,14 +66,14 @@ export const NAV_ITEMS = [
 
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
-  admin: ['dashboard', 'my-dashboard', 'notifications', 'pipeline', 'assign-leads', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  manager: ['dashboard', 'my-dashboard', 'notifications', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  telecaller: ['my-dashboard', 'notifications', 'telecaller', 'pipeline', 'negative'],
-  site_visit: ['my-dashboard', 'notifications', 'sales-executive', 'pipeline'],
-  sales_executive: ['my-dashboard', 'notifications', 'sales-executive', 'telecaller', 'pipeline'],
-  booking: ['my-dashboard', 'notifications', 'bookings', 'pipeline'],
-  loan: ['my-dashboard', 'notifications', 'loans', 'pipeline'],
-  marketing: ['my-dashboard', 'notifications', 'negative', 'pipeline', 'integrations'],
+  admin: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
+  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
+  telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
+  site_visit: ['my-dashboard', 'sales-executive', 'pipeline'],
+  sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline'],
+  booking: ['my-dashboard', 'bookings', 'pipeline'],
+  loan: ['my-dashboard', 'loans', 'pipeline'],
+  marketing: ['my-dashboard', 'negative', 'pipeline', 'integrations'],
 };
 
 export const OWNER_EMAILS = ['htshpatil13@gmail.com', 'umang@admin'];
@@ -140,9 +139,6 @@ export function effectivePages(role?: string | null, email?: string | null, allo
     if (!pages.includes('my-dashboard')) pages = ['my-dashboard', ...pages];
     if (!pages.includes('tracking')) pages = [...pages, 'tracking'];
     if (!pages.includes('negative')) pages = [...pages, 'negative'];
-  }
-  if (!pages.includes('notifications')) {
-    pages = [...pages, 'notifications'];
   }
   // Employee Tracking — admin & manager only (never from per-employee grants).
   if (normalizedRole !== 'admin' && normalizedRole !== 'manager') {
