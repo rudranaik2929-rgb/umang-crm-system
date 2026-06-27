@@ -85,6 +85,41 @@ def test_persist_notification_falls_back_to_minimal_columns():
     assert calls[1]["user_id"] == "emp_1"
 
 
+def test_rapid_assigns_merge_into_one_growing_message():
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.timezone.utc)
+    existing = {
+        "notification_id": "ntf_existing",
+        "user_id": "emp_1",
+        "type": ns.TYPE_LEAD_ASSIGNED,
+        "title": "Lead assigned",
+        "message": "Rohit assigned 1 lead to you.",
+        "sender_id": "mgr_1",
+        "metadata": {"assignment_summary": True, "assigned_count": 1},
+        "created_at": now.isoformat(),
+    }
+    mock_update = MagicMock(return_value=None)
+    ns.configure(
+        sb_insert=MagicMock(return_value={"notification_id": "ntf_new"}),
+        sb_select=MagicMock(return_value=[existing]),
+        sb_update=mock_update,
+        sb_delete=MagicMock(),
+        gen_id=lambda p: f"{p}_test",
+        now_utc=MagicMock(return_value=now),
+        session_cache={"notifications": []},
+    )
+    ns.get_active_fcm_tokens = MagicMock(return_value=[])
+
+    # Assigning 2 more leads while a recent summary exists -> merge to 3, single row.
+    result = ns.notify_bulk_leads_assigned("emp_1", 2, sender_id="mgr_1", manager_name="Rohit")
+    assert result is not None
+    mock_update.assert_called_once()
+    patch = mock_update.call_args[0][3]
+    assert patch["metadata"]["assigned_count"] == 3
+    assert "3 leads" in patch["message"]
+    assert "Rohit assigned 3 leads to you." == patch["message"]
+
+
 def test_notify_lead_assigned_uses_summary_not_customer_name():
     mock_insert = MagicMock(return_value={"notification_id": "ntf_1"})
     ns.configure(

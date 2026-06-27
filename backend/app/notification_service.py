@@ -1,6 +1,7 @@
 """Central notification service — in-app + FCM push for Umang CRM."""
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
@@ -367,6 +368,42 @@ def notify_lead_assigned(
     )
 
 
+def _coerce_metadata(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except (json.JSONDecodeError, TypeError):
+            return {}
+    return {}
+
+
+def _find_mergeable_assignment(receiver_id: str, sender_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Most recent assignment-summary row for this receiver within the merge window."""
+    if not _sb_select:
+        return None
+    cutoff = _postgrest_cutoff(ASSIGNMENT_MERGE_WINDOW_SEC)
+    rows = _sb_select("notifications", {
+        "user_id": f"eq.{receiver_id}",
+        "type": f"eq.{TYPE_LEAD_ASSIGNED}",
+        "created_at": f"gte.{cutoff}",
+        "order": "created_at.desc",
+        "limit": "10",
+        "select": "*",
+    }) or []
+    for row in rows:
+        meta = _coerce_metadata(row.get("metadata"))
+        if not meta.get("assignment_summary"):
+            continue
+        row_sender = row.get("sender_id")
+        if sender_id and row_sender and row_sender != sender_id:
+            continue
+        return row
+    return None
+
+
 def notify_bulk_leads_assigned(
     employee_id: str,
     count: int,
@@ -374,12 +411,55 @@ def notify_bulk_leads_assigned(
     sender_id: Optional[str] = None,
     manager_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Exactly one notification per assign action (1 lead or 400 leads — same short message)."""
+    """One notification per assign action. Rapid assigns to the same person merge into
+    a single row whose count grows (so 3 separate assigns => 'assigned 3 leads to you')."""
     receiver_id = _canonical_receiver(employee_id)
     if not receiver_id or count < 1:
         return None
 
     assigner = (manager_name or "Manager").strip() or "Manager"
+
+    existing = _find_mergeable_assignment(receiver_id, sender_id)
+    if existing and existing.get("notification_id"):
+        meta = _coerce_metadata(existing.get("metadata"))
+        prev = int(meta.get("assigned_count") or 0)
+        new_count = prev + count if prev > 0 else count
+        title, message = _assignment_summary_text(assigner, new_count)
+        meta.update({
+            "assigned_count": new_count,
+            "assignment_summary": True,
+            "manager": assigner,
+        })
+        patch = {
+            "title": title,
+            "message": message,
+            "metadata": meta,
+            "is_read": False,
+            "read_at": None,
+            "created_at": _now_iso(),
+            "expires_at": _expires_at_iso(),
+        }
+        updated = None
+        if _sb_update:
+            updated = _sb_update("notifications", "notification_id", existing["notification_id"], patch)
+        merged = {**existing, **patch, **(updated if isinstance(updated, dict) else {})}
+        if _session_cache is not None:
+            cache = _session_cache.setdefault("notifications", [])
+            cache[:] = [c for c in cache if c.get("notification_id") != existing["notification_id"]]
+            cache.insert(0, merged)
+        try:
+            send_push_for_notification(
+                receiver_id,
+                merged["notification_id"],
+                title,
+                message,
+                notification_type=TYPE_LEAD_ASSIGNED,
+            )
+        except Exception:
+            logger.exception("Push send failed for merged assignment %s", merged.get("notification_id"))
+        logger.info("ASSIGN merged receiver=%s total=%d (+%d)", receiver_id, new_count, count)
+        return merged
+
     title, message = _assignment_summary_text(assigner, count)
     return create_notification(
         receiver_id,
