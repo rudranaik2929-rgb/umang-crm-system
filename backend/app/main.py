@@ -5380,11 +5380,17 @@ class BrokerActivateRequest(BaseModel):
 
 @api_router.post("/leads/{lead_id}/to-broker")
 async def move_lead_to_broker(lead_id: str, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", "manager", "telecaller", "sales_executive", "site_visit"])
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
     lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
     if not lead:
         raise HTTPException(404, "Lead not found")
+    if cu.role not in ["admin", "manager"]:
+        emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,user_id", "limit": "1"}) if emp_id else []
+        employee = emps[0] if emps else {"employee_id": emp_id}
+        if not lead_assigned_to_employee(lead, employee):
+            raise HTTPException(403, detail="You can only move your assigned leads to the broker pool.")
     data = {
         "stage": "broker",
         "lead_type": "brokerage",
@@ -5468,6 +5474,66 @@ def apply_dashboard_assignee_filter(
     return [l for l in leads if clean_text(l.get("assigned_to")) == assignee]
 
 
+def lead_dashboard_sort_date(lead: Dict[str, Any], bucket_key: str) -> Optional[datetime]:
+    if bucket_key == "follow_up":
+        return parse_lead_ts(lead.get("follow_up_at")) or parse_lead_ts(lead.get("created_at"))
+    return parse_lead_ts(lead.get("created_at"))
+
+
+def lead_dashboard_date_iso(lead: Dict[str, Any], bucket_key: str) -> str:
+    dt = lead_dashboard_sort_date(lead, bucket_key)
+    if dt:
+        return dt.date().isoformat()
+    raw = lead.get("follow_up_at") if bucket_key == "follow_up" else lead.get("created_at")
+    return str(raw or "")[:10]
+
+
+def apply_dashboard_date_filter(
+    leads: List[Dict[str, Any]],
+    bucket_key: str,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    month: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    month_key = (month or "").strip()
+    if len(month_key) == 7 and month_key[4] == "-":
+        return [l for l in leads if lead_dashboard_date_iso(l, bucket_key).startswith(month_key)]
+    start = (date_from or "").strip()[:10]
+    end = (date_to or "").strip()[:10]
+    if not start and not end:
+        return leads
+    out: List[Dict[str, Any]] = []
+    for lead in leads:
+        day = lead_dashboard_date_iso(lead, bucket_key)
+        if not day:
+            continue
+        if start and day < start:
+            continue
+        if end and day > end:
+            continue
+        out.append(lead)
+    return out
+
+
+def sort_dashboard_leads(
+    leads: List[Dict[str, Any]],
+    bucket_key: str,
+    sort: str = "newest",
+) -> List[Dict[str, Any]]:
+    key = (sort or "newest").strip().lower()
+
+    def sort_dt(lead: Dict[str, Any]) -> datetime:
+        return lead_dashboard_sort_date(lead, bucket_key) or datetime.min.replace(tzinfo=timezone.utc)
+
+    if key == "oldest":
+        return sorted(leads, key=sort_dt)
+    if key == "day_asc":
+        return sorted(leads, key=lambda l: lead_dashboard_date_iso(l, bucket_key))
+    if key == "day_desc":
+        return sorted(leads, key=lambda l: lead_dashboard_date_iso(l, bucket_key), reverse=True)
+    return sorted(leads, key=sort_dt, reverse=True)
+
+
 def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: str) -> List[Dict[str, Any]]:
     """Single source of truth for dashboard bucket lists + counts.
     Always deduped so the metric box number == the opened list length."""
@@ -5508,6 +5574,10 @@ async def list_leads_filtered(
     limit: int = 500,
     assigned_to: Optional[str] = None,
     source: str = "all",
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    month: Optional[str] = None,
+    sort: str = "newest",
     cu: User = Depends(get_current_user),
 ):
     """Dashboard drill-down lists with optional employee + source filters."""
@@ -5534,6 +5604,8 @@ async def list_leads_filtered(
     filtered = filter_lead_bucket(all_leads, bucket_key, today)
     filtered = [l for l in filtered if lead_matches_dashboard_source(l, source_keys)]
     filtered = apply_dashboard_assignee_filter(filtered, assigned_to, employees)
+    filtered = apply_dashboard_date_filter(filtered, bucket_key, date_from, date_to, month)
+    filtered = sort_dashboard_leads(filtered, bucket_key, sort)
     if cu.role not in ["admin", "manager"] and not assigned_to:
         emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
         if emp_id and bucket_key == "follow_up":
@@ -5551,6 +5623,10 @@ async def list_leads_filtered(
         "filters": {
             "assigned_to": assigned_to or "all",
             "source": source or "all",
+            "date_from": date_from or "",
+            "date_to": date_to or "",
+            "month": month or "",
+            "sort": sort or "newest",
         },
     }
 

@@ -168,6 +168,14 @@ export function isAdmin(role?: string | null) {
   return role === 'admin' || role === 'manager';
 }
 
+/** Telecaller / sales can move their own assigned leads to broker pool (same as manager). */
+export function canMoveLeadToBrokerPool(role?: string | null) {
+  return isAdmin(role)
+    || role === 'telecaller'
+    || role === 'sales_executive'
+    || role === 'site_visit';
+}
+
 export function canSeeRevenue(role?: string | null, email?: string | null) {
   return isOwner(role, email);
 }

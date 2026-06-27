@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform } from 'react-native';
+import {
+  View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform, useWindowDimensions,
+} from 'react-native';
 import { useRouter } from 'expo-router';
 import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api, broadcastDataChanged } from '../lib/api';
 import { WorkflowStatusBadge } from './Badge';
-import { STAGES, isAdmin } from '../lib/constants';
+import { STAGES, isAdmin, canMoveLeadToBrokerPool } from '../lib/constants';
 import {
   CALL_STATUS_OPTIONS,
   NOT_INTERESTED_OPTIONS,
@@ -35,6 +37,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const { colors } = useTheme();
   const router = useRouter();
   const portalOverlayStyle = useMainContentOverlayStyle({ portal: true });
+  const { width: windowWidth } = useWindowDimensions();
+  const isWideSheet = windowWidth >= 900;
 
   const goFollowUps = () => {
     onChanged?.();
@@ -636,28 +640,34 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                         )}
                       </View>
                     )}
-                    {lead.stage !== 'broker' ? (
-                      <Pressable
-                        onPress={moveToBrokerPool}
-                        disabled={busy === 'broker'}
-                        style={{
-                          marginTop: 12,
-                          height: 38,
-                          borderRadius: 8,
-                          borderWidth: 1,
-                          borderColor: colors.warning + '60',
-                          backgroundColor: colors.warning + '12',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <Text style={{ color: colors.warning, fontWeight: '700', fontSize: 12 }}>
-                          Move to Broker Pool (no auto-assign)
-                        </Text>
-                      </Pressable>
-                    ) : null}
                   </View>
                 )}
+
+                {canMoveLeadToBrokerPool(userRole) && lead.stage !== 'broker' ? (
+                  <View style={[styles.block, { borderColor: colors.warning + '50', backgroundColor: colors.warning + '08' }]}>
+                    <Text style={[styles.blockTitle, { color: colors.warning }]}>BROKER POOL</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 10 }}>
+                      Move this lead to broker pool — no auto-assign until activated.
+                    </Text>
+                    <Pressable
+                      onPress={moveToBrokerPool}
+                      disabled={busy === 'broker'}
+                      style={{
+                        height: 40,
+                        borderRadius: 8,
+                        borderWidth: 1,
+                        borderColor: colors.warning + '60',
+                        backgroundColor: colors.warning + '12',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                      }}
+                    >
+                      <Text style={{ color: colors.warning, fontWeight: '700', fontSize: 12 }}>
+                        Move to Broker Pool (no auto-assign)
+                      </Text>
+                    </Pressable>
+                  </View>
+                ) : null}
 
                 {housingRaw ? (
                   <View style={[styles.block, { borderColor: '#00BFA5' + '50', backgroundColor: '#00BFA5' + '08' }]}>
@@ -1024,7 +1034,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const sheet = (
     <Pressable style={styles.backdrop} onPress={onClose}>
       <View
-        style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        style={[
+          styles.sheet,
+          isWideSheet && styles.sheetWide,
+          { backgroundColor: colors.surface, borderColor: colors.border },
+        ]}
         {...(Platform.OS === 'web' ? { onClick: (e: any) => e?.stopPropagation?.() } as any : {})}
       >
         {renderBody()}
@@ -1159,6 +1173,12 @@ const styles = StyleSheet.create({
   sheet: {
     width: '92%', maxWidth: 760, maxHeight: '92%', height: '90%',
     borderRadius: 14, borderWidth: 1, overflow: 'hidden',
+  },
+  sheetWide: {
+    width: '96%',
+    maxWidth: 1180,
+    maxHeight: '94%',
+    height: '92%',
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: { padding: 20, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },

@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, Modal, Pressable, ScrollView, ActivityIndicator, Platform, useWindowDimensions,
+  View, Text, StyleSheet, Modal, Pressable, ScrollView, ActivityIndicator, Platform, useWindowDimensions, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
@@ -47,11 +47,73 @@ function formatDate(value?: string) {
   return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
+type DatePreset = 'all' | 'this_month' | 'last_30' | 'month' | 'range';
+type SortOrder = 'newest' | 'oldest' | 'day_asc' | 'day_desc';
+
+function currentMonthKey() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+function WebDateInput({
+  value,
+  onChange,
+  type = 'date',
+  colors,
+  testID,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  type?: 'date' | 'month';
+  colors: any;
+  testID?: string;
+}) {
+  if (Platform.OS === 'web') {
+    return (
+      <input
+        data-testid={testID}
+        type={type}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        style={{
+          height: 36,
+          borderRadius: 8,
+          border: `1px solid ${colors.border}`,
+          background: colors.surfaceAlt,
+          color: colors.text,
+          padding: '0 10px',
+          fontSize: 13,
+          minWidth: type === 'month' ? 150 : 140,
+        }}
+      />
+    );
+  }
+  return (
+    <TextInput
+      testID={testID}
+      value={value}
+      onChangeText={onChange}
+      placeholder={type === 'month' ? 'YYYY-MM' : 'YYYY-MM-DD'}
+      style={{
+        height: 36,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: colors.border,
+        backgroundColor: colors.surfaceAlt,
+        color: colors.text,
+        paddingHorizontal: 10,
+        fontSize: 13,
+        minWidth: 140,
+      }}
+    />
+  );
+}
+
 export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChanged, employees: employeesProp }: Props) {
   const { colors } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
   const overlayStyle = useMainContentOverlayStyle();
-  const isWide = windowWidth >= 960;
+  const isWide = windowWidth >= 768;
   const [leads, setLeads] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -59,12 +121,22 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
   const [employees, setEmployees] = useState<any[]>(employeesProp || []);
   const [assignedTo, setAssignedTo] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [datePreset, setDatePreset] = useState<DatePreset>('all');
+  const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
+  const [rangeFrom, setRangeFrom] = useState('');
+  const [rangeTo, setRangeTo] = useState('');
+  const [monthValue, setMonthValue] = useState(currentMonthKey());
   const loadRef = useRef(0);
 
   useEffect(() => {
     if (visible) {
       setAssignedTo('all');
       setSourceFilter('all');
+      setDatePreset('all');
+      setSortOrder('newest');
+      setRangeFrom('');
+      setRangeTo('');
+      setMonthValue(currentMonthKey());
     }
   }, [visible, bucket]);
 
@@ -98,9 +170,23 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     const reqId = ++loadRef.current;
     setLoading(true);
     try {
-      const params: Record<string, string> = { bucket, limit: '500' };
+      const params: Record<string, string> = { bucket, limit: '500', sort: sortOrder };
       if (assignedTo && assignedTo !== 'all') params.assigned_to = assignedTo;
       if (sourceFilter && sourceFilter !== 'all') params.source = sourceFilter;
+      if (datePreset === 'this_month') {
+        params.month = currentMonthKey();
+      } else if (datePreset === 'last_30') {
+        const end = new Date();
+        const start = new Date(end);
+        start.setDate(start.getDate() - 30);
+        params.date_from = start.toISOString().slice(0, 10);
+        params.date_to = end.toISOString().slice(0, 10);
+      } else if (datePreset === 'month' && monthValue) {
+        params.month = monthValue;
+      } else if (datePreset === 'range') {
+        if (rangeFrom) params.date_from = rangeFrom;
+        if (rangeTo) params.date_to = rangeTo;
+      }
       const res = await api.get('/leads/filtered', { params });
       if (reqId !== loadRef.current) return;
       setLeads(res.data?.leads || []);
@@ -111,16 +197,48 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     } finally {
       if (reqId === loadRef.current) setLoading(false);
     }
-  }, [visible, bucket, assignedTo, sourceFilter]);
+  }, [visible, bucket, assignedTo, sourceFilter, datePreset, sortOrder, rangeFrom, rangeTo, monthValue]);
 
   useEffect(() => { load(); }, [load]);
+
+  const dateSummary = (() => {
+    if (datePreset === 'all') return 'All dates';
+    if (datePreset === 'this_month') return 'This month';
+    if (datePreset === 'last_30') return 'Last 30 days';
+    if (datePreset === 'month') return monthValue ? `Month ${monthValue}` : 'Pick month';
+    if (datePreset === 'range' && (rangeFrom || rangeTo)) return `${rangeFrom || '…'} → ${rangeTo || '…'}`;
+    if (datePreset === 'range') return 'Pick date range';
+    return 'All dates';
+  })();
+
+  const sortLabel = sortOrder === 'newest' ? 'Newest first'
+    : sortOrder === 'oldest' ? 'Oldest first'
+      : sortOrder === 'day_asc' ? 'Day ↑'
+        : 'Day ↓';
+
+  const sourceSummary = selectedSources.size
+    ? SOURCE_OPTIONS.filter((o) => selectedSources.has(o.key)).map((o) => o.label).join(' · ')
+    : 'All sources';
+  const subtitleParts = [sourceSummary, dateSummary, sortLabel].join(' · ');
 
   if (!visible) return null;
 
   const title = BUCKET_TITLES[bucket] || 'Leads';
-  const sourceSummary = selectedSources.size
-    ? SOURCE_OPTIONS.filter((o) => selectedSources.has(o.key)).map((o) => o.label).join(' · ')
-    : 'All sources';
+
+  const DATE_PRESETS: { key: DatePreset; label: string }[] = [
+    { key: 'all', label: 'All time' },
+    { key: 'this_month', label: 'This month' },
+    { key: 'last_30', label: 'Last 30 days' },
+    { key: 'month', label: 'Full month' },
+    { key: 'range', label: 'Date range' },
+  ];
+
+  const SORT_OPTIONS: { key: SortOrder; label: string }[] = [
+    { key: 'newest', label: 'Newest' },
+    { key: 'oldest', label: 'Oldest' },
+    { key: 'day_asc', label: 'Day A→Z' },
+    { key: 'day_desc', label: 'Day Z→A' },
+  ];
 
   const content = (
     <View style={[overlayStyle, st.fullScreen, { backgroundColor: colors.background }]}>
@@ -129,7 +247,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
         <View style={{ flex: 1 }}>
           <Text style={[st.title, { color: colors.text }]}>{title}</Text>
           <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 4 }}>
-            {loading ? 'Loading…' : `${total} leads · ${sourceSummary}`}
+            {loading ? 'Loading…' : `${total} leads · ${subtitleParts}`}
           </Text>
         </View>
         <Pressable onPress={onClose} style={[st.closeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
@@ -179,6 +297,74 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                 >
                   <Ionicons name={active ? 'checkbox' : 'square-outline'} size={14} color={active ? opt.color : colors.textMuted} />
                   <Text style={{ color: active ? opt.color : colors.text, fontSize: 11, fontWeight: active ? '700' : '500' }}>
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        </View>
+        <View style={[st.filterBlock, { minWidth: 280 }]}>
+          <Text style={[st.filterLabel, { color: colors.textMuted }]}>DATE</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.sourceRow}>
+            {DATE_PRESETS.map((opt) => {
+              const active = datePreset === opt.key;
+              return (
+                <Pressable
+                  key={opt.key}
+                  onPress={() => setDatePreset(opt.key)}
+                  style={[st.sourceChip, {
+                    borderColor: active ? colors.primary : colors.border,
+                    backgroundColor: active ? colors.primary + '18' : colors.surfaceAlt,
+                  }]}
+                >
+                  <Text style={{ color: active ? colors.primary : colors.text, fontSize: 11, fontWeight: active ? '700' : '500' }}>
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          {datePreset === 'month' ? (
+            <View style={{ marginTop: 8 }}>
+              <WebDateInput
+                testID="dashboard-leads-month-picker"
+                type="month"
+                value={monthValue}
+                onChange={setMonthValue}
+                colors={colors}
+              />
+            </View>
+          ) : null}
+          {datePreset === 'range' ? (
+            <View style={[st.dateRangeRow, { marginTop: 8 }]}>
+              <View style={{ gap: 4 }}>
+                <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700' }}>FROM</Text>
+                <WebDateInput testID="dashboard-leads-date-from" value={rangeFrom} onChange={setRangeFrom} colors={colors} />
+              </View>
+              <Text style={{ color: colors.textMuted, marginTop: 18 }}>→</Text>
+              <View style={{ gap: 4 }}>
+                <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700' }}>TO</Text>
+                <WebDateInput testID="dashboard-leads-date-to" value={rangeTo} onChange={setRangeTo} colors={colors} />
+              </View>
+            </View>
+          ) : null}
+        </View>
+        <View style={st.filterBlock}>
+          <Text style={[st.filterLabel, { color: colors.textMuted }]}>SORT</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.sourceRow}>
+            {SORT_OPTIONS.map((opt) => {
+              const active = sortOrder === opt.key;
+              return (
+                <Pressable
+                  key={opt.key}
+                  onPress={() => setSortOrder(opt.key)}
+                  style={[st.sourceChip, {
+                    borderColor: active ? colors.accent : colors.border,
+                    backgroundColor: active ? colors.accent + '18' : colors.surfaceAlt,
+                  }]}
+                >
+                  <Text style={{ color: active ? colors.accent : colors.text, fontSize: 11, fontWeight: active ? '700' : '500' }}>
                     {opt.label}
                   </Text>
                 </Pressable>
@@ -340,6 +526,7 @@ const st = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
   },
+  dateRangeRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
   body: { flex: 1, minHeight: 0, paddingHorizontal: 20, paddingBottom: 16, width: '100%' },
   centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
   list: { flex: 1 },
