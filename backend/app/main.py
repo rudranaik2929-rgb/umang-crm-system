@@ -636,6 +636,7 @@ def invalidate_leads_cache() -> None:
 
 def invalidate_employees_cache() -> None:
     _employees_cache["ts"] = 0.0
+    _EMP_LOOKUP_CACHE.clear()
 
 
 def _project_lead_fields(row: Dict[str, Any], select: str) -> Dict[str, Any]:
@@ -1352,17 +1353,40 @@ def actor_activity_keys(cu: User) -> set:
     return {k for k in keys if k}
 
 
-def _employee_id_exists(employee_id: Optional[str]) -> bool:
-    """True only if this id is a real row in employees (not a mistaken user_id)."""
-    clean = clean_text(employee_id)
+# Short-TTL cache for employee lookups. Without this, a single page load fires
+# dozens of identical employees?email=/user_id= queries (one per resolve call),
+# making the app extremely slow. Employees rarely change, so 60s caching is safe.
+_EMP_LOOKUP_CACHE: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
+_EMP_LOOKUP_TTL_SEC = int(os.environ.get("EMP_LOOKUP_TTL_SEC", "60"))
+_EMP_LOOKUP_SELECT = "employee_id,name,email,user_id,active,role,allowed_pages"
+
+
+def _invalidate_employee_cache() -> None:
+    _EMP_LOOKUP_CACHE.clear()
+
+
+def _lookup_employee(field: str, value: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Fetch one employee row by a field, cached for a short time."""
+    clean = clean_text(value)
     if not clean:
-        return False
+        return None
+    key = f"{field}:{clean}"
+    hit = _EMP_LOOKUP_CACHE.get(key)
+    if hit and hit[0] > time.time():
+        return hit[1]
     rows = sb_select("employees", {
-        "employee_id": f"eq.{clean}",
-        "select": "employee_id",
+        field: f"eq.{clean}",
+        "select": _EMP_LOOKUP_SELECT,
         "limit": "1",
     })
-    return bool(rows)
+    row = rows[0] if rows else None
+    _EMP_LOOKUP_CACHE[key] = (time.time() + _EMP_LOOKUP_TTL_SEC, row)
+    return row
+
+
+def _employee_id_exists(employee_id: Optional[str]) -> bool:
+    """True only if this id is a real row in employees (not a mistaken user_id)."""
+    return _lookup_employee("employee_id", employee_id) is not None
 
 
 def resolve_employee_id(cu: User) -> Optional[str]:
@@ -1370,21 +1394,13 @@ def resolve_employee_id(cu: User) -> Optional[str]:
         if candidate and _employee_id_exists(candidate):
             return candidate
     if cu.email:
-        emps = sb_select("employees", {
-            "email": f"eq.{normalize_email(cu.email)}",
-            "select": "employee_id",
-            "limit": "1",
-        })
-        if emps and emps[0].get("employee_id"):
-            return emps[0]["employee_id"]
+        emp = _lookup_employee("email", normalize_email(cu.email))
+        if emp and emp.get("employee_id"):
+            return emp["employee_id"]
     if cu.user_id:
-        emps = sb_select("employees", {
-            "user_id": f"eq.{cu.user_id}",
-            "select": "employee_id",
-            "limit": "1",
-        })
-        if emps and emps[0].get("employee_id"):
-            return emps[0]["employee_id"]
+        emp = _lookup_employee("user_id", cu.user_id)
+        if emp and emp.get("employee_id"):
+            return emp["employee_id"]
     return None
 
 
@@ -1396,16 +1412,12 @@ def employee_assignee_ids(cu: User) -> List[str]:
         if candidate and candidate not in ids:
             ids.append(candidate)
     if emp_id:
-        emps = sb_select("employees", {
-            "employee_id": f"eq.{emp_id}",
-            "select": "name,user_id",
-            "limit": "1",
-        })
-        if emps:
-            uid = clean_text(emps[0].get("user_id"))
+        emp = _lookup_employee("employee_id", emp_id)
+        if emp:
+            uid = clean_text(emp.get("user_id"))
             if uid and uid not in ids:
                 ids.append(uid)
-            name = clean_text(emps[0].get("name"))
+            name = clean_text(emp.get("name"))
             if name and name not in ids:
                 ids.append(name)
     return ids
@@ -1446,29 +1458,17 @@ def lead_assigned_to_employee(lead: Dict[str, Any], employee: Dict[str, Any]) ->
 def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
     emp_id = resolve_employee_id(cu)
     if emp_id:
-        emps = sb_select("employees", {
-            "employee_id": f"eq.{emp_id}",
-            "select": "employee_id,name,email,user_id,active",
-            "limit": "1",
-        })
-        if emps:
-            return emps[0]
+        emp = _lookup_employee("employee_id", emp_id)
+        if emp:
+            return emp
     if cu.email:
-        emps = sb_select("employees", {
-            "email": f"eq.{normalize_email(cu.email)}",
-            "select": "employee_id,name,email,user_id,active",
-            "limit": "1",
-        })
-        if emps:
-            return emps[0]
+        emp = _lookup_employee("email", normalize_email(cu.email))
+        if emp:
+            return emp
     if cu.user_id:
-        emps = sb_select("employees", {
-            "user_id": f"eq.{cu.user_id}",
-            "select": "employee_id,name,email,user_id,active",
-            "limit": "1",
-        })
-        if emps:
-            return emps[0]
+        emp = _lookup_employee("user_id", cu.user_id)
+        if emp:
+            return emp
     return None
 
 
@@ -7083,21 +7083,13 @@ def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
         if u.get("employee_id"):
             return
         if u.get("email"):
-            emps = sb_select("employees", {
-                "email": f"eq.{normalize_email(u['email'])}",
-                "select": "employee_id,allowed_pages,active,role",
-                "limit": "1",
-            })
-            if emps and emps[0].get("employee_id"):
-                u["employee_id"] = emps[0]["employee_id"]
+            emp = _lookup_employee("email", normalize_email(u["email"]))
+            if emp and emp.get("employee_id"):
+                u["employee_id"] = emp["employee_id"]
         if not u.get("employee_id") and u.get("user_id"):
-            emps = sb_select("employees", {
-                "user_id": f"eq.{u['user_id']}",
-                "select": "employee_id,allowed_pages,active,role",
-                "limit": "1",
-            })
-            if emps and emps[0].get("employee_id"):
-                u["employee_id"] = emps[0]["employee_id"]
+            emp = _lookup_employee("user_id", u["user_id"])
+            if emp and emp.get("employee_id"):
+                u["employee_id"] = emp["employee_id"]
         if u.get("employee_id") and role != "admin":
             u["acting_as_employee_id"] = u.get("acting_as_employee_id") or u["employee_id"]
 
@@ -7107,39 +7099,27 @@ def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
         return _finalize_user_session(u)
     emp_id = u.get("employee_id")
     if not emp_id and u.get("email"):
-        emps = sb_select("employees", {
-            "email": f"eq.{u['email']}",
-            "select": "employee_id,allowed_pages,active,role",
-            "limit": "1",
-        })
-        if emps:
-            emp_id = emps[0].get("employee_id")
+        emp = _lookup_employee("email", u["email"])
+        if emp:
+            emp_id = emp.get("employee_id")
             u["employee_id"] = emp_id
             if role != "admin" and emp_id:
                 u["acting_as_employee_id"] = u.get("acting_as_employee_id") or emp_id
     if not emp_id and u.get("user_id"):
-        emps = sb_select("employees", {
-            "user_id": f"eq.{u['user_id']}",
-            "select": "employee_id,allowed_pages,active,role",
-            "limit": "1",
-        })
-        if emps:
-            emp_id = emps[0].get("employee_id")
+        emp = _lookup_employee("user_id", u["user_id"])
+        if emp:
+            emp_id = emp.get("employee_id")
             u["employee_id"] = emp_id
             if role != "admin" and emp_id:
                 u["acting_as_employee_id"] = u.get("acting_as_employee_id") or emp_id
     if not emp_id:
         return u
-    emps = sb_select("employees", {
-        "employee_id": f"eq.{emp_id}",
-        "select": "allowed_pages,active,role",
-        "limit": "1",
-    })
-    if not emps:
+    emp = _lookup_employee("employee_id", emp_id)
+    if not emp:
         return u
-    u["allowed_pages"] = _employee_allowed_pages(emps[0])
-    if emps[0].get("role") and not u.get("role"):
-        u["role"] = emps[0]["role"]
+    u["allowed_pages"] = _employee_allowed_pages(emp)
+    if emp.get("role") and not u.get("role"):
+        u["role"] = emp["role"]
     return u
 
 
