@@ -20,7 +20,7 @@ import {
 } from '../lib/leadFormat';
 import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
-import { useMainContentOverlayStyle, useSidebarLayout } from '../layout/SidebarLayoutContext';
+import { useSidebarLayout } from '../layout/SidebarLayoutContext';
 
 interface Props {
   leadId: string | null;
@@ -36,18 +36,18 @@ interface Props {
 export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000, onGoFollowUps }: Props) {
   const { colors } = useTheme();
   const router = useRouter();
-  const portalOverlayStyle = useMainContentOverlayStyle({ portal: true });
   const { width: sidebarWidth } = useSidebarLayout();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const isWideSheet = windowWidth >= 800;
   const sheetDimensions = useMemo(() => {
-    if (Platform.OS !== 'web') {
-      return { width: '94%' as const, maxWidth: 760, height: '92%' as const, maxHeight: '92%' as const };
+    const pad = 24;
+    const sidebarPad = Platform.OS === 'web' && windowWidth >= 960 ? Math.min(sidebarWidth, windowWidth * 0.35) : 0;
+    const availableW = Math.max(300, windowWidth - sidebarPad - pad * 2);
+    const w = Math.min(1040, availableW);
+    const h = Math.min(820, Math.max(420, windowHeight * 0.88));
+    if (Platform.OS === 'web') {
+      return { width: w, maxWidth: w, height: h, maxHeight: h };
     }
-    const availableW = Math.max(680, windowWidth - sidebarWidth - 40);
-    const w = Math.min(1140, Math.max(820, availableW));
-    const h = Math.min(860, Math.max(560, windowHeight * 0.88));
-    return { width: w, maxWidth: w, height: h, maxHeight: h };
+    return { width: '100%' as const, maxWidth: w, height: '90%' as const, maxHeight: '90%' as const };
   }, [windowWidth, windowHeight, sidebarWidth]);
 
   const goFollowUps = () => {
@@ -515,8 +515,6 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
               )}
 
               <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollPad} keyboardShouldPersistTaps="handled">
-                <View style={[styles.columns, isWideSheet && styles.columnsWide]}>
-                <View style={styles.column}>
                 {/* AI Magic Summary */}
                 <View style={styles.aiBlock}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -776,9 +774,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     </Pressable>
                   </View>
                 </View>
-                </View>
 
-                <View style={[styles.column, isWideSheet && { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.border, paddingLeft: 24 }]}>
                 {actionMessage ? (
                   <View style={styles.block}>
                     <Text style={{ color: colors.positive, fontSize: 13, fontWeight: '600' }}>{actionMessage}</Text>
@@ -995,8 +991,6 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     </View>
                   )}
                 </View>
-                </View>
-                </View>
               </ScrollView>
 
               {/* Confetti Celebration Overlay */}
@@ -1047,7 +1041,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
           sheetDimensions,
           { backgroundColor: colors.surface },
         ]}
-        {...(Platform.OS === 'web' ? { onClick: (e: any) => e?.stopPropagation?.() } as any : {})}
+        {...(Platform.OS === 'web'
+          ? { onClick: (e: any) => e?.stopPropagation?.() } as any
+          : { onStartShouldSetResponder: () => true })}
       >
         {renderBody()}
       </View>
@@ -1055,13 +1051,29 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   );
 
   const followUpZIndex = overlayZIndex + 2000;
+  const modalOverlayStyle = Platform.OS === 'web'
+    ? ({
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100vh',
+        zIndex: overlayZIndex,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(15, 23, 42, 0.18)',
+        opacity: followUpOpen ? 0.4 : 1,
+      } as any)
+    : { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.18)' };
 
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
     return (
       <>
         {visible
           ? createPortal(
-              <View style={[portalOverlayStyle, styles.webOverlay, { zIndex: overlayZIndex, opacity: followUpOpen ? 0.35 : 1 }]}>{sheet}</View>,
+              <View style={modalOverlayStyle}>{sheet}</View>,
               document.body,
             )
           : null}
@@ -1087,7 +1099,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
         animationType="fade"
         onRequestClose={() => (followUpOpen ? setFollowUpOpen(false) : onClose())}
       >
-        {sheet}
+        <View style={styles.nativeOverlay}>
+          {sheet}
+        </View>
       </Modal>
       <ScheduleFollowUpModal
         visible={followUpOpen}
@@ -1165,21 +1179,18 @@ function ActionBtn({ label, icon, color, onPress, busy, testID }: any) {
 }
 
 const styles = StyleSheet.create({
-  webOverlay: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
-  },
   backdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    width: '100%',
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
     padding: 16,
-    ...Platform.select({
-      web: { minHeight: '100vh' as any },
-      default: {},
-    }),
+    backgroundColor: 'transparent',
+  },
+  nativeOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.18)',
   },
   sheet: {
     borderRadius: 16,
@@ -1188,7 +1199,7 @@ const styles = StyleSheet.create({
     flexDirection: 'column',
     ...Platform.select({
       web: {
-        boxShadow: '0 28px 80px rgba(15, 23, 42, 0.35)' as any,
+        boxShadow: '0 24px 64px rgba(15, 23, 42, 0.22)' as any,
         display: 'flex' as any,
       },
       default: {
@@ -1196,10 +1207,7 @@ const styles = StyleSheet.create({
       },
     }),
   },
-  scrollPad: { padding: 24, paddingBottom: 28 },
-  columns: { gap: 8 },
-  columnsWide: { flexDirection: 'row', alignItems: 'flex-start', gap: 0 },
-  column: { flex: 1, minWidth: 0, gap: 8 },
+  scrollPad: { padding: 20, paddingBottom: 24, gap: 4 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: { paddingHorizontal: 24, paddingVertical: 18, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
   name: { fontSize: 22, fontWeight: '700' },
