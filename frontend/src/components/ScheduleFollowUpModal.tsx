@@ -14,6 +14,7 @@ import {
   toTime24,
   type Time12Parts,
 } from '../lib/timeFormat';
+import { useMainContentOverlayStyle } from '../layout/SidebarLayoutContext';
 
 const REASON_OPTIONS = [
   'Callback requested',
@@ -59,6 +60,7 @@ export function ScheduleFollowUpModal({
   onSubmit,
 }: Props) {
   const { colors } = useTheme();
+  const portalOverlayStyle = useMainContentOverlayStyle({ portal: true });
   const dateInputRef = useRef<HTMLInputElement | null>(null);
   const [form, setForm] = useState<FormData>({
     follow_up_date: defaultDate(),
@@ -411,7 +413,7 @@ export function ScheduleFollowUpModal({
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
     return createPortal(
       <>
-        <View style={[styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>
+        <View style={[portalOverlayStyle, styles.webOverlay, { zIndex: overlayZIndex }]}>{sheet}</View>
         {webDateInput}
       </>,
       document.body,
@@ -436,11 +438,9 @@ function Field({ label, colors, children }: { label: string; colors: any; childr
 
 const styles = StyleSheet.create({
   webOverlay: {
-    position: 'fixed' as any,
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.65)',
   },
   backdrop: {
     flex: 1,

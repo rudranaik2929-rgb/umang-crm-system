@@ -14,6 +14,7 @@ import {
   formatHousingLeadDate,
 } from '../lib/leadFormat';
 import { platformLabel } from '../lib/constants';
+import { useMainContentOverlayStyle } from '../layout/SidebarLayoutContext';
 
 type PlatformRow = {
   platform: string;
@@ -99,6 +100,7 @@ interface Props {
 export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope = 'company' }: Props) {
   const { colors } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
+  const overlayStyle = useMainContentOverlayStyle();
   const isWide = windowWidth >= 900;
   const [data, setData] = useState<PlatformData | null>(null);
   const [loading, setLoading] = useState(false);
@@ -249,7 +251,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
   });
 
   const content = (
-    <View style={[st.fullScreen, { backgroundColor: colors.background }]}>
+    <View style={[overlayStyle, st.fullScreen, { backgroundColor: colors.background }]}>
+      <View style={st.contentShell}>
       <View style={[st.header, { borderBottomColor: colors.border }]}>
         <View style={{ flex: 1 }}>
           {view === 'leads' && selectedPlatform ? (
@@ -518,6 +521,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
           </>
         )}
       </View>
+      </View>
 
       <LeadDetailModal
         leadId={openLeadId}
@@ -546,20 +550,13 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
 const st = StyleSheet.create({
   fullScreen: {
     flex: 1,
-    ...Platform.select({
-      web: {
-        position: 'fixed' as any,
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 10000,
-        width: '100vw' as any,
-        height: '100vh' as any,
-        overflow: 'hidden' as any,
-      },
-      default: { flex: 1 },
-    }),
+  },
+  contentShell: {
+    flex: 1,
+    minHeight: 0,
+    width: '100%',
+    maxWidth: 1280,
+    alignSelf: 'center',
   },
   header: {
     flexDirection: 'row',
@@ -576,6 +573,7 @@ const st = StyleSheet.create({
     minHeight: 0,
     paddingHorizontal: 20,
     paddingBottom: 16,
+    width: '100%',
   },
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
   backText: { fontSize: 13, fontWeight: '600' },

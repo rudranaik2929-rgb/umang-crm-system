@@ -18,6 +18,7 @@ import {
 } from '../lib/leadFormat';
 import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
+import { useMainContentOverlayStyle } from '../layout/SidebarLayoutContext';
 
 interface Props {
   leadId: string | null;
@@ -33,6 +34,7 @@ interface Props {
 export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000, onGoFollowUps }: Props) {
   const { colors } = useTheme();
   const router = useRouter();
+  const portalOverlayStyle = useMainContentOverlayStyle({ portal: true });
 
   const goFollowUps = () => {
     onChanged?.();
@@ -1037,7 +1039,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       <>
         {visible
           ? createPortal(
-              <View style={[styles.webOverlay, { zIndex: overlayZIndex, opacity: followUpOpen ? 0.35 : 1 }]}>{sheet}</View>,
+              <View style={[portalOverlayStyle, styles.webOverlay, { zIndex: overlayZIndex, opacity: followUpOpen ? 0.35 : 1 }]}>{sheet}</View>,
               document.body,
             )
           : null}
@@ -1142,11 +1144,9 @@ function ActionBtn({ label, icon, color, onPress, busy, testID }: any) {
 
 const styles = StyleSheet.create({
   webOverlay: {
-    position: 'fixed' as any,
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
   backdrop: {
     flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',

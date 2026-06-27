@@ -11,6 +11,7 @@ import { formatBudgetStringLakhs } from '../lib/leadFormat';
 import { platformLabel, roleLabel } from '../lib/constants';
 import { SearchableSelect } from './SearchableSelect';
 import { parseInquiryStatusFilter, serializeInquiryStatusFilter } from '../lib/inquiryStatusFilter';
+import { useMainContentOverlayStyle } from '../layout/SidebarLayoutContext';
 
 const BUCKET_TITLES: Record<string, string> = {
   all: 'Total Leads',
@@ -49,6 +50,7 @@ function formatDate(value?: string) {
 export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChanged, employees: employeesProp }: Props) {
   const { colors } = useTheme();
   const { width: windowWidth } = useWindowDimensions();
+  const overlayStyle = useMainContentOverlayStyle();
   const isWide = windowWidth >= 960;
   const [leads, setLeads] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -121,7 +123,8 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     : 'All sources';
 
   const content = (
-    <View style={[st.fullScreen, { backgroundColor: colors.background }]}>
+    <View style={[overlayStyle, st.fullScreen, { backgroundColor: colors.background }]}>
+      <View style={st.contentShell}>
       <View style={[st.header, { borderBottomColor: colors.border }]}>
         <View style={{ flex: 1 }}>
           <Text style={[st.title, { color: colors.text }]}>{title}</Text>
@@ -271,6 +274,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
           </ScrollView>
         )}
       </View>
+      </View>
 
       <LeadDetailModal
         leadId={openLead}
@@ -295,20 +299,13 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
 const st = StyleSheet.create({
   fullScreen: {
     flex: 1,
-    ...Platform.select({
-      web: {
-        position: 'fixed' as any,
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        zIndex: 10000,
-        width: '100vw' as any,
-        height: '100vh' as any,
-        overflow: 'hidden' as any,
-      },
-      default: { flex: 1 },
-    }),
+  },
+  contentShell: {
+    flex: 1,
+    minHeight: 0,
+    width: '100%',
+    maxWidth: 1280,
+    alignSelf: 'center',
   },
   header: {
     flexDirection: 'row',
@@ -343,7 +340,7 @@ const st = StyleSheet.create({
     borderRadius: 999,
     borderWidth: 1,
   },
-  body: { flex: 1, minHeight: 0, paddingHorizontal: 20, paddingBottom: 16 },
+  body: { flex: 1, minHeight: 0, paddingHorizontal: 20, paddingBottom: 16, width: '100%' },
   centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
   list: { flex: 1 },
   listContent: { paddingVertical: 12, gap: 8 },

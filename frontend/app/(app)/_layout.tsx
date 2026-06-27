@@ -4,6 +4,7 @@ import { Slot, useRouter, usePathname } from 'expo-router';
 import { useAuth } from '../../src/auth/AuthContext';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { Sidebar } from '../../src/components/Sidebar';
+import { SidebarLayoutProvider } from '../../src/layout/SidebarLayoutContext';
 import { LocationPermissionBanner } from '../../src/components/LocationPermissionBanner';
 import { PushPermissionBanner } from '../../src/components/PushPermissionBanner';
 import { NotificationToast } from '../../src/components/NotificationToast';
@@ -56,20 +57,23 @@ export default function AppLayout() {
   }
 
   return (
-    <View style={[styles.shell, { backgroundColor: colors.background }]}>
-      <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
-      <View style={{ flex: 1, height: '100%' }}>
-        <NotificationToast />
-        <PushPermissionBanner />
-        {shouldTrackEmployeeLocation(user) ? (
-          <LocationPermissionBanner status={locationStatus} onRequest={requestLocationAccess} />
-        ) : null}
-        <Slot />
+    <SidebarLayoutProvider collapsed={collapsed}>
+      <View style={[styles.shell, { backgroundColor: colors.background }]}>
+        <Sidebar collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+        <View style={styles.main}>
+          <NotificationToast />
+          <PushPermissionBanner />
+          {shouldTrackEmployeeLocation(user) ? (
+            <LocationPermissionBanner status={locationStatus} onRequest={requestLocationAccess} />
+          ) : null}
+          <Slot />
+        </View>
       </View>
-    </View>
+    </SidebarLayoutProvider>
   );
 }
 
 const styles = StyleSheet.create({
   shell: { flex: 1, flexDirection: 'row', height: '100%' },
+  main: { flex: 1, height: '100%', position: 'relative', minWidth: 0 },
 });
