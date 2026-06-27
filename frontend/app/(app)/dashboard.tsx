@@ -7,7 +7,6 @@ import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
-import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { DashboardLeadsModal } from '../../src/components/DashboardLeadsModal';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
@@ -51,7 +50,6 @@ export default function Dashboard() {
   const [employees, setEmployees] = useState<any[]>(cached?.employees ?? []);
   const [buckets, setBuckets] = useState<any>(cached?.buckets ?? null);
   const [loading, setLoading] = useState(!cached);
-  const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [leadsBucket, setLeadsBucket] = useState<string | null>(null);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [empMetric, setEmpMetric] = useState<{ employeeId: string; employeeName: string; metric: string } | null>(null);
@@ -134,6 +132,7 @@ export default function Dashboard() {
       negativeLeads: Number(bucketSource?.not_interested ?? stats?.negative_leads ?? 0),
       registrationLeads: Number(bucketSource?.registration ?? stats?.registration_leads ?? 0),
       bookingLeads: Number(bucketSource?.booking ?? 0),
+      ringingLeads: Number(bucketSource?.ringing ?? 0),
       bookings: Number(stats?.bookings || 0),
       confirmedBookings: Number(stats?.confirmed_bookings || 0),
       followUps: Number(bucketSource?.follow_up ?? stats?.follow_ups ?? 0),
@@ -236,19 +235,20 @@ export default function Dashboard() {
             label="Total Leads"
             value={model.totalLeads}
             accent={colors.info}
-            onPress={() => setSourceModalVisible(true)}
+            onPress={() => setLeadsBucket('all')}
             helper={
               stats?.housing_leads != null
-                ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · tap for breakdown`
-                : 'Tap for platform breakdown'
+                ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · tap for full screen`
+                : 'Tap for full-screen list with filters'
             }
           />
           <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Unassigned today · tap for list" onPress={() => setLeadsBucket('new_today')} />
-          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Tap for full list" onPress={() => setLeadsBucket('positive')} />
-          <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Tap for full list" onPress={() => setLeadsBucket('not_interested')} />
-          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Tap for full list" onPress={() => setLeadsBucket('registration')} />
-          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Tap for full list" onPress={() => setLeadsBucket('booking')} />
-          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · tap for list`} onPress={() => setLeadsBucket('follow_up')} />
+          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Filter by employee & source" onPress={() => setLeadsBucket('positive')} />
+          <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="All ringing / call-back leads" onPress={() => setLeadsBucket('ringing')} />
+          <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Filter by employee & source" onPress={() => setLeadsBucket('not_interested')} />
+          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Filter by employee & source" onPress={() => setLeadsBucket('registration')} />
+          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Filter by employee & source" onPress={() => setLeadsBucket('booking')} />
+          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · filter by employee`} onPress={() => setLeadsBucket('follow_up')} />
           <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} onPress={() => router.push('/(app)/loans' as any)} />
           <MetricCard
             icon="briefcase-outline"
@@ -411,18 +411,13 @@ export default function Dashboard() {
 
       </ScrollView>
 
-      <LeadSourceModal
-        visible={sourceModalVisible}
-        onClose={() => setSourceModalVisible(false)}
-        userRole={user?.role}
-        onChanged={load}
-      />
       <DashboardLeadsModal
         visible={leadsBucket !== null}
         bucket={leadsBucket || 'all'}
         onClose={() => setLeadsBucket(null)}
         userRole={user?.role}
         onChanged={load}
+        employees={employees}
       />
       <LeadDetailModal
         leadId={openLead}

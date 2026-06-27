@@ -1209,22 +1209,30 @@ def parse_inquiry_status_filter(inquiry_status: str) -> List[str]:
     return keys
 
 
-def lead_matches_single_inquiry_filter(lead: Dict[str, Any], inquiry_status: str) -> bool:
+def lead_matches_single_inquiry_filter(
+    lead: Dict[str, Any],
+    inquiry_status: str,
+    employees: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
     key = (inquiry_status or "").strip().lower()
     if not key or key == "all":
         return True
     if key == "unassigned":
-        return not lead.get("assigned_to")
+        return is_lead_unassigned(lead, employees)
     if key == "booked":
         return lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]
     return classify_inquiry_status(lead) == key
 
 
-def lead_matches_inquiry_filter(lead: Dict[str, Any], inquiry_status: str) -> bool:
+def lead_matches_inquiry_filter(
+    lead: Dict[str, Any],
+    inquiry_status: str,
+    employees: Optional[List[Dict[str, Any]]] = None,
+) -> bool:
     keys = parse_inquiry_status_filter(inquiry_status)
     if not keys:
         return True
-    return any(lead_matches_single_inquiry_filter(lead, key) for key in keys)
+    return any(lead_matches_single_inquiry_filter(lead, key, employees) for key in keys)
 
 
 def lead_matches_assign_source(lead: Dict[str, Any], source_key: str) -> bool:
@@ -1252,6 +1260,28 @@ def lead_matches_search_query(lead: Dict[str, Any], q: str) -> bool:
     return needle in hay
 
 
+def resolve_lead_assignee_employee(
+    lead: Dict[str, Any],
+    employees: Optional[List[Dict[str, Any]]],
+) -> Optional[Dict[str, Any]]:
+    """Match assigned_to whether it stores employee_id, user_id, or legacy display name."""
+    if not employees:
+        return None
+    for emp in employees:
+        if lead_assigned_to_employee(lead, emp):
+            return emp
+    return None
+
+
+def is_lead_unassigned(lead: Dict[str, Any], employees: Optional[List[Dict[str, Any]]] = None) -> bool:
+    """True when no real employee owns this lead (null/blank assigned_to or unknown legacy value)."""
+    if not clean_text(lead.get("assigned_to")):
+        return True
+    if not employees:
+        return False
+    return resolve_lead_assignee_employee(lead, employees) is None
+
+
 def filter_assign_workspace_leads(
     all_leads: List[Dict[str, Any]],
     inquiry_status: str = "all",
@@ -1259,25 +1289,36 @@ def filter_assign_workspace_leads(
     assigned_to: str = "all",
     q: str = "",
     location: str = "",
+    employees: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     rows = [
         l for l in dedupe_leads_by_external_id(all_leads)
         if is_pipeline_lead(l)
-        and lead_matches_inquiry_filter(l, inquiry_status)
+        and lead_matches_inquiry_filter(l, inquiry_status, employees)
         and lead_matches_assign_source(l, source)
         and lead_matches_search_query(l, q)
         and lead_matches_search_query(l, location)
     ]
     assignee = (assigned_to or "all").strip().lower()
     if assignee == "unassigned":
-        rows = [l for l in rows if not l.get("assigned_to")]
+        rows = [l for l in rows if is_lead_unassigned(l, employees)]
     elif assignee not in ("", "all"):
-        rows = [l for l in rows if l.get("assigned_to") == assigned_to]
-    rows.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+        emp = next((e for e in (employees or []) if e.get("employee_id") == assigned_to), None)
+        if emp:
+            rows = [l for l in rows if lead_assigned_to_employee(l, emp)]
+        else:
+            rows = [l for l in rows if clean_text(l.get("assigned_to")) == assigned_to]
+    rows.sort(
+        key=lambda l: parse_lead_ts(l.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     return rows
 
 
-def compute_assign_workspace_facets(all_leads: List[Dict[str, Any]]) -> Dict[str, Any]:
+def compute_assign_workspace_facets(
+    all_leads: List[Dict[str, Any]],
+    employees: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
     pipeline = [l for l in dedupe_leads_by_external_id(all_leads) if is_pipeline_lead(l)]
     inquiry: Dict[str, int] = {k: 0 for k in ASSIGN_INQUIRY_STATUSES}
     source: Dict[str, int] = {k: 0 for k in ASSIGN_SOURCE_FILTERS}
@@ -1286,7 +1327,7 @@ def compute_assign_workspace_facets(all_leads: List[Dict[str, Any]]) -> Dict[str
         bucket = classify_inquiry_status(lead)
         if bucket in inquiry:
             inquiry[bucket] += 1
-        if not lead.get("assigned_to"):
+        if is_lead_unassigned(lead, employees):
             inquiry["unassigned"] += 1
         plat = classify_lead_platform(lead.get("source"))
         source["all"] += 1
@@ -1305,12 +1346,11 @@ def enrich_leads_with_employee_names(
     leads: List[Dict[str, Any]],
     employees: List[Dict[str, Any]],
 ) -> List[Dict[str, Any]]:
-    emp_map = {e.get("employee_id"): e.get("name") for e in employees if e.get("employee_id")}
     out: List[Dict[str, Any]] = []
     for lead in leads:
         row = enrich_lead_display_fields(lead)
-        eid = lead.get("assigned_to")
-        row["employee_name"] = emp_map.get(eid) if eid else None
+        assignee = resolve_lead_assignee_employee(lead, employees)
+        row["employee_name"] = assignee.get("name") if assignee else None
         row["platform"] = classify_lead_platform(lead.get("source"))
         out.append(row)
     return out
@@ -5276,7 +5316,50 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
         _notify_assignment_summary(assigned_to, 1, cu)
     return updated
 
-LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up"]
+LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up", "ringing"]
+DASHBOARD_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
+
+
+def parse_dashboard_source_filter(source: str) -> List[str]:
+    raw = (source or "all").strip().lower()
+    if raw in ("", "all"):
+        return []
+    keys: List[str] = []
+    for part in raw.split(","):
+        key = part.strip().lower()
+        if key and key != "all" and key in DASHBOARD_SOURCE_FILTERS and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def lead_matches_dashboard_source(lead: Dict[str, Any], source_keys: List[str]) -> bool:
+    if not source_keys:
+        return True
+    plat = classify_lead_platform(lead.get("source"))
+    for key in source_keys:
+        if key == "manual" and plat == "manual":
+            return True
+        if key == "meta" and plat == "meta" and is_real_meta_lead(lead):
+            return True
+        if key == "housing" and plat == "housing":
+            return True
+        if key == "other" and plat == "other":
+            return True
+    return False
+
+
+def apply_dashboard_assignee_filter(
+    leads: List[Dict[str, Any]],
+    assigned_to: Optional[str],
+    employees: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    assignee = (assigned_to or "").strip()
+    if not assignee or assignee.lower() == "all":
+        return leads
+    emp = next((e for e in employees if e.get("employee_id") == assignee), None)
+    if emp:
+        return [l for l in leads if lead_assigned_to_employee(l, emp)]
+    return [l for l in leads if clean_text(l.get("assigned_to")) == assignee]
 
 
 def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: str) -> List[Dict[str, Any]]:
@@ -5297,11 +5380,19 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
         filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"] and l.get("status") != "negative"]
     elif bucket_key == "follow_up":
         filtered = [l for l in all_leads if l.get("follow_up_at") and l.get("status") != "negative"]
+    elif bucket_key == "ringing":
+        filtered = [
+            l for l in all_leads
+            if l.get("status") != "negative" and clean_text(l.get("call_status"))
+        ]
     else:
         # Pipeline total — every lead row in Supabase (except broker pool / fake Meta tests).
         filtered = clean_leads_for_platform_stats(all_leads)
     filtered = dedupe_leads_by_external_id(filtered)
-    filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
+    filtered.sort(
+        key=lambda l: parse_lead_ts(l.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
     return filtered
 
 
@@ -5310,32 +5401,52 @@ async def list_leads_filtered(
     bucket: str = "all",
     limit: int = 500,
     assigned_to: Optional[str] = None,
+    source: str = "all",
     cu: User = Depends(get_current_user),
 ):
-    """Dashboard drill-down lists: all, new_today, positive, not_interested, registration, booking, follow_up."""
+    """Dashboard drill-down lists with optional employee + source filters."""
     bucket_key = (bucket or "all").strip().lower()
     if bucket_key not in set(LEAD_BUCKET_KEYS):
         raise HTTPException(400, detail=f"bucket must be one of: {', '.join(LEAD_BUCKET_KEYS)}")
 
+    source_keys = parse_dashboard_source_filter(source)
+    if (source or "all").strip().lower() not in ("", "all") and not source_keys:
+        raise HTTPException(400, detail=f"source must be one of: {', '.join(DASHBOARD_SOURCE_FILTERS)}")
+
     limit = min(max(limit, 1), 500)
     today = now_utc().date().isoformat()
-    all_leads = fetch_all_leads_merged()
+    select = (
+        "lead_id,name,phone,email,source,stage,status,priority,call_status,"
+        "budget,location,property_type,assigned_to,assigned_at,follow_up_at,created_at,updated_at"
+    )
+    all_leads = fetch_all_leads_merged(select)
+    employees = sb_select("employees", {
+        "select": "employee_id,name,email,role,department,active,user_id",
+        "active": "eq.true",
+        "order": "name.asc",
+    })
     filtered = filter_lead_bucket(all_leads, bucket_key, today)
-    assignee = (assigned_to or "").strip()
-    if assignee:
-        filtered = [l for l in filtered if l.get("assigned_to") == assignee]
-    elif cu.role not in ["admin", "manager"]:
-        emp_id = cu.acting_as_employee_id or cu.employee_id
+    filtered = [l for l in filtered if lead_matches_dashboard_source(l, source_keys)]
+    filtered = apply_dashboard_assignee_filter(filtered, assigned_to, employees)
+    if cu.role not in ["admin", "manager"] and not assigned_to:
+        emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
         if emp_id and bucket_key == "follow_up":
-            filtered = [l for l in filtered if l.get("assigned_to") == emp_id]
-    if bucket_key == "follow_up" and filtered:
-        emps = sb_select("employees", {"select": "employee_id,name"})
-        emp_map = {e.get("employee_id"): e.get("name") for e in emps if e.get("employee_id")}
-        for lead in filtered:
-            eid = lead.get("assigned_to")
-            if eid and emp_map.get(eid):
-                lead["employee_name"] = emp_map[eid]
-    return {"bucket": bucket_key, "total": len(filtered), "leads": filtered[:limit]}
+            emp = next((e for e in employees if e.get("employee_id") == emp_id), None)
+            if emp:
+                filtered = [l for l in filtered if lead_assigned_to_employee(l, emp)]
+            else:
+                filtered = [l for l in filtered if l.get("assigned_to") == emp_id]
+    page = enrich_leads_with_employee_names(filtered[:limit], employees)
+    return {
+        "bucket": bucket_key,
+        "total": len(filtered),
+        "leads": page,
+        "employees": employees,
+        "filters": {
+            "assigned_to": assigned_to or "all",
+            "source": source or "all",
+        },
+    }
 
 
 @api_router.get("/leads/workspace")
@@ -5446,9 +5557,9 @@ async def list_assign_workspace(
     assignable = [e for e in employees if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") in {"admin", "manager"}]
     assignable = assignable or employees
 
-    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location)
+    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location, assignable)
     page = enrich_leads_with_employee_names(filtered[offset:offset + limit], assignable)
-    facets = compute_assign_workspace_facets(all_leads)
+    facets = compute_assign_workspace_facets(all_leads, assignable)
 
     return {
         "total": len(filtered),

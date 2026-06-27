@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  View, Text, StyleSheet, Pressable, Animated, Dimensions, Platform, Modal, ScrollView, ActivityIndicator,
+  View, Text, StyleSheet, Pressable, Platform, Modal, ScrollView, ActivityIndicator, useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
@@ -14,8 +14,6 @@ import {
   formatHousingLeadDate,
 } from '../lib/leadFormat';
 import { platformLabel } from '../lib/constants';
-
-const { height: SCREEN_H } = Dimensions.get('window');
 
 type PlatformRow = {
   platform: string;
@@ -100,6 +98,8 @@ interface Props {
 
 export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope = 'company' }: Props) {
   const { colors } = useTheme();
+  const { width: windowWidth } = useWindowDimensions();
+  const isWide = windowWidth >= 900;
   const [data, setData] = useState<PlatformData | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,9 +113,6 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
   const [leadFilter, setLeadFilter] = useState<string>('all');
   const [listTotal, setListTotal] = useState(0);
 
-  const backdropAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(60)).current;
-  const scaleAnim = useRef(new Animated.Value(0.92)).current;
   const selectedPlatformRef = useRef<PlatformRow | null>(null);
   const viewRef = useRef<'platforms' | 'leads'>('platforms');
 
@@ -235,31 +232,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
     return () => clearInterval(refresh);
   }, [visible, loadData, loadPlatformLeads]);
 
-  useEffect(() => {
-    if (visible) {
-      Animated.parallel([
-        Animated.timing(backdropAnim, { toValue: 1, duration: 280, useNativeDriver: true }),
-        Animated.spring(slideAnim, { toValue: 0, tension: 60, friction: 12, useNativeDriver: true }),
-        Animated.spring(scaleAnim, { toValue: 1, tension: 60, friction: 12, useNativeDriver: true }),
-      ]).start();
-    } else {
-      backdropAnim.setValue(0);
-      slideAnim.setValue(60);
-      scaleAnim.setValue(0.92);
-    }
-  }, [backdropAnim, scaleAnim, slideAnim, visible]);
-
-  const handleClose = () => {
-    Animated.parallel([
-      Animated.timing(backdropAnim, { toValue: 0, duration: 200, useNativeDriver: true }),
-      Animated.timing(slideAnim, { toValue: 80, duration: 200, useNativeDriver: true }),
-      Animated.timing(scaleAnim, { toValue: 0.92, duration: 200, useNativeDriver: true }),
-    ]).start(() => onClose());
-  };
-
   if (!visible) return null;
 
-  const isWeb = Platform.OS === 'web';
   const mainPlatforms = (data?.platforms || []).filter((p) => ['manual', 'housing', 'meta', 'other'].includes(p.platform));
   const orderedKeys = ['manual', 'housing', 'meta'];
   if (mainPlatforms.some((p) => p.platform === 'other' && p.count > 0)) {
@@ -275,64 +249,48 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
   });
 
   const content = (
-    <View style={st.fullOverlay}>
-      <Animated.View style={[st.backdrop, { opacity: backdropAnim }]}>
-        <Pressable style={{ flex: 1 }} onPress={handleClose} />
-      </Animated.View>
-
-      <Animated.View
-        style={[
-          st.card,
-          view === 'leads' && st.cardWide,
-          {
-            backgroundColor: colors.surface,
-            borderColor: colors.border,
-            transform: [{ translateY: slideAnim }, { scale: scaleAnim }],
-          },
-        ]}
-        {...(isWeb ? { onStartShouldSetResponder: () => true } : {})}
-      >
-        <View style={st.header}>
-          <View style={{ flex: 1 }}>
-            {view === 'leads' && selectedPlatform ? (
-              <Pressable onPress={resetDrillDown} style={st.backRow}>
-                <Ionicons name="chevron-back" size={18} color={colors.primary} />
-                <Text style={[st.backText, { color: colors.primary }]}>All platforms</Text>
-              </Pressable>
-            ) : null}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: view === 'leads' ? 6 : 0 }}>
-              <View style={[st.headerIcon, { backgroundColor: colors.primary + '20' }]}>
-                <Ionicons name={view === 'leads' ? 'list-outline' : 'pie-chart'} size={20} color={colors.primary} />
-              </View>
-              <View style={{ flex: 1 }}>
-                <Text style={[st.headerTitle, { color: colors.text }]}>
-                  {view === 'leads' && selectedPlatform ? selectedPlatform.label : modalTitle}
-                </Text>
-                <Text style={[st.headerSub, { color: colors.textMuted }]}>
-                  {view === 'leads' && selectedPlatform
-                    ? `${listTotal || platformLeads.length} leads · tap to open details`
-                    : data
-                      ? isMine
-                        ? `${data.total} assigned leads · tap a platform`
-                        : `${data.total} classified leads · tap a platform`
-                      : loading
-                        ? 'Loading…'
-                        : modalSubtitle}
-                </Text>
-              </View>
+    <View style={[st.fullScreen, { backgroundColor: colors.background }]}>
+      <View style={[st.header, { borderBottomColor: colors.border }]}>
+        <View style={{ flex: 1 }}>
+          {view === 'leads' && selectedPlatform ? (
+            <Pressable onPress={resetDrillDown} style={st.backRow}>
+              <Ionicons name="chevron-back" size={18} color={colors.primary} />
+              <Text style={[st.backText, { color: colors.primary }]}>All platforms</Text>
+            </Pressable>
+          ) : null}
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: view === 'leads' ? 6 : 0 }}>
+            <View style={[st.headerIcon, { backgroundColor: colors.primary + '20' }]}>
+              <Ionicons name={view === 'leads' ? 'list-outline' : 'pie-chart'} size={20} color={colors.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[st.headerTitle, { color: colors.text }]}>
+                {view === 'leads' && selectedPlatform ? selectedPlatform.label : modalTitle}
+              </Text>
+              <Text style={[st.headerSub, { color: colors.textMuted }]}>
+                {view === 'leads' && selectedPlatform
+                  ? `${listTotal || platformLeads.length} leads · tap a row for full details`
+                  : data
+                    ? isMine
+                      ? `${data.total} assigned leads · choose Database, Housing, or Meta`
+                      : `${data.total} classified leads · choose Database, Housing, or Meta`
+                    : loading
+                      ? 'Loading…'
+                      : modalSubtitle}
+              </Text>
             </View>
           </View>
-          <Pressable onPress={handleClose} style={[st.closeBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
-            <Ionicons name="close" size={18} color={colors.textSecondary} />
-          </Pressable>
         </View>
+        <Pressable onPress={onClose} style={[st.closeBtn, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+          <Ionicons name="close" size={20} color={colors.textSecondary} />
+        </Pressable>
+      </View>
 
-        <View style={[st.divider, { backgroundColor: colors.border }]} />
-
+      <View style={st.body}>
         {view === 'platforms' ? (
           loading ? (
             <View style={st.centerBox}>
-              <Text style={{ color: colors.textMuted }}>Loading platforms…</Text>
+              <ActivityIndicator color={colors.primary} />
+              <Text style={{ color: colors.textMuted, marginTop: 12 }}>Loading platforms…</Text>
             </View>
           ) : error ? (
             <View style={st.centerBox}>
@@ -342,189 +300,224 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
               </Pressable>
             </View>
           ) : (
-            <View style={st.platformGrid}>
-              {ordered.map((platform) => {
-                const meta = PLATFORM_UI[platform.platform] || PLATFORM_UI.other;
-                const pct = data && data.total > 0 ? Math.round((platform.count / data.total) * 100) : 0;
+            <ScrollView contentContainerStyle={st.platformScroll} showsVerticalScrollIndicator={false}>
+              <View style={[st.platformGrid, isWide && st.platformGridWide]}>
+                {ordered.map((platform) => {
+                  const meta = PLATFORM_UI[platform.platform] || PLATFORM_UI.other;
+                  const pct = data && data.total > 0 ? Math.round((platform.count / data.total) * 100) : 0;
 
-                return (
-                  <Pressable
-                    key={platform.platform}
-                    onPress={() => handlePlatformPress(platform)}
-                    style={({ pressed }: any) => [
-                      st.platformCard,
-                      {
-                        backgroundColor: colors.surfaceAlt,
-                        borderColor: meta.color + '55',
-                        opacity: pressed ? 0.92 : 1,
-                      },
-                    ]}
-                  >
-                    <View style={[st.platformIcon, { backgroundColor: meta.color + '18' }]}>
-                      <Ionicons name={meta.icon} size={22} color={meta.color} />
-                    </View>
-                    <Text style={[st.platformLabel, { color: colors.textMuted }]}>{platform.label}</Text>
-                    <Text style={[st.platformCount, { color: colors.text }]}>{platform.count}</Text>
-                    <Text style={[st.platformPct, { color: meta.color }]}>{pct}% of total</Text>
-                    <View style={[st.miniBar, { backgroundColor: colors.border }]}>
-                      <View style={[st.miniBarFill, { backgroundColor: meta.color, width: `${pct}%` }]} />
-                    </View>
-                    <Text style={[st.platformDetail, { color: colors.textMuted }]}>
-                      {platform.active} active · {platform.negative} not interested
-                    </Text>
-                    {platform.platform === 'housing' && platform.count > 0 ? (
-                      <Text style={[st.realBadge, { color: meta.color, borderColor: meta.color + '44', backgroundColor: meta.color + '12' }]}>
-                        Original from Housing.com API
+                  return (
+                    <Pressable
+                      key={platform.platform}
+                      onPress={() => handlePlatformPress(platform)}
+                      style={({ pressed }: any) => [
+                        st.platformCard,
+                        isWide && st.platformCardWide,
+                        {
+                          backgroundColor: colors.surface,
+                          borderColor: meta.color + '55',
+                          opacity: pressed ? 0.92 : 1,
+                        },
+                      ]}
+                    >
+                      <View style={[st.platformIcon, { backgroundColor: meta.color + '18' }]}>
+                        <Ionicons name={meta.icon} size={24} color={meta.color} />
+                      </View>
+                      <Text style={[st.platformLabel, { color: colors.textMuted }]}>{platform.label}</Text>
+                      <Text style={[st.platformCount, { color: colors.text }]}>{platform.count}</Text>
+                      <Text style={[st.platformPct, { color: meta.color }]}>{pct}% of total</Text>
+                      <View style={[st.miniBar, { backgroundColor: colors.border }]}>
+                        <View style={[st.miniBarFill, { backgroundColor: meta.color, width: `${pct}%` }]} />
+                      </View>
+                      <Text style={[st.platformDetail, { color: colors.textMuted }]}>
+                        {platform.active} active · {platform.negative} not interested
                       </Text>
-                    ) : null}
-                    <Text style={[st.tapHint, { color: meta.color }]}>
-                      {platform.count > 0
-                        ? 'Tap to view leads →'
-                        : isMine
-                          ? 'No assigned leads from this source'
-                          : 'Tap to sync & view leads →'}
-                    </Text>
-                    {!isMine && platform.count === 0 && platform.platform === 'housing' ? (
-                      <Text style={[st.hint, { color: colors.warning }]}>Pulls latest from Housing.com</Text>
-                    ) : !isMine && platform.count === 0 && platform.platform === 'meta' ? (
-                      <Text style={[st.hint, { color: colors.negative, textAlign: 'center' }]}>
-                        {metaStatus || 'Re-imports from Meta webhook events'}
+                      {platform.platform === 'housing' && platform.count > 0 ? (
+                        <Text style={[st.realBadge, { color: meta.color, borderColor: meta.color + '44', backgroundColor: meta.color + '12' }]}>
+                          Original from Housing.com API
+                        </Text>
+                      ) : null}
+                      <Text style={[st.tapHint, { color: meta.color }]}>
+                        {platform.count > 0
+                          ? 'Open full-screen lead list →'
+                          : isMine
+                            ? 'No assigned leads from this source'
+                            : 'Sync & open full-screen list →'}
                       </Text>
-                    ) : null}
-                  </Pressable>
-                );
-              })}
-            </View>
+                      {!isMine && platform.count === 0 && platform.platform === 'housing' ? (
+                        <Text style={[st.hint, { color: colors.warning }]}>Pulls latest from Housing.com</Text>
+                      ) : !isMine && platform.count === 0 && platform.platform === 'meta' ? (
+                        <Text style={[st.hint, { color: colors.negative, textAlign: 'center' }]}>
+                          {metaStatus || 'Re-imports from Meta webhook events'}
+                        </Text>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </View>
+              <View style={[st.footer, { borderTopColor: colors.border }]}>
+                <View style={st.footerItem}>
+                  <View style={[st.footerDot, { backgroundColor: colors.positive }]} />
+                  <Text style={[st.footerText, { color: colors.textSecondary }]}>
+                    Active: {data ? data.platforms.reduce((a, p) => a + p.active, 0) : 0}
+                  </Text>
+                </View>
+                <View style={st.footerItem}>
+                  <View style={[st.footerDot, { backgroundColor: colors.negative }]} />
+                  <Text style={[st.footerText, { color: colors.textSecondary }]}>
+                    Not interested: {data ? data.platforms.reduce((a, p) => a + p.negative, 0) : 0}
+                  </Text>
+                </View>
+                <View style={st.footerItem}>
+                  <View style={[st.footerDot, { backgroundColor: colors.primary }]} />
+                  <Text style={[st.footerText, { color: colors.textSecondary }]}>Total: {data?.total || 0}</Text>
+                </View>
+              </View>
+            </ScrollView>
           )
         ) : (
           <>
-          <View style={st.filterRow}>
-            {[
-              { key: 'all', label: 'All' },
-              { key: 'positive', label: 'Positive' },
-              { key: 'not_interested', label: 'Not Interested' },
-              { key: 'registration', label: 'Registration' },
-              { key: 'booking', label: 'Booking' },
-            ].map((f) => (
-              <Pressable
-                key={f.key}
-                onPress={() => {
-                  setLeadFilter(f.key);
-                  if (selectedPlatform) loadPlatformLeads(selectedPlatform, f.key);
-                }}
-                style={[st.filterChip, {
-                  borderColor: leadFilter === f.key ? colors.primary : colors.border,
-                  backgroundColor: leadFilter === f.key ? colors.primary + '18' : colors.surfaceAlt,
-                }]}
-              >
-                <Text style={{ color: leadFilter === f.key ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>{f.label}</Text>
-              </Pressable>
-            ))}
-          </View>
-        {leadsLoading ? (
-          <View style={st.centerBox}>
-            <ActivityIndicator color={colors.primary} />
-            <Text style={{ color: colors.textMuted, marginTop: 12 }}>Loading {selectedPlatform?.label} leads…</Text>
-          </View>
-        ) : leadsError ? (
-          <View style={st.centerBox}>
-            <Text style={{ color: colors.negative, textAlign: 'center' }}>{leadsError}</Text>
-          </View>
-        ) : platformLeads.length === 0 ? (
-          <View style={st.centerBox}>
-            <Text style={{ color: colors.textMuted }}>No leads in this platform yet.</Text>
-          </View>
-        ) : (
-          <ScrollView style={st.leadList} showsVerticalScrollIndicator={false}>
-            {platformLeads.map((lead) => {
-              const project = housingProjectLabel(lead);
-              const isHousing = selectedPlatform?.platform === 'housing';
-              return (
+            <View style={st.filterRow}>
+              {[
+                { key: 'all', label: 'All' },
+                { key: 'positive', label: 'Positive' },
+                { key: 'not_interested', label: 'Not Interested' },
+                { key: 'registration', label: 'Registration' },
+                { key: 'booking', label: 'Booking' },
+              ].map((f) => (
                 <Pressable
-                  key={lead.lead_id}
-                  onPress={() => setOpenLeadId(lead.lead_id)}
-                  style={({ pressed }: any) => [
-                    st.leadRow,
-                    {
-                      backgroundColor: pressed ? colors.primary + '08' : colors.surfaceAlt,
-                      borderColor: colors.border,
-                    },
-                  ]}
+                  key={f.key}
+                  onPress={() => {
+                    setLeadFilter(f.key);
+                    if (selectedPlatform) loadPlatformLeads(selectedPlatform, f.key);
+                  }}
+                  style={[st.filterChip, {
+                    borderColor: leadFilter === f.key ? colors.primary : colors.border,
+                    backgroundColor: leadFilter === f.key ? colors.primary + '18' : colors.surfaceAlt,
+                  }]}
                 >
-                  <View style={st.leadRowTop}>
-                    <Text style={[st.leadName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
-                    {lead ? <WorkflowStatusBadge lead={lead} /> : null}
-                  </View>
-                  <Text style={[st.leadSub, { color: colors.textSecondary }]}>
-                    {lead.phone}{lead.email ? ` · ${lead.email}` : ''}
-                  </Text>
-                  {project || lead.location ? (
-                    <Text style={[st.leadMeta, { color: colors.textMuted }]} numberOfLines={2}>
-                      {[project, lead.location].filter(Boolean).join(' · ')}
-                    </Text>
-                  ) : null}
-                  {(() => {
-                    const raw = lead.raw_payload;
-                    const budgetLabel = isHousing && raw && typeof raw === 'object'
-                      ? formatBudgetRangeLakhs(raw.min_price, raw.max_price, lead.budget)
-                      : formatBudgetStringLakhs(lead.budget);
-                    const configLabel = isHousing && raw && typeof raw === 'object'
-                      ? formatHousingConfiguration(raw as Record<string, unknown>)
-                      : null;
-                    return (
-                      <>
-                        {configLabel ? (
-                          <Text style={[st.leadMeta, { color: colors.textMuted }]}>{configLabel}</Text>
-                        ) : null}
-                        {budgetLabel ? (
-                          <Text style={[st.leadMeta, { color: colors.textMuted }]}>Budget: {budgetLabel} L</Text>
-                        ) : null}
-                      </>
-                    );
-                  })()}
-                  <View style={st.leadFoot}>
-                    <Text style={[st.leadDate, { color: colors.textMuted }]}>
-                      {isHousing && lead.raw_payload && typeof lead.raw_payload === 'object'
-                        ? formatHousingLeadDate((lead.raw_payload as any).lead_date, lead.created_at)
-                        : formatDate(lead.created_at)}
-                    </Text>
-                    {isHousing ? (
-                      <Text style={[st.realBadgeSmall, { color: '#00BFA5' }]}>Housing.com · Original</Text>
-                    ) : selectedPlatform?.platform === 'meta' ? (
-                      <Text style={[st.realBadgeSmall, { color: '#1877F2' }]}>Facebook · Meta Lead Ads</Text>
-                    ) : (
-                      <Text style={[st.leadDate, { color: colors.textMuted }]}>{lead.source}</Text>
-                    )}
-                  </View>
+                  <Text style={{ color: leadFilter === f.key ? colors.primary : colors.text, fontSize: 11, fontWeight: '600' }}>{f.label}</Text>
                 </Pressable>
-              );
-            })}
-          </ScrollView>
-        )}
+              ))}
+            </View>
+            {leadsLoading ? (
+              <View style={st.centerBox}>
+                <ActivityIndicator color={colors.primary} />
+                <Text style={{ color: colors.textMuted, marginTop: 12 }}>Loading {selectedPlatform?.label} leads…</Text>
+              </View>
+            ) : leadsError ? (
+              <View style={st.centerBox}>
+                <Text style={{ color: colors.negative, textAlign: 'center' }}>{leadsError}</Text>
+              </View>
+            ) : platformLeads.length === 0 ? (
+              <View style={st.centerBox}>
+                <Text style={{ color: colors.textMuted }}>No leads in this platform yet.</Text>
+              </View>
+            ) : (
+              <ScrollView style={st.leadList} contentContainerStyle={st.leadListContent} showsVerticalScrollIndicator>
+                {isWide ? (
+                  <View style={[st.tableHeader, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+                    <Text style={[st.tableHeadCell, st.colName, { color: colors.textMuted }]}>Name</Text>
+                    <Text style={[st.tableHeadCell, st.colContact, { color: colors.textMuted }]}>Contact</Text>
+                    <Text style={[st.tableHeadCell, st.colLocation, { color: colors.textMuted }]}>Location / Project</Text>
+                    <Text style={[st.tableHeadCell, st.colBudget, { color: colors.textMuted }]}>Budget</Text>
+                    <Text style={[st.tableHeadCell, st.colStatus, { color: colors.textMuted }]}>Status</Text>
+                    <Text style={[st.tableHeadCell, st.colDate, { color: colors.textMuted }]}>Date</Text>
+                  </View>
+                ) : null}
+                {platformLeads.map((lead) => {
+                  const project = housingProjectLabel(lead);
+                  const isHousing = selectedPlatform?.platform === 'housing';
+                  const raw = lead.raw_payload;
+                  const budgetLabel = isHousing && raw && typeof raw === 'object'
+                    ? formatBudgetRangeLakhs(raw.min_price, raw.max_price, lead.budget)
+                    : formatBudgetStringLakhs(lead.budget);
+                  const configLabel = isHousing && raw && typeof raw === 'object'
+                    ? formatHousingConfiguration(raw as Record<string, unknown>)
+                    : null;
+                  const dateLabel = isHousing && raw && typeof raw === 'object'
+                    ? formatHousingLeadDate((raw as any).lead_date, lead.created_at)
+                    : formatDate(lead.created_at);
+
+                  if (isWide) {
+                    return (
+                      <Pressable
+                        key={lead.lead_id}
+                        onPress={() => setOpenLeadId(lead.lead_id)}
+                        style={({ pressed }: any) => [
+                          st.tableRow,
+                          {
+                            backgroundColor: pressed ? colors.primary + '08' : colors.surface,
+                            borderColor: colors.border,
+                          },
+                        ]}
+                      >
+                        <Text style={[st.tableCell, st.colName, st.leadName, { color: colors.text }]} numberOfLines={2}>{lead.name}</Text>
+                        <Text style={[st.tableCell, st.colContact, { color: colors.textSecondary }]} numberOfLines={2}>
+                          {lead.phone}{lead.email ? `\n${lead.email}` : ''}
+                        </Text>
+                        <Text style={[st.tableCell, st.colLocation, { color: colors.textMuted }]} numberOfLines={3}>
+                          {[project, lead.location, configLabel].filter(Boolean).join('\n') || '—'}
+                        </Text>
+                        <Text style={[st.tableCell, st.colBudget, { color: colors.textMuted }]} numberOfLines={2}>
+                          {budgetLabel ? `${budgetLabel} L` : '—'}
+                        </Text>
+                        <View style={[st.colStatus, st.tableCell]}>
+                          <WorkflowStatusBadge lead={lead} />
+                        </View>
+                        <Text style={[st.tableCell, st.colDate, { color: colors.textMuted }]} numberOfLines={2}>{dateLabel}</Text>
+                      </Pressable>
+                    );
+                  }
+
+                  return (
+                    <Pressable
+                      key={lead.lead_id}
+                      onPress={() => setOpenLeadId(lead.lead_id)}
+                      style={({ pressed }: any) => [
+                        st.leadRow,
+                        {
+                          backgroundColor: pressed ? colors.primary + '08' : colors.surfaceAlt,
+                          borderColor: colors.border,
+                        },
+                      ]}
+                    >
+                      <View style={st.leadRowTop}>
+                        <Text style={[st.leadName, { color: colors.text }]} numberOfLines={1}>{lead.name}</Text>
+                        {lead ? <WorkflowStatusBadge lead={lead} /> : null}
+                      </View>
+                      <Text style={[st.leadSub, { color: colors.textSecondary }]}>
+                        {lead.phone}{lead.email ? ` · ${lead.email}` : ''}
+                      </Text>
+                      {project || lead.location ? (
+                        <Text style={[st.leadMeta, { color: colors.textMuted }]} numberOfLines={2}>
+                          {[project, lead.location].filter(Boolean).join(' · ')}
+                        </Text>
+                      ) : null}
+                      {configLabel ? (
+                        <Text style={[st.leadMeta, { color: colors.textMuted }]}>{configLabel}</Text>
+                      ) : null}
+                      {budgetLabel ? (
+                        <Text style={[st.leadMeta, { color: colors.textMuted }]}>Budget: {budgetLabel} L</Text>
+                      ) : null}
+                      <View style={st.leadFoot}>
+                        <Text style={[st.leadDate, { color: colors.textMuted }]}>{dateLabel}</Text>
+                        {isHousing ? (
+                          <Text style={[st.realBadgeSmall, { color: '#00BFA5' }]}>Housing.com · Original</Text>
+                        ) : selectedPlatform?.platform === 'meta' ? (
+                          <Text style={[st.realBadgeSmall, { color: '#1877F2' }]}>Facebook · Meta Lead Ads</Text>
+                        ) : (
+                          <Text style={[st.leadDate, { color: colors.textMuted }]}>{lead.source}</Text>
+                        )}
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            )}
           </>
         )}
-
-        {view === 'platforms' ? (
-          <View style={[st.footer, { borderTopColor: colors.border }]}>
-            <View style={st.footerItem}>
-              <View style={[st.footerDot, { backgroundColor: colors.positive }]} />
-              <Text style={[st.footerText, { color: colors.textSecondary }]}>
-                Active: {data ? data.platforms.reduce((a, p) => a + p.active, 0) : 0}
-              </Text>
-            </View>
-            <View style={st.footerItem}>
-              <View style={[st.footerDot, { backgroundColor: colors.negative }]} />
-              <Text style={[st.footerText, { color: colors.textSecondary }]}>
-                Not interested: {data ? data.platforms.reduce((a, p) => a + p.negative, 0) : 0}
-              </Text>
-            </View>
-            <View style={st.footerItem}>
-              <View style={[st.footerDot, { backgroundColor: colors.primary }]} />
-              <Text style={[st.footerText, { color: colors.textSecondary }]}>Total: {data?.total || 0}</Text>
-            </View>
-          </View>
-        ) : null}
-      </Animated.View>
+      </View>
 
       <LeadDetailModal
         leadId={openLeadId}
@@ -541,69 +534,68 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
     </View>
   );
 
-  if (isWeb) return content;
+  if (Platform.OS === 'web') return content;
 
   return (
-    <Modal transparent visible={visible} animationType="none" onRequestClose={handleClose}>
+    <Modal visible={visible} animationType="slide" presentationStyle="fullScreen" onRequestClose={onClose}>
       {content}
     </Modal>
   );
 }
 
 const st = StyleSheet.create({
-  fullOverlay: {
-    ...Platform.select({
-      web: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 9999, pointerEvents: 'box-none' as any },
-      default: { flex: 1 },
-    }),
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  backdrop: {
-    ...Platform.select({
-      web: { position: 'fixed' as any, top: 0, left: 0, right: 0, bottom: 0, zIndex: 9998 },
-      default: { ...StyleSheet.absoluteFillObject },
-    }),
-    backgroundColor: 'rgba(0,0,0,0.55)',
-  },
-  card: {
-    width: '94%',
-    maxWidth: 720,
-    maxHeight: SCREEN_H * 0.88,
-    borderRadius: 20,
-    borderWidth: 1,
-    padding: 24,
+  fullScreen: {
+    flex: 1,
     ...Platform.select({
       web: {
-        position: 'relative' as any,
-        zIndex: 10001,
-        pointerEvents: 'auto' as any,
-        cursor: 'default' as any,
-        boxShadow: '0 25px 80px rgba(0,0,0,0.4)',
+        position: 'fixed' as any,
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        zIndex: 10000,
+        width: '100vw' as any,
+        height: '100vh' as any,
+        overflow: 'hidden' as any,
       },
-      default: { elevation: 30 },
+      default: { flex: 1 },
     }),
   },
-  cardWide: { maxWidth: 560 },
-  header: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 },
+  header: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    paddingHorizontal: 20,
+    paddingTop: Platform.OS === 'web' ? 20 : 16,
+    paddingBottom: 14,
+    borderBottomWidth: 1,
+  },
+  body: {
+    flex: 1,
+    minHeight: 0,
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+  },
   backRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 2 },
   backText: { fontSize: 13, fontWeight: '600' },
   headerIcon: { width: 42, height: 42, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 18, fontWeight: '700', letterSpacing: -0.3 },
-  headerSub: { fontSize: 12, marginTop: 2 },
-  closeBtn: { width: 34, height: 34, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  divider: { height: 1, marginVertical: 18 },
-  centerBox: { padding: 40, alignItems: 'center' },
+  headerTitle: { fontSize: 22, fontWeight: '800', letterSpacing: -0.4 },
+  headerSub: { fontSize: 13, marginTop: 4, lineHeight: 18 },
+  closeBtn: { width: 40, height: 40, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  centerBox: { flex: 1, padding: 40, alignItems: 'center', justifyContent: 'center' },
   retryBtn: { paddingHorizontal: 16, paddingVertical: 8, borderRadius: 8 },
   retryText: { color: '#fff', fontWeight: '700', fontSize: 13 },
-  platformGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, justifyContent: 'space-between' },
+  platformScroll: { paddingVertical: 20, gap: 20 },
+  platformGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 16 },
+  platformGridWide: { justifyContent: 'space-between' },
   platformCard: {
     flexGrow: 1,
-    flexBasis: 200,
-    minWidth: 180,
+    flexBasis: 240,
+    minWidth: 220,
     borderWidth: 1,
-    borderRadius: 14,
-    padding: 16,
+    borderRadius: 16,
+    padding: 20,
     alignItems: 'center',
     gap: 4,
     ...Platform.select({
@@ -611,9 +603,10 @@ const st = StyleSheet.create({
       default: {},
     }),
   },
-  platformIcon: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
+  platformCardWide: { flex: 1, minHeight: 280 },
+  platformIcon: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center', marginBottom: 4 },
   platformLabel: { fontSize: 11, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
-  platformCount: { fontSize: 32, fontWeight: '800', letterSpacing: -1, marginTop: 2 },
+  platformCount: { fontSize: 36, fontWeight: '800', letterSpacing: -1, marginTop: 2 },
   platformPct: { fontSize: 12, fontWeight: '700' },
   miniBar: { width: '100%', height: 6, borderRadius: 3, overflow: 'hidden', marginVertical: 6 },
   miniBarFill: { height: '100%', borderRadius: 3 },
@@ -621,12 +614,44 @@ const st = StyleSheet.create({
   realBadge: { fontSize: 9, fontWeight: '700', marginTop: 6, paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6, borderWidth: 1, textAlign: 'center' },
   tapHint: { fontSize: 11, fontWeight: '700', marginTop: 8 },
   hint: { fontSize: 10, textAlign: 'center', marginTop: 6 },
-  leadList: { maxHeight: SCREEN_H * 0.5 },
+  leadList: { flex: 1 },
+  leadListContent: { paddingBottom: 24, gap: 10 },
+  tableHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginBottom: 8,
+    gap: 10,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 8,
+    gap: 10,
+    ...Platform.select({
+      web: { cursor: 'pointer' as any },
+      default: {},
+    }),
+  },
+  tableHeadCell: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  tableCell: { fontSize: 12, lineHeight: 17 },
+  colName: { flex: 1.2, minWidth: 120 },
+  colContact: { flex: 1.1, minWidth: 120 },
+  colLocation: { flex: 1.4, minWidth: 140 },
+  colBudget: { flex: 0.8, minWidth: 90 },
+  colStatus: { flex: 0.9, minWidth: 100 },
+  colDate: { flex: 0.8, minWidth: 90 },
   leadRow: {
     borderWidth: 1,
     borderRadius: 12,
     padding: 14,
-    marginBottom: 10,
     gap: 4,
     ...Platform.select({
       web: { cursor: 'pointer' as any },
@@ -643,14 +668,15 @@ const st = StyleSheet.create({
   footer: {
     flexDirection: 'row',
     justifyContent: 'center',
+    flexWrap: 'wrap',
     gap: 24,
-    paddingTop: 16,
-    marginTop: 14,
+    paddingTop: 20,
+    marginTop: 8,
     borderTopWidth: 1,
   },
   footerItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   footerDot: { width: 8, height: 8, borderRadius: 4 },
   footerText: { fontSize: 12, fontWeight: '600' },
-  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
+  filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12, marginTop: 4 },
   filterChip: { paddingHorizontal: 12, height: 30, borderRadius: 99, borderWidth: 1, justifyContent: 'center' },
 });

@@ -30,3 +30,51 @@ def test_lead_matches_multiple_inquiry_status_or_logic():
     assert main.lead_matches_inquiry_filter(low_budget, "low_budget,ringing") is True
     assert main.lead_matches_inquiry_filter(hot, "ringing,not_interested") is False
     assert main.lead_matches_inquiry_filter(hot, "hot,ringing") is True
+
+
+def test_unassigned_filter_matches_null_and_legacy_name_assignments():
+    employees = [
+        {"employee_id": "emp1", "user_id": "user1", "name": "Khyati Shah", "active": True},
+    ]
+    truly_unassigned = _lead(lead_id="l1", assigned_to=None, stage="new")
+    blank_assigned = _lead(lead_id="l2", assigned_to="  ", stage="new")
+    legacy_name = _lead(lead_id="l3", assigned_to="Khyati Shah", stage="assigned")
+    by_id = _lead(lead_id="l4", assigned_to="emp1", stage="assigned")
+    orphan_value = _lead(lead_id="l5", assigned_to="deleted_emp", stage="new")
+
+    assert main.is_lead_unassigned(truly_unassigned, employees) is True
+    assert main.is_lead_unassigned(blank_assigned, employees) is True
+    assert main.is_lead_unassigned(orphan_value, employees) is True
+    assert main.is_lead_unassigned(legacy_name, employees) is False
+    assert main.is_lead_unassigned(by_id, employees) is False
+
+    filtered = main.filter_assign_workspace_leads(
+        [truly_unassigned, blank_assigned, legacy_name, by_id, orphan_value],
+        assigned_to="unassigned",
+        employees=employees,
+    )
+    ids = {row["lead_id"] for row in filtered}
+    assert ids == {"l1", "l2", "l5"}
+
+
+def test_unassigned_filter_sorts_newest_created_first():
+    employees = [{"employee_id": "emp1", "name": "A", "active": True}]
+    older = _lead(lead_id="old", assigned_to=None, created_at="2026-06-01T10:00:00+00:00")
+    newer = _lead(lead_id="new", assigned_to=None, created_at="2026-06-28T10:00:00+00:00")
+    filtered = main.filter_assign_workspace_leads(
+        [older, newer],
+        assigned_to="unassigned",
+        employees=employees,
+    )
+    assert [row["lead_id"] for row in filtered] == ["new", "old"]
+
+
+def test_dashboard_ringing_bucket():
+    rows = [
+        _lead(lead_id="r1", call_status="ringing", status="active"),
+        _lead(lead_id="r2", call_status="", status="active"),
+        _lead(lead_id="r3", call_status="call_back", status="negative"),
+    ]
+    today = "2026-06-28"
+    filtered = main.filter_lead_bucket(rows, "ringing", today)
+    assert {l["lead_id"] for l in filtered} == {"r1"}

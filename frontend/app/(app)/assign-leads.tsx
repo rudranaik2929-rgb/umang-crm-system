@@ -86,12 +86,17 @@ export default function AssignLeads() {
     if (params.openLead) setOpenLead(String(params.openLead));
   }, [params.openLead]);
 
+  const loadRequestRef = React.useRef(0);
+
   const load = useCallback(async (activeFilters = filters) => {
+    const reqId = ++loadRequestRef.current;
+    setLoading(true);
     try {
       const [ws, s] = await Promise.all([
         api.get('/leads/assign-workspace', { params: activeFilters }),
         api.get('/stats/assignment'),
       ]);
+      if (reqId !== loadRequestRef.current) return;
       const nextLeads = ws.data?.leads || [];
       const nextEmployees = ws.data?.employees || [];
       const nextTotal = Number(ws.data?.total ?? 0);
@@ -113,7 +118,7 @@ export default function AssignLeads() {
         });
       }
     } finally {
-      setLoading(false);
+      if (reqId === loadRequestRef.current) setLoading(false);
     }
   }, [filters]);
 
@@ -195,7 +200,6 @@ export default function AssignLeads() {
   const applyFilters = (next: AssignWorkspaceFilters) => {
     setFilters(next);
     setShowAdvanced(false);
-    if (leads.length === 0) setLoading(true);
     load(next);
   };
 
