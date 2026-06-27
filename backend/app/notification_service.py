@@ -258,7 +258,9 @@ def send_push_for_notification(
         "notification_id": notification_id,
         "type": notification_type,
         "lead_id": lead_id or "",
-        "url": f"/telecaller?openLead={lead_id}" if lead_id else "/notifications",
+        "url": "/notifications" if notification_type == TYPE_LEAD_ASSIGNED and not lead_id else (
+            f"/telecaller?openLead={lead_id}" if lead_id else "/notifications"
+        ),
     }
     result = send_fcm_batch(tokens, title, message, data)
     for tok in result.get("failed_tokens") or []:
@@ -339,6 +341,26 @@ def notify_lead_assigned(
         sender_id=sender_id,
         priority="high",
         metadata={"customer_name": name, "phone": phone},
+    )
+
+
+def notify_bulk_leads_assigned(
+    employee_id: str,
+    count: int,
+    *,
+    sender_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    if count < 1:
+        return None
+    label = "lead" if count == 1 else "leads"
+    return create_notification(
+        employee_id,
+        "Leads assigned",
+        f"You have been assigned {count} {label}.",
+        type_=TYPE_LEAD_ASSIGNED,
+        sender_id=sender_id,
+        priority="high",
+        metadata={"assigned_count": count, "bulk": True},
     )
 
 

@@ -108,6 +108,17 @@ insert into notifications (
 ) on conflict (notification_id) do nothing;
 */
 
+-- Fix notifications stored under login user_id instead of employee_id
+update notifications n
+set user_id = e.employee_id
+from employees e
+where n.user_id = e.user_id
+  and e.employee_id is not null
+  and n.user_id is distinct from e.employee_id;
+
+-- Ensure RLS does not block service-role reads (disable if accidentally enabled)
+alter table notifications disable row level security;
+
 -- Fix wrong users.employee_id (was set to user_id instead of emp_*)
 -- Example: Khyati Shah — emp_bf700d434343 / user_61ea2268a864
 update users u

@@ -380,6 +380,14 @@ def sb_delete(table, pk_col, pk_val):
     r = _http.delete(f"{sb_url(table)}?{pk_col}=eq.{pk_val}", headers=sb_headers())
     return r.status_code < 400
 
+
+def sb_delete_filter(table: str, params: Optional[dict] = None) -> bool:
+    """Bulk delete rows matching PostgREST filters (e.g. created_at=lt.{iso})."""
+    r = _http.delete(sb_url(table), headers=sb_headers(), params=params or {})
+    if r.status_code >= 400:
+        logging.error(f"Supabase DELETE {table}: {r.status_code} {r.text[:300]}")
+    return r.status_code < 400
+
 def now_utc(): return datetime.now(timezone.utc)
 
 APP_TZ = ZoneInfo("Asia/Kolkata")
@@ -1816,6 +1824,8 @@ def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
         u["dashboard_type"] = u.get("dashboard_type") or "admin"
         if "dashboard" not in pages:
             pages = ["dashboard", *pages]
+    if "notifications" not in pages:
+        pages = [*pages, "notifications"]
     u["allowed_pages"] = pages
     return u
 
@@ -2351,6 +2361,7 @@ def assign_lead_to_employee(
     employee_id: str,
     actor: Optional[User],
     reactivate: bool = True,
+    skip_notify: bool = False,
 ) -> Dict[str, Any]:
     """Single lead assignment — shared by PATCH and bulk assign."""
     emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "name", "limit": "1"})
@@ -2371,13 +2382,15 @@ def assign_lead_to_employee(
             old_lead,
             sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
         )
-    created = notify_svc.notify_lead_assigned(
-        employee_id,
-        {**old_lead, **updated},
-        sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
-        is_reassign=bool(old_assignee and old_assignee != employee_id),
-    )
-    if not created:
+    created = None
+    if not skip_notify:
+        created = notify_svc.notify_lead_assigned(
+            employee_id,
+            {**old_lead, **updated},
+            sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
+            is_reassign=bool(old_assignee and old_assignee != employee_id),
+        )
+    if not skip_notify and not created:
         logging.error(
             "assign_lead_to_employee: notification not saved lead=%s employee=%s",
             lead_id,
@@ -5459,6 +5472,10 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
     preset = INQUIRY_ACTION_PRESETS.get((body.inquiry_action or "").strip().lower(), {})
     updated: List[str] = []
     skipped: List[Dict[str, str]] = []
+    assigned_count = 0
+    assign_employee = (body.assigned_to or "").strip() or None
+    bulk_assign = bool(assign_employee and len(lead_ids) > 1)
+    sender_id = cu.acting_as_employee_id or cu.user_id
 
     for lead_id in lead_ids:
         leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
@@ -5467,9 +5484,17 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
             skipped.append({"lead_id": lead_id, "reason": "not_found"})
             continue
 
-        if body.assigned_to:
-            assign_lead_to_employee(lead_id, old_lead, body.assigned_to.strip(), cu, reactivate=body.reactivate)
-            old_lead = {**old_lead, "assigned_to": body.assigned_to.strip(), "status": "active"}
+        if assign_employee:
+            assign_lead_to_employee(
+                lead_id,
+                old_lead,
+                assign_employee,
+                cu,
+                reactivate=body.reactivate,
+                skip_notify=bulk_assign,
+            )
+            assigned_count += 1
+            old_lead = {**old_lead, "assigned_to": assign_employee, "status": "active"}
 
         patch: Dict[str, Any] = {"updated_at": now_utc().isoformat()}
         if preset or body.inquiry_action:
@@ -5487,13 +5512,15 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
                 cu,
                 "manager_bulk_update",
                 f"Manager updated lead ({body.inquiry_action or 'custom'})"
-                + (f" → assigned {body.assigned_to}" if body.assigned_to else ""),
+                + (f" → assigned {assign_employee}" if assign_employee else ""),
                 lead_id=lead_id,
             )
         updated.append(lead_id)
 
-    if body.assigned_to:
-        sb_update("employees", "employee_id", body.assigned_to.strip(), {"last_assigned_at": now_utc().isoformat()})
+    if assign_employee:
+        sb_update("employees", "employee_id", assign_employee, {"last_assigned_at": now_utc().isoformat()})
+        if bulk_assign and assigned_count > 0:
+            notify_svc.notify_bulk_leads_assigned(assign_employee, assigned_count, sender_id=sender_id)
 
     return {"status": "success", "updated_count": len(updated), "updated": updated, "skipped": skipped}
 
@@ -5515,6 +5542,8 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
 
     assigned: List[str] = []
     skipped: List[Dict[str, str]] = []
+    bulk_assign = len(lead_ids) > 1
+    sender_id = cu.acting_as_employee_id or cu.user_id
     for lead_id in lead_ids:
         leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
         old_lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
@@ -5524,10 +5553,12 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
         if old_lead.get("assigned_to") == employee_id:
             skipped.append({"lead_id": lead_id, "reason": "already_assigned"})
             continue
-        assign_lead_to_employee(lead_id, old_lead, employee_id, cu)
+        assign_lead_to_employee(lead_id, old_lead, employee_id, cu, skip_notify=bulk_assign)
         assigned.append(lead_id)
 
     sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
+    if bulk_assign and assigned:
+        notify_svc.notify_bulk_leads_assigned(employee_id, len(assigned), sender_id=sender_id)
     return {
         "status": "success",
         "assigned": assigned,
@@ -6699,11 +6730,29 @@ def _notification_matches_type_filter(note: Dict[str, Any], type_filter: Optiona
     return ntype == type_filter
 
 
+def _migrate_legacy_notification_user_ids(cu: User) -> None:
+    """Move notifications stored under login user_id → canonical employee_id."""
+    emp_id = resolve_employee_id(cu)
+    uid = cu.user_id
+    if not emp_id or not uid or emp_id == uid:
+        return
+    legacy = sb_select("notifications", {
+        "user_id": f"eq.{uid}",
+        "select": "notification_id",
+        "limit": "500",
+    })
+    for row in legacy or []:
+        nid = row.get("notification_id")
+        if nid:
+            sb_update("notifications", "notification_id", nid, {"user_id": emp_id})
+
+
 def _fetch_notifications_for_user(cu: User, *, select: str = "*", extra_params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Load notifications — one eq query per user id (avoids broken PostgREST in.() filters)."""
-    params: Dict[str, Any] = {"select": select, "order": "created_at.desc"}
+    _migrate_legacy_notification_user_ids(cu)
+    base: Dict[str, Any] = {"select": select, "limit": "500"}
     if extra_params:
-        params.update(extra_params)
+        base.update(extra_params)
 
     match_values = _notification_user_ids(cu)
     rows: List[Dict[str, Any]] = []
@@ -6717,15 +6766,32 @@ def _fetch_notifications_for_user(cu: User, *, select: str = "*", extra_params: 
             rows.append(row)
             seen.add(nid)
 
+    canonical = resolve_employee_id(cu)
+    if canonical:
+        _absorb(sb_select("notifications", {**base, "user_id": f"eq.{canonical}"}))
+
     for value in match_values:
         text = str(value or "").strip()
-        if not text:
+        if not text or text == canonical:
             continue
         filt = f"eq.{_postgrest_filter_value(text)}"
-        _absorb(sb_select("notifications", {**params, "user_id": filt}))
+        _absorb(sb_select("notifications", {**base, "user_id": filt}))
 
     rows.sort(key=lambda n: n.get("created_at") or "", reverse=True)
     return rows
+
+
+def purge_stale_notifications(max_age_hours: int = 24) -> int:
+    """Delete in-app notifications older than max_age_hours (default 24h)."""
+    cutoff = (now_utc() - timedelta(hours=max_age_hours)).isoformat()
+    ok = sb_delete_filter("notifications", {"created_at": f"lt.{cutoff}"})
+    SESSION_CACHE["notifications"] = [
+        n for n in SESSION_CACHE.get("notifications", [])
+        if not n.get("created_at") or str(n.get("created_at")) >= cutoff
+    ]
+    if ok:
+        logging.info("Purged notifications older than %sh (before %s)", max_age_hours, cutoff)
+    return 1 if ok else 0
 
 
 class FcmTokenRegister(BaseModel):
@@ -6769,33 +6835,45 @@ async def list_notifications(
     unread_only: bool = False,
     read_only: bool = False,
 ):
-    extra: Dict[str, Any] = {}
-    if unread_only:
-        extra["is_read"] = "eq.false"
-    if read_only:
-        extra["is_read"] = "eq.true"
+    try:
+        extra: Dict[str, Any] = {}
+        if unread_only:
+            extra["is_read"] = "eq.false"
+        if read_only:
+            extra["is_read"] = "eq.true"
 
-    notifications = _fetch_notifications_for_user(cu, extra_params=extra)
-    if type:
-        notifications = [n for n in notifications if _notification_matches_type_filter(n, type)]
+        notifications = _fetch_notifications_for_user(cu, extra_params=extra)
+        if type:
+            notifications = [n for n in notifications if _notification_matches_type_filter(n, type)]
 
-    merged = _merge_notifications_for_user(cu, notifications)
-    if search:
-        q = search.strip().lower()
-        merged = [
-            n for n in merged
-            if q in str(n.get("title", "")).lower() or q in str(n.get("message", "")).lower()
-        ]
-    unread = sum(1 for n in merged if not n.get("is_read"))
-    page_start = max(offset, 0)
-    page_end = page_start + limit
-    return {
-        "items": merged[page_start:page_end],
-        "total": len(merged),
-        "unread_count": unread,
-        "limit": limit,
-        "offset": offset,
-    }
+        merged = _merge_notifications_for_user(cu, notifications)
+        if search:
+            q = search.strip().lower()
+            merged = [
+                n for n in merged
+                if q in str(n.get("title", "")).lower() or q in str(n.get("message", "")).lower()
+            ]
+        unread = sum(1 for n in merged if not n.get("is_read"))
+        page_start = max(offset, 0)
+        page_end = page_start + limit
+        return {
+            "items": merged[page_start:page_end],
+            "total": len(merged),
+            "unread_count": unread,
+            "limit": limit,
+            "offset": offset,
+            "recipient_id": resolve_employee_id(cu) or cu.user_id,
+        }
+    except Exception as exc:
+        logging.exception("list_notifications failed user=%s: %s", cu.user_id, exc)
+        return {
+            "items": [],
+            "total": 0,
+            "unread_count": 0,
+            "limit": limit,
+            "offset": offset,
+            "error": "Could not load notifications",
+        }
 
 
 @api_router.get("/notifications/unread-count")
@@ -8092,6 +8170,7 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 
 _housing_sync_task: Optional[asyncio.Task] = None
 _facebook_sync_task: Optional[asyncio.Task] = None
+_notification_purge_task: Optional[asyncio.Task] = None
 
 
 def run_facebook_sync_background(reason: str = "auto") -> Dict[str, Any]:
@@ -8162,9 +8241,21 @@ async def _housing_background_sync_loop() -> None:
         await asyncio.sleep(max(HOUSING_AUTO_SYNC_INTERVAL_SEC, 60))
 
 
+async def _notification_purge_loop() -> None:
+    await asyncio.sleep(15)
+    while True:
+        try:
+            purge_stale_notifications(24)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            logging.warning("notification purge failed: %s", exc)
+        await asyncio.sleep(3600)
+
+
 @app.on_event("startup")
 async def start_housing_background_sync() -> None:
-    global _housing_sync_task, _facebook_sync_task
+    global _housing_sync_task, _facebook_sync_task, _notification_purge_task
 
     def _deactivate_fcm_token(token: str) -> None:
         rows = sb_select("fcm_device_tokens", {
@@ -8195,6 +8286,13 @@ async def start_housing_background_sync() -> None:
 
     asyncio.create_task(_warm_caches())
 
+    try:
+        purge_stale_notifications(24)
+    except Exception as exc:
+        logging.warning("startup notification purge failed: %s", exc)
+    _notification_purge_task = asyncio.create_task(_notification_purge_loop())
+    logging.info("Notification auto-purge started — removes rows older than 24h every hour")
+
     if FACEBOOK_AUTO_SYNC_ENABLED and FACEBOOK_PAGE_ACCESS_TOKEN:
         _facebook_sync_task = asyncio.create_task(_facebook_background_sync_loop())
         logging.info(
@@ -8223,7 +8321,14 @@ async def start_housing_background_sync() -> None:
 
 @app.on_event("shutdown")
 async def stop_housing_background_sync() -> None:
-    global _housing_sync_task, _facebook_sync_task
+    global _housing_sync_task, _facebook_sync_task, _notification_purge_task
+    if _notification_purge_task:
+        _notification_purge_task.cancel()
+        try:
+            await _notification_purge_task
+        except asyncio.CancelledError:
+            pass
+        _notification_purge_task = None
     if _facebook_sync_task:
         _facebook_sync_task.cancel()
         try:

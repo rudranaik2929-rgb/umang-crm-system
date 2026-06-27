@@ -113,3 +113,23 @@ def test_notify_lead_assigned_message_contains_customer():
     assert "Amit Sharma" in payload["message"]
     assert payload["type"] == ns.TYPE_LEAD_ASSIGNED
     assert payload["title"] == "Lead assigned"
+
+
+def test_notify_bulk_leads_assigned():
+    mock_insert = MagicMock(return_value={"notification_id": "ntf_bulk"})
+    ns.configure(
+        sb_insert=mock_insert,
+        sb_select=MagicMock(return_value=[]),
+        sb_update=MagicMock(),
+        sb_delete=MagicMock(),
+        gen_id=lambda p: f"{p}_test",
+        now_utc=MagicMock(return_value=__import__("datetime").datetime.now(__import__("datetime").timezone.utc)),
+        session_cache={"notifications": []},
+    )
+    ns.get_active_fcm_tokens = MagicMock(return_value=[])
+
+    result = ns.notify_bulk_leads_assigned("emp_1", 34, sender_id="mgr_1")
+    assert result is not None
+    payload = mock_insert.call_args[0][1]
+    assert "34 leads" in payload["message"]
+    assert payload["type"] == ns.TYPE_LEAD_ASSIGNED

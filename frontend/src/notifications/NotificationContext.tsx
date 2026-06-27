@@ -43,6 +43,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const listOpts = useRef<{ search?: string; filter?: NotificationFilter }>({});
+  const offsetRef = useRef(0);
   const [pushEnabled, setPushEnabled] = useState(false);
 
   const recipientIds = useMemo(() => {
@@ -73,7 +74,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           filter: opts.filter ?? listOpts.current.filter,
         };
       }
-      const nextOffset = reset ? 0 : offset;
+      const nextOffset = reset ? 0 : offsetRef.current;
       if (reset) setLoading(true);
       try {
         setError(null);
@@ -96,8 +97,11 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         const batch = Array.isArray(data?.items) ? data.items : [];
         setItems((prev) => (reset ? batch : [...prev, ...batch]));
         setUnreadCount(data?.unread_count ?? 0);
-        setOffset(nextOffset + batch.length);
+        const newOffset = nextOffset + batch.length;
+        offsetRef.current = newOffset;
+        setOffset(newOffset);
         setHasMore(batch.length >= PAGE_SIZE);
+        if (data?.error) setError(String(data.error));
       } catch (e: any) {
         const msg = e?.response?.data?.detail || e?.message || 'Could not load notifications';
         setError(String(msg));
@@ -106,7 +110,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         if (reset) setLoading(false);
       }
     },
-    [user, authLoading, offset],
+    [user, authLoading],
   );
 
   const refresh = useCallback(async () => {
