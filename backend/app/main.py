@@ -2361,6 +2361,7 @@ def assign_lead_to_employee(
     employee_id: str,
     actor: Optional[User],
     reactivate: bool = True,
+    skip_removed_notify: bool = False,
 ) -> Dict[str, Any]:
     """Single lead assignment — shared by PATCH and bulk assign. No per-lead notification (use summary)."""
     emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "name", "limit": "1"})
@@ -2375,7 +2376,7 @@ def assign_lead_to_employee(
     update_cached_lead(lead_id, data)
     log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
     old_assignee = clean_text(old_lead.get("assigned_to"))
-    if old_assignee and old_assignee != employee_id:
+    if not skip_removed_notify and old_assignee and old_assignee != employee_id:
         notify_svc.notify_lead_removed(
             old_assignee,
             old_lead,
@@ -5490,6 +5491,7 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
                 assign_employee,
                 cu,
                 reactivate=body.reactivate,
+                skip_removed_notify=True,
             )
             assigned_count += 1
             old_lead = {**old_lead, "assigned_to": assign_employee, "status": "active"}
@@ -5548,7 +5550,7 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
         if old_lead.get("assigned_to") == employee_id:
             skipped.append({"lead_id": lead_id, "reason": "already_assigned"})
             continue
-        assign_lead_to_employee(lead_id, old_lead, employee_id, cu)
+        assign_lead_to_employee(lead_id, old_lead, employee_id, cu, skip_removed_notify=True)
         assigned.append(lead_id)
 
     sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
@@ -5576,7 +5578,7 @@ async def auto_assign_queue(cu: User = Depends(get_current_user)):
         eid = assign_lead_round_robin()
         if not eid:
             break
-        assign_lead_to_employee(lead["lead_id"], lead, eid, cu)
+        assign_lead_to_employee(lead["lead_id"], lead, eid, cu, skip_removed_notify=True)
         assigned.append(lead["lead_id"])
         per_employee[eid] = per_employee.get(eid, 0) + 1
     for eid, count in per_employee.items():
@@ -6776,18 +6778,21 @@ def _fetch_notifications_for_user(cu: User, *, select: str = "*", extra_params: 
 
 
 def purge_stale_notifications(max_age_hours: int = 24) -> int:
-    """Delete in-app notifications older than max_age_hours (default 24h)."""
-    cutoff_dt = now_utc() - timedelta(hours=max_age_hours)
-    # PostgREST-safe UTC timestamp (avoid '+' being parsed as space in query strings).
-    cutoff = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
-    ok = sb_delete_filter("notifications", {"created_at": f"lt.{cutoff}"})
+    """Delete in-app notifications past expires_at or older than max_age_hours."""
+    now_stamp = now_utc().strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+    cutoff = (now_utc() - timedelta(hours=max_age_hours)).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+    ok_exp = sb_delete_filter("notifications", {"expires_at": f"lt.{now_stamp}"})
+    ok_age = sb_delete_filter("notifications", {
+        "expires_at": "is.null",
+        "created_at": f"lt.{cutoff}",
+    })
     SESSION_CACHE["notifications"] = [
         n for n in SESSION_CACHE.get("notifications", [])
         if not n.get("created_at") or str(n.get("created_at")) >= cutoff
     ]
-    if ok:
-        logging.info("Purged notifications older than %sh (before %s)", max_age_hours, cutoff)
-    return 1 if ok else 0
+    if ok_exp or ok_age:
+        logging.info("Purged notifications (expires_before=%s or created_before=%s)", now_stamp, cutoff)
+    return 1 if (ok_exp or ok_age) else 0
 
 
 class FcmTokenRegister(BaseModel):

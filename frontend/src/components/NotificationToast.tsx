@@ -60,7 +60,11 @@ export function NotificationToast() {
       return;
     }
 
-    const fresh = items.filter((n) => n.notification_id && !seenRef.current.has(n.notification_id));
+    const fresh = items.filter((n) => {
+      if (!n.notification_id || seenRef.current.has(n.notification_id)) return false;
+      const meta = (n.metadata || {}) as Record<string, unknown>;
+      return Boolean(meta.assignment_summary) || n.type === 'lead_assigned';
+    });
     if (!fresh.length) return;
 
     fresh.forEach((n) => seenRef.current.add(n.notification_id));

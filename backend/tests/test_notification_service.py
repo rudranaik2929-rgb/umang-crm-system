@@ -133,3 +133,4 @@ def test_notify_bulk_leads_assigned():
     payload = mock_insert.call_args[0][1]
     assert "Rohit assigned 34 leads" in payload["message"]
     assert payload["type"] == ns.TYPE_LEAD_ASSIGNED
+    assert payload["metadata"]["assignment_summary"] is True

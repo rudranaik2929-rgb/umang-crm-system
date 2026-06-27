@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Dict, List, Optional
 
 from app.fcm_client import fcm_configured, send_fcm_batch
@@ -43,6 +43,10 @@ TYPE_TO_PREF: Dict[str, str] = {
 }
 
 MANAGER_ROLES = ("admin", "manager")
+
+# Merge rapid assign actions into one in-app + push row (e.g. 3 dropdown assigns → 1 notification).
+ASSIGNMENT_MERGE_WINDOW_SEC = 300
+NOTIFICATION_TTL_HOURS = 24
 
 _sb_insert: Optional[Callable] = None
 _sb_select: Optional[Callable] = None
@@ -91,6 +95,23 @@ def _canonical_receiver(receiver_id: Optional[str]) -> Optional[str]:
 
 def _now_iso() -> str:
     return _now_utc().isoformat() if _now_utc else datetime.now(timezone.utc).isoformat()
+
+
+def _expires_at_iso() -> str:
+    base = _now_utc() if _now_utc else datetime.now(timezone.utc)
+    return (base + timedelta(hours=NOTIFICATION_TTL_HOURS)).isoformat()
+
+
+def _postgrest_cutoff(seconds_ago: int) -> str:
+    base = _now_utc() if _now_utc else datetime.now(timezone.utc)
+    return (base - timedelta(seconds=seconds_ago)).strftime("%Y-%m-%dT%H:%M:%S") + "Z"
+
+
+def _assignment_summary_text(assigner: str, count: int) -> tuple:
+    label = "lead" if count == 1 else "leads"
+    title = "Lead assigned" if count == 1 else "Leads assigned"
+    message = f"{assigner} assigned {count} {label} to you."
+    return title, message
 
 
 def _new_id(prefix: str = "ntf") -> str:
@@ -300,6 +321,7 @@ def create_notification(
         "is_read": False,
         "read_at": None,
         "created_at": _now_iso(),
+        "expires_at": _expires_at_iso(),
     }
     saved = _persist_notification(n)
     if not saved:
@@ -351,20 +373,83 @@ def notify_bulk_leads_assigned(
     sender_id: Optional[str] = None,
     manager_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    if count < 1:
+    """One notification per assign batch — merges rapid assigns within 5 minutes."""
+    receiver_id = _canonical_receiver(employee_id)
+    if not receiver_id or count < 1 or not _sb_select:
         return None
+    if not preference_allows(receiver_id, TYPE_LEAD_ASSIGNED):
+        return None
+
     assigner = (manager_name or "Manager").strip() or "Manager"
-    label = "lead" if count == 1 else "leads"
-    title = "Lead assigned" if count == 1 else "Leads assigned"
-    message = f"{assigner} assigned {count} {label} to you."
+    merge_cutoff = _postgrest_cutoff(ASSIGNMENT_MERGE_WINDOW_SEC)
+
+    recent = _sb_select("notifications", {
+        "user_id": f"eq.{receiver_id}",
+        "type": f"eq.{TYPE_LEAD_ASSIGNED}",
+        "created_at": f"gte.{merge_cutoff}",
+        "select": "*",
+        "limit": "20",
+    }) or []
+    recent.sort(key=lambda r: r.get("created_at") or "", reverse=True)
+
+    for row in recent:
+        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        if not meta.get("assignment_summary"):
+            continue
+        prev = int(meta.get("assigned_count") or 1)
+        total = prev + count
+        title, message = _assignment_summary_text(assigner, total)
+        nid = row.get("notification_id")
+        if not nid:
+            continue
+        patch = {
+            "title": title,
+            "message": message,
+            "is_read": False,
+            "read_at": None,
+            "expires_at": _expires_at_iso(),
+            "metadata": {
+                **meta,
+                "assigned_count": total,
+                "assignment_summary": True,
+                "manager": assigner,
+            },
+        }
+        saved = None
+        if _sb_update:
+            saved = _sb_update("notifications", "notification_id", nid, patch)
+        saved = saved or {**row, **patch}
+        if _session_cache is not None:
+            cache = _session_cache.setdefault("notifications", [])
+            _session_cache["notifications"] = [
+                saved if n.get("notification_id") == nid else n for n in cache
+            ]
+        try:
+            send_push_for_notification(
+                receiver_id,
+                nid,
+                title,
+                message,
+                lead_id=None,
+                notification_type=TYPE_LEAD_ASSIGNED,
+            )
+        except Exception:
+            logger.exception("Push send failed for merged assignment %s", nid)
+        return saved
+
+    title, message = _assignment_summary_text(assigner, count)
     return create_notification(
-        employee_id,
+        receiver_id,
         title,
         message,
         type_=TYPE_LEAD_ASSIGNED,
         sender_id=sender_id,
         priority="high",
-        metadata={"assigned_count": count, "bulk": count > 1, "manager": assigner},
+        metadata={
+            "assigned_count": count,
+            "assignment_summary": True,
+            "manager": assigner,
+        },
     )
 
 

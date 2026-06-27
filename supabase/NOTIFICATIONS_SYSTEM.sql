@@ -24,7 +24,13 @@ alter table notifications add column if not exists metadata jsonb not null defau
 create index if not exists idx_notifications_user_created on notifications(user_id, created_at desc);
 create index if not exists idx_notifications_user_read on notifications(user_id, is_read);
 create index if not exists idx_notifications_type on notifications(type);
-create index if not exists idx_notifications_lead on notifications(lead_id);
+alter table notifications add column if not exists expires_at timestamptz;
+
+update notifications
+set expires_at = created_at + interval '24 hours'
+where expires_at is null and created_at is not null;
+
+create index if not exists idx_notifications_expires on notifications(expires_at);
 
 -- 3. FCM device tokens (web PWA + future native)
 create table if not exists fcm_device_tokens (
@@ -107,6 +113,13 @@ insert into notifications (
   now()
 ) on conflict (notification_id) do nothing;
 */
+
+-- Remove old per-lead assignment spam (one row per customer name)
+delete from notifications
+where type in ('lead_assigned', 'workflow')
+  and lead_id is not null
+  and coalesce(metadata->>'assignment_summary', 'false') <> 'true'
+  and lower(title) like '%assign%';
 
 -- Fix notifications stored under login user_id instead of employee_id
 update notifications n

@@ -232,9 +232,26 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
           if (row.user_id && !recipientIds.includes(row.user_id)) return;
           setItems((prev) => {
             if (prev.some((n) => n.notification_id === row.notification_id)) return prev;
-            return [row, ...prev];
+            return mergeNotificationLists([row], prev);
           });
           if (!row.is_read) setUnreadCount((c) => c + 1);
+        },
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'notifications',
+          filter,
+        },
+        (payload) => {
+          const row = payload.new as CrmNotification;
+          if (!row?.notification_id) return;
+          if (row.user_id && !recipientIds.includes(row.user_id)) return;
+          setItems((prev) =>
+            mergeNotificationLists([row], prev.filter((n) => n.notification_id !== row.notification_id)),
+          );
         },
       )
       .subscribe();
