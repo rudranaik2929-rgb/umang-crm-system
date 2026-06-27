@@ -95,6 +95,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         setUnreadCount(data?.unread_count ?? 0);
         setOffset(nextOffset + batch.length);
         setHasMore(batch.length >= PAGE_SIZE);
+      } catch (e) {
+        console.warn('Failed to load notifications', e);
       } finally {
         if (reset) setLoading(false);
       }
@@ -147,14 +149,23 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (!user) return;
     const unsubLive = subscribeLiveDataChanged(() => {
-      refreshUnread();
+      refresh();
     });
-    const poll = setInterval(refreshUnread, 12000);
+    const poll = setInterval(refresh, 5000);
     return () => {
       unsubLive();
       clearInterval(poll);
     };
-  }, [user, refreshUnread]);
+  }, [user, refresh]);
+
+  useEffect(() => {
+    if (!user || Platform.OS !== 'web' || typeof document === 'undefined') return;
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') refresh();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [user, refresh]);
 
   useEffect(() => {
     if (!user) {

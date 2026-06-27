@@ -40,6 +40,51 @@ def test_preference_blocks_when_disabled():
     assert ns.preference_allows("emp_1", ns.TYPE_LEAD_ASSIGNED) is False
 
 
+def test_preference_allows_when_null_in_db():
+    ns.configure(
+        sb_insert=MagicMock(),
+        sb_select=MagicMock(return_value=[{"lead_assigned": None}]),
+        sb_update=MagicMock(),
+        sb_delete=MagicMock(),
+        gen_id=lambda p: p,
+        now_utc=MagicMock(),
+        session_cache={"notifications": []},
+    )
+    assert ns.preference_allows("emp_1", ns.TYPE_LEAD_ASSIGNED) is True
+
+
+def test_persist_notification_falls_back_to_minimal_columns():
+    calls = []
+
+    def fake_insert(table, data):
+        calls.append(dict(data))
+        if len(calls) == 1:
+            return None
+        return data
+
+    ns.configure(
+        sb_insert=fake_insert,
+        sb_select=MagicMock(return_value=[]),
+        sb_update=MagicMock(),
+        sb_delete=MagicMock(),
+        gen_id=lambda p: f"{p}_x",
+        now_utc=MagicMock(return_value=__import__("datetime").datetime.now(__import__("datetime").timezone.utc)),
+        session_cache={"notifications": []},
+    )
+    ns.get_active_fcm_tokens = MagicMock(return_value=[])
+
+    result = ns.create_notification(
+        "emp_1",
+        "Test",
+        "Hello",
+        type_=ns.TYPE_LEAD_ASSIGNED,
+    )
+    assert result is not None
+    assert len(calls) == 2
+    assert "metadata" not in calls[1]
+    assert calls[1]["user_id"] == "emp_1"
+
+
 def test_notify_lead_assigned_message_contains_customer():
     mock_insert = MagicMock(return_value={"notification_id": "ntf_1"})
     mock_select = MagicMock(return_value=[])

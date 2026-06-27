@@ -136,16 +136,85 @@ def get_user_preferences(user_id: str) -> Dict[str, bool]:
 def preference_allows(user_id: str, notification_type: str) -> bool:
     prefs = get_user_preferences(user_id)
     key = TYPE_TO_PREF.get(notification_type, "system_alerts")
-    return bool(prefs.get(key, True))
+    val = prefs.get(key, True)
+    if val is False:
+        return False
+    return True
+
+
+def _strip_nulls(data: Dict[str, Any]) -> Dict[str, Any]:
+    return {k: v for k, v in data.items() if v is not None}
+
+
+def _persist_notification(n: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Insert notification — retries with core columns if extended schema is missing."""
+    if not _sb_insert:
+        return None
+
+    full = _strip_nulls(n)
+    result = _sb_insert("notifications", full)
+    if result is not None:
+        return result if isinstance(result, dict) else full
+
+    logger.warning(
+        "Notification full insert failed — retrying minimal columns user=%s type=%s",
+        n.get("user_id"),
+        n.get("type"),
+    )
+    minimal = _strip_nulls({
+        "notification_id": n["notification_id"],
+        "user_id": n["user_id"],
+        "lead_id": n.get("lead_id"),
+        "type": n.get("type", "workflow"),
+        "title": n["title"],
+        "message": n["message"],
+        "is_read": False,
+        "created_at": n.get("created_at"),
+    })
+    result = _sb_insert("notifications", minimal)
+    if result is not None:
+        merged = {**minimal, **(result if isinstance(result, dict) else {})}
+        return merged
+
+    logger.error(
+        "Notification insert failed completely user=%s notification_id=%s",
+        n.get("user_id"),
+        n.get("notification_id"),
+    )
+    return None
 
 
 def get_active_fcm_tokens(user_id: str) -> List[str]:
-    rows = _sb_select("fcm_device_tokens", {
-        "user_id": f"eq.{user_id}",
-        "is_active": "eq.true",
-        "select": "fcm_token",
+    """Collect FCM tokens for employee_id and linked user_id."""
+    ids: List[str] = []
+    for candidate in (user_id,):
+        if candidate and candidate not in ids:
+            ids.append(candidate)
+    rows = _sb_select("employees", {
+        "employee_id": f"eq.{user_id}",
+        "select": "employee_id,user_id",
+        "limit": "1",
     }) or []
-    return [r["fcm_token"] for r in rows if r.get("fcm_token")]
+    if not rows:
+        rows = _sb_select("employees", {
+            "user_id": f"eq.{user_id}",
+            "select": "employee_id,user_id",
+            "limit": "1",
+        }) or []
+    if rows:
+        for candidate in (rows[0].get("employee_id"), rows[0].get("user_id")):
+            if candidate and candidate not in ids:
+                ids.append(candidate)
+
+    tokens: List[str] = []
+    for uid in ids:
+        token_rows = _sb_select("fcm_device_tokens", {
+            "user_id": f"eq.{uid}",
+            "is_active": "eq.true",
+            "select": "fcm_token",
+        }) or []
+        tokens.extend(r["fcm_token"] for r in token_rows if r.get("fcm_token"))
+    return list(dict.fromkeys(tokens))
 
 
 def enqueue_push_retry(
@@ -230,8 +299,9 @@ def create_notification(
         "read_at": None,
         "created_at": _now_iso(),
     }
-    result = _sb_insert("notifications", n)
-    saved = result or n
+    saved = _persist_notification(n)
+    if not saved:
+        return None
     if _session_cache is not None:
         _session_cache.setdefault("notifications", []).insert(0, saved)
 

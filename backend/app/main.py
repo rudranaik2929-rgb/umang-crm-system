@@ -1660,12 +1660,16 @@ def normalize_notification_receiver(ref: Optional[str]) -> Optional[str]:
     clean = clean_text(ref)
     if not clean:
         return None
-    for field, op in (
-        ("employee_id", f"eq.{clean}"),
-        ("user_id", f"eq.{clean}"),
-        ("name", f"eq.{clean}"),
-    ):
-        rows = sb_select("employees", {field: op, "select": "employee_id", "limit": "1", "active": "eq.true"})
+    rows = sb_select("employees", {"employee_id": f"eq.{clean}", "select": "employee_id", "limit": "1"})
+    if rows and rows[0].get("employee_id"):
+        return rows[0]["employee_id"]
+    for field in ("user_id", "name"):
+        rows = sb_select("employees", {
+            field: f"eq.{clean}",
+            "select": "employee_id",
+            "limit": "1",
+            "active": "eq.true",
+        })
         if rows and rows[0].get("employee_id"):
             return rows[0]["employee_id"]
     return clean
@@ -2297,12 +2301,18 @@ def assign_lead_to_employee(
             old_lead,
             sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
         )
-    notify_svc.notify_lead_assigned(
+    created = notify_svc.notify_lead_assigned(
         employee_id,
         {**old_lead, **updated},
         sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
         is_reassign=bool(old_assignee and old_assignee != employee_id),
     )
+    if not created:
+        logging.error(
+            "assign_lead_to_employee: notification not saved lead=%s employee=%s",
+            lead_id,
+            employee_id,
+        )
     return updated
 
 # ---- Activity Logger ----
@@ -6618,8 +6628,10 @@ async def list_notifications(
             if q in str(n.get("title", "")).lower() or q in str(n.get("message", "")).lower()
         ]
     unread = sum(1 for n in merged if not n.get("is_read"))
+    page_start = max(offset, 0)
+    page_end = page_start + limit
     return {
-        "items": merged[:limit],
+        "items": merged[page_start:page_end],
         "total": len(merged),
         "unread_count": unread,
         "limit": limit,
