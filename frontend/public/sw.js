@@ -3,7 +3,7 @@ importScripts('/firebase-config.js');
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js');
 
-const CACHE_NAME = 'umang-crm-v2';
+const CACHE_NAME = 'umang-crm-v3';
 const OFFLINE_URLS = ['/', '/index.html'];
 
 self.addEventListener('install', (event) => {
@@ -60,9 +60,31 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId) {
       badge: '/icons/icon-192.png',
       data: { url, ...payload.data },
       tag: payload.data?.notification_id || leadId || 'umang-crm',
+      requireInteraction: false,
     });
   });
 }
+
+self.addEventListener('push', (event) => {
+  if (!event.data) return;
+  try {
+    const payload = event.data.json();
+    const title = payload.notification?.title || payload.data?.title || 'Umang CRM';
+    const body = payload.notification?.body || payload.data?.body || '';
+    const url = payload.data?.url || '/notifications';
+    event.waitUntil(
+      self.registration.showNotification(title, {
+        body,
+        icon: '/icons/icon-192.png',
+        badge: '/icons/icon-192.png',
+        data: payload.data || { url },
+        tag: payload.data?.notification_id || 'umang-crm-push',
+      })
+    );
+  } catch (e) {
+    /* handled by Firebase onBackgroundMessage */
+  }
+});
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

@@ -6783,7 +6783,9 @@ def _fetch_notifications_for_user(cu: User, *, select: str = "*", extra_params: 
 
 def purge_stale_notifications(max_age_hours: int = 24) -> int:
     """Delete in-app notifications older than max_age_hours (default 24h)."""
-    cutoff = (now_utc() - timedelta(hours=max_age_hours)).isoformat()
+    cutoff_dt = now_utc() - timedelta(hours=max_age_hours)
+    # PostgREST-safe UTC timestamp (avoid '+' being parsed as space in query strings).
+    cutoff = cutoff_dt.strftime("%Y-%m-%dT%H:%M:%S") + "Z"
     ok = sb_delete_filter("notifications", {"created_at": f"lt.{cutoff}"})
     SESSION_CACHE["notifications"] = [
         n for n in SESSION_CACHE.get("notifications", [])
@@ -6953,31 +6955,39 @@ async def delete_notification(notification_id: str, cu: User = Depends(get_curre
 
 @api_router.post("/notifications/fcm-token")
 async def register_fcm_token(body: FcmTokenRegister, cu: User = Depends(get_current_user)):
-    user_id = _notification_recipient_id(cu)
+    canonical = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id or cu.user_id
     token = (body.fcm_token or "").strip()
     if not token:
         raise HTTPException(400, detail="FCM token is required.")
-    existing = sb_select("fcm_device_tokens", {
-        "fcm_token": f"eq.{token}",
-        "select": "token_id",
-        "limit": "1",
-    })
-    row = {
-        "user_id": user_id,
-        "fcm_token": token,
-        "platform": body.platform or "web",
-        "user_agent": (body.user_agent or "")[:500] or None,
-        "is_active": True,
-        "updated_at": now_utc().isoformat(),
-        "last_used_at": now_utc().isoformat(),
-    }
-    if existing:
-        saved = sb_update("fcm_device_tokens", "token_id", existing[0]["token_id"], row)
-        return saved or {**existing[0], **row}
-    row["token_id"] = gen_id("fcm")
-    row["created_at"] = now_utc().isoformat()
-    saved = sb_insert("fcm_device_tokens", row)
-    return saved or row
+
+    def _upsert_for_user(uid: str) -> Dict[str, Any]:
+        existing = sb_select("fcm_device_tokens", {
+            "fcm_token": f"eq.{token}",
+            "user_id": f"eq.{uid}",
+            "select": "token_id",
+            "limit": "1",
+        })
+        row = {
+            "user_id": uid,
+            "fcm_token": token,
+            "platform": body.platform or "web",
+            "user_agent": (body.user_agent or "")[:500] or None,
+            "is_active": True,
+            "updated_at": now_utc().isoformat(),
+            "last_used_at": now_utc().isoformat(),
+        }
+        if existing:
+            saved = sb_update("fcm_device_tokens", "token_id", existing[0]["token_id"], row)
+            return saved or {**existing[0], **row}
+        row["token_id"] = gen_id("fcm")
+        row["created_at"] = now_utc().isoformat()
+        saved = sb_insert("fcm_device_tokens", row)
+        return saved or row
+
+    saved = _upsert_for_user(canonical)
+    if cu.user_id and cu.user_id != canonical:
+        _upsert_for_user(cu.user_id)
+    return saved
 
 
 @api_router.delete("/notifications/fcm-token")
@@ -8286,12 +8296,8 @@ async def start_housing_background_sync() -> None:
 
     asyncio.create_task(_warm_caches())
 
-    try:
-        purge_stale_notifications(24)
-    except Exception as exc:
-        logging.warning("startup notification purge failed: %s", exc)
     _notification_purge_task = asyncio.create_task(_notification_purge_loop())
-    logging.info("Notification auto-purge started — removes rows older than 24h every hour")
+    logging.info("Notification auto-purge scheduled — removes rows older than 24h every hour")
 
     if FACEBOOK_AUTO_SYNC_ENABLED and FACEBOOK_PAGE_ACCESS_TOKEN:
         _facebook_sync_task = asyncio.create_task(_facebook_background_sync_loop())

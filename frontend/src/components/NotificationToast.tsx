@@ -9,7 +9,7 @@ import { leadDeepLinkPath } from '../lib/openLeadNavigation';
 import type { CrmNotification } from '../notifications/types';
 import { TYPE_ICONS } from '../notifications/types';
 
-const TOAST_MIN_MS = 5000;
+const TOAST_MIN_MS = 8000;
 const MAX_VISIBLE = 4;
 
 type QueuedToast = CrmNotification & { shownAt: number };

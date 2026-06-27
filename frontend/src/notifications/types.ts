@@ -38,6 +38,32 @@ export interface NotificationListResponse {
   unread_count: number;
   limit: number;
   offset: number;
+  error?: string;
+  recipient_id?: string;
+}
+
+/** Keep in-app list stable — API refresh must not drop rows still in DB (race after assign). */
+const NOTIFICATION_RETAIN_MS = 25 * 60 * 60 * 1000;
+
+export function mergeNotificationLists(
+  incoming: CrmNotification[],
+  existing: CrmNotification[],
+): CrmNotification[] {
+  const map = new Map<string, CrmNotification>();
+  const cutoff = Date.now() - NOTIFICATION_RETAIN_MS;
+
+  for (const n of existing) {
+    if (!n?.notification_id) continue;
+    const ts = n.created_at ? new Date(n.created_at).getTime() : Date.now();
+    if (ts >= cutoff) map.set(n.notification_id, n);
+  }
+  for (const n of incoming) {
+    if (n?.notification_id) map.set(n.notification_id, n);
+  }
+
+  return [...map.values()].sort((a, b) =>
+    (b.created_at || '').localeCompare(a.created_at || ''),
+  );
 }
 
 export interface NotificationPreferences {

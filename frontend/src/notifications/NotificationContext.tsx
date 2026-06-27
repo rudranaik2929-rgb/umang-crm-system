@@ -13,7 +13,7 @@ import { subscribeLiveDataChanged } from '../lib/liveSync';
 import { getSupabaseClient, isSupabaseRealtimeConfigured } from '../lib/supabaseClient';
 import { useAuth } from '../auth/AuthContext';
 import type { CrmNotification, NotificationFilter, NotificationListResponse } from './types';
-import { FILTER_TYPE_MAP } from './types';
+import { FILTER_TYPE_MAP, mergeNotificationLists } from './types';
 import { usePushNotifications } from './usePushNotifications';
 
 interface NotificationContextValue {
@@ -102,7 +102,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
         } as any);
         const data = r.data;
         const batch = Array.isArray(data?.items) ? data.items : [];
-        setItems((prev) => (reset ? batch : [...prev, ...batch]));
+        setItems((prev) => mergeNotificationLists(batch, prev));
         setUnreadCount(data?.unread_count ?? 0);
         const newOffset = nextOffset + batch.length;
         offsetRef.current = newOffset;
@@ -169,14 +169,17 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   useEffect(() => {
     if (!user || authLoading) return;
     const unsubLive = subscribeLiveDataChanged(() => {
-      refresh();
+      // Lead assign triggers live sync — only bump unread count; full list merge handles the rest.
+      refreshUnread();
     });
-    const poll = setInterval(refresh, 5000);
+    const pollUnread = setInterval(refreshUnread, 15000);
+    const pollFull = setInterval(refresh, 60000);
     return () => {
       unsubLive();
-      clearInterval(poll);
+      clearInterval(pollUnread);
+      clearInterval(pollFull);
     };
-  }, [user, authLoading, refresh]);
+  }, [user, authLoading, refresh, refreshUnread]);
 
   useEffect(() => {
     if (!user || authLoading || Platform.OS !== 'web' || typeof document === 'undefined') return;

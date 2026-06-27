@@ -14,21 +14,40 @@ function pushConfigured(): boolean {
   return Boolean(VAPID_KEY && API_KEY && PROJECT_ID && MESSAGING_SENDER_ID && APP_ID);
 }
 
-async function waitForServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+async function ensureServiceWorker(): Promise<ServiceWorkerRegistration | null> {
   if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return null;
   try {
-    const reg = await navigator.serviceWorker.ready;
+    let reg = await navigator.serviceWorker.getRegistration('/sw.js');
+    if (!reg) {
+      reg = await navigator.serviceWorker.register('/sw.js', { scope: '/' });
+    }
+    await navigator.serviceWorker.ready;
     return reg;
   } catch (e) {
-    console.warn('Service worker not ready for push', e);
+    console.warn('Service worker registration failed', e);
     return null;
+  }
+}
+
+function showBrowserNotification(title: string, body: string, tag?: string) {
+  if (typeof window === 'undefined' || !('Notification' in window)) return;
+  if (Notification.permission !== 'granted') return;
+  try {
+    new Notification(title, {
+      body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+      tag: tag || 'umang-crm',
+    });
+  } catch {
+    /* some mobile browsers block without SW */
   }
 }
 
 export async function registerPushToken(): Promise<boolean> {
   if (Platform.OS !== 'web' || typeof window === 'undefined') return false;
   if (!pushConfigured()) {
-    console.info('Push: set EXPO_PUBLIC_FIREBASE_* in Vercel to enable');
+    console.info('Push: set EXPO_PUBLIC_FIREBASE_* in Vercel to enable mobile notifications');
     return false;
   }
   if (!('Notification' in window)) return false;
@@ -36,7 +55,7 @@ export async function registerPushToken(): Promise<boolean> {
   const permission = await Notification.requestPermission();
   if (permission !== 'granted') return false;
 
-  const reg = await waitForServiceWorker();
+  const reg = await ensureServiceWorker();
   if (!reg) return false;
 
   const { initializeApp, getApps } = await import('firebase/app');
@@ -68,7 +87,7 @@ export async function registerPushToken(): Promise<boolean> {
     platform: 'web',
     user_agent: navigator.userAgent,
   });
-  console.info('FCM token registered with backend');
+  console.info('FCM token registered — mobile/PWA push enabled');
   return true;
 }
 
@@ -79,18 +98,30 @@ export function usePushNotifications(enabled: boolean, onForegroundMessage?: () 
   useEffect(() => {
     if (!enabled || Platform.OS !== 'web' || typeof window === 'undefined') return;
 
+    let cancelled = false;
+
     (async () => {
-      try {
-        const ok = await registerPushToken();
-        if (ok) registered.current = true;
-      } catch (e) {
-        console.warn('Push registration skipped', e);
+      for (let attempt = 0; attempt < 4 && !cancelled; attempt += 1) {
+        try {
+          if (attempt > 0) await new Promise((r) => setTimeout(r, 1500 * attempt));
+          const ok = await registerPushToken();
+          if (ok) {
+            registered.current = true;
+            break;
+          }
+        } catch (e) {
+          console.warn('Push registration attempt failed', e);
+        }
       }
     })();
+
+    return () => {
+      cancelled = true;
+    };
   }, [enabled]);
 
   useEffect(() => {
-    if (!enabled || !onForegroundMessage || Platform.OS !== 'web' || typeof window === 'undefined') return;
+    if (!enabled || Platform.OS !== 'web' || typeof window === 'undefined') return;
     if (!pushConfigured()) return;
 
     let unsubscribe: (() => void) | undefined;
@@ -112,8 +143,13 @@ export function usePushNotifications(enabled: boolean, onForegroundMessage?: () 
               appId: APP_ID,
             });
 
-        unsubscribe = onMessage(getMessaging(app), () => {
-          onForegroundMessage();
+        unsubscribe = onMessage(getMessaging(app), (payload) => {
+          const title =
+            payload.notification?.title || String(payload.data?.title || 'Umang CRM');
+          const body =
+            payload.notification?.body || String(payload.data?.body || '');
+          showBrowserNotification(title, body, String(payload.data?.notification_id || ''));
+          onForegroundMessage?.();
         });
       } catch {
         /* foreground handler optional */
