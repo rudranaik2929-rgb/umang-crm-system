@@ -17,6 +17,9 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from dotenv import load_dotenv
 
+from app import notification_service as notify_svc
+from app.fcm_client import init_firebase, set_invalid_token_handler
+
 load_dotenv(Path(__file__).resolve().parents[1] / ".env")
 load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
@@ -1652,6 +1655,16 @@ class FacebookImportRequest(BaseModel):
 LOCAL_SESSIONS = {}
 SESSION_CACHE = {"leads": [], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []}
 
+notify_svc.configure(
+    sb_insert=sb_insert,
+    sb_select=sb_select,
+    sb_update=sb_update,
+    sb_delete=sb_delete,
+    gen_id=gen_id,
+    now_utc=now_utc,
+    session_cache=SESSION_CACHE,
+)
+
 DEMO_LEADS = []
 DEMO_BOOKINGS = []
 DEMO_VISITS = []
@@ -2260,7 +2273,19 @@ def assign_lead_to_employee(
     updated = sb_update("leads", "lead_id", lead_id, data) or {**old_lead, **data}
     update_cached_lead(lead_id, data)
     log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
-    create_notification(employee_id, "Lead assigned", f"{old_lead.get('name', 'Lead')} has been assigned to you.", lead_id=lead_id)
+    old_assignee = clean_text(old_lead.get("assigned_to"))
+    if old_assignee and old_assignee != employee_id:
+        notify_svc.notify_lead_removed(
+            old_assignee,
+            old_lead,
+            sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
+        )
+    notify_svc.notify_lead_assigned(
+        employee_id,
+        {**old_lead, **updated},
+        sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
+        is_reassign=bool(old_assignee and old_assignee != employee_id),
+    )
     return updated
 
 # ---- Activity Logger ----
@@ -2534,22 +2559,15 @@ def ensure_loan_record(lead_id: str, lead_name: Optional[str] = None):
     return result or ln
 
 def create_notification(user_id: Optional[str], title: str, message: str, lead_id: Optional[str] = None, type_: str = "workflow"):
-    if not user_id:
-        return None
-    n = {
-        "notification_id": gen_id("ntf"),
-        "user_id": user_id,
-        "lead_id": lead_id,
-        "type": type_,
-        "title": title,
-        "message": message,
-        "is_read": False,
-        "created_at": now_utc().isoformat(),
-    }
-    result = sb_insert("notifications", n)
-    if result:
-        SESSION_CACHE["notifications"].insert(0, result)
-    return result
+    """Backward-compatible wrapper — prefer notify_svc helpers for rich notifications."""
+    mapped_type = type_ if type_ != "workflow" else notify_svc.TYPE_SYSTEM
+    return notify_svc.create_notification(
+        user_id,
+        title,
+        message,
+        lead_id=lead_id,
+        type_=mapped_type,
+    )
 
 def create_customer_from_lead(lead_id: str, actor=None):
     existing = sb_select("customers", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
@@ -3018,6 +3036,8 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
         else:
             log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']} (awaiting manager assignment)", lead_id=lead_id)
         record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
+        if not brokerage:
+            notify_svc.notify_integration_lead(source, lead_record)
     return {"status": "created", "lead": lead_record, "lead_id": lead_id}
 
 def extract_facebook_lead_events(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -5134,7 +5154,11 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
     update_cached_lead(lead_id, data)
     log_activity(cu, "broker_activated", f"Broker lead activated and assigned", lead_id=lead_id)
     if assigned_to:
-        create_notification(assigned_to, "Broker lead assigned", f"{lead.get('name')} is ready to work.", lead_id=lead_id)
+        notify_svc.notify_lead_assigned(
+            assigned_to,
+            {**lead, **updated},
+            sender_id=cu.acting_as_employee_id or cu.user_id,
+        )
     return updated
 
 LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up"]
@@ -5727,7 +5751,13 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         emps = sb_select("employees", {"employee_id": f"eq.{p.assigned_to}", "select": "name"})
         emp_name = emps[0]["name"] if emps else p.assigned_to
         log_activity(cu, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
-        create_notification(p.assigned_to, "Lead assigned", f"{old_lead.get('name', 'Lead')} has been assigned to you.", lead_id=lead_id)
+        old_assignee = clean_text(old_lead.get("assigned_to"))
+        if old_assignee and old_assignee != p.assigned_to:
+            notify_svc.notify_lead_removed(
+                old_assignee,
+                old_lead,
+                sender_id=cu.acting_as_employee_id or cu.user_id,
+            )
         sb_update("employees", "employee_id", p.assigned_to, {"last_assigned_at": now_utc().isoformat()})
     
     updated = sb_update("leads", "lead_id", lead_id, data)
@@ -5767,10 +5797,48 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     if p.stage and p.stage != old_lead.get("stage"):
         if p.stage in ["positive", "site_visit"]:
             ensure_visit_record(lead_id, old_lead.get("name", "Lead"), old_lead.get("assigned_to"))
-            if p.stage == "positive":
-                create_notification(old_lead.get("assigned_to"), "Positive lead", f"{old_lead.get('name', 'Lead')} is ready for site visit follow-up.", lead_id=lead_id)
         elif p.stage == "closed":
             create_customer_from_lead(lead_id, cu)
+            notify_svc.notify_lead_closed(
+                new_lead,
+                cu.name,
+                won=True,
+            )
+
+    if p.assigned_to and p.assigned_to != old_lead.get("assigned_to"):
+        notify_svc.notify_lead_assigned(
+            p.assigned_to,
+            new_lead,
+            sender_id=cu.acting_as_employee_id or cu.user_id,
+            is_reassign=bool(old_lead.get("assigned_to")),
+        )
+
+    if p.status == "negative" and old_lead.get("status") != "negative":
+        reason = (p.priority or "not_interested").replace("_", " ").title()
+        notify_svc.notify_lead_closed(new_lead, cu.name, won=False, reason=reason)
+
+    if cu.role not in notify_svc.MANAGER_ROLES and not _can_manage_all_leads(cu):
+        workflow_changed = any(
+            getattr(p, key) is not None and getattr(p, key) != old_lead.get(key)
+            for key in ("stage", "status", "priority", "call_status")
+        )
+        if workflow_changed:
+            status_bits = []
+            if p.stage:
+                status_bits.append(str(p.stage).replace("_", " ").title())
+            if p.status:
+                status_bits.append(str(p.status).replace("_", " ").title())
+            if p.call_status:
+                status_bits.append(str(p.call_status).replace("_", " ").title())
+            if p.priority:
+                status_bits.append(str(p.priority).replace("_", " ").title())
+            status_label = " · ".join(status_bits) or "Updated"
+            notify_svc.notify_lead_updated_for_managers(
+                new_lead,
+                cu.name,
+                status_label,
+                sender_id=cu.acting_as_employee_id or cu.user_id,
+            )
 
     return updated
 
@@ -5802,6 +5870,14 @@ async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_curren
     SESSION_CACHE["activities"] = [a for a in SESSION_CACHE["activities"] if a.get("activity_id") != saved.get("activity_id")]
     SESSION_CACHE["activities"].insert(0, saved)
     touch_lead_employee_action(lead_id, cu)
+    full_lead = get_lead_record(lead_id, "lead_id,name,assigned_to,phone,budget,property_type")
+    notify_svc.notify_note_added(
+        full_lead or lead,
+        cu.name,
+        author_role=cu.role,
+        author_id=cu.acting_as_employee_id or cu.employee_id or cu.user_id,
+        note_preview=clean,
+    )
     return saved
 
 @api_router.patch("/leads/{lead_id}/notes/{activity_id}")
@@ -5860,6 +5936,14 @@ async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: Us
     if not any(a.get("activity_id") == activity_id for a in SESSION_CACHE["activities"]):
         SESSION_CACHE["activities"].insert(0, updated)
     touch_lead_employee_action(lead_id, cu)
+    full_lead = get_lead_record(lead_id, "lead_id,name,assigned_to,phone,budget,property_type")
+    notify_svc.notify_note_added(
+        full_lead or lead,
+        cu.name,
+        author_role=cu.role,
+        author_id=cu.acting_as_employee_id or cu.employee_id or cu.user_id,
+        note_preview=clean,
+    )
     return updated
 
 @api_router.post("/leads/{lead_id}/advance")
@@ -6066,6 +6150,13 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
         detail += f" Reason: {clean_text(p.reason)}."
     activity = log_activity(cu, "lead_followup", detail, lead_id=lead_id)
     SESSION_CACHE["activities"].insert(0, activity)
+    assignee = lead.get("assigned_to") or cu.acting_as_employee_id or cu.employee_id
+    if assignee:
+        notify_svc.notify_follow_up_reminder(
+            assignee,
+            lead,
+            parts.get("follow_up_time") or p.follow_up_time or "",
+        )
     return followup_record
 
 
@@ -6410,33 +6501,245 @@ async def delete_loan(loan_id: str, cu: User=Depends(get_current_user)):
     return {"ok": True, "loan_id": loan_id}
 
 # ---- Customers & Notifications ----
+
+def _notification_recipient_id(cu: User) -> str:
+    return cu.acting_as_employee_id or cu.employee_id or cu.user_id
+
+
+def _owns_notification(cu: User, notification: Dict[str, Any]) -> bool:
+    return notification.get("user_id") == _notification_recipient_id(cu)
+
+
+def _merge_notifications_for_user(cu: User, db_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    user_id = _notification_recipient_id(cu)
+    cache_ids = {n.get("notification_id") for n in db_rows}
+    cached = [n for n in SESSION_CACHE.get("notifications", []) if n.get("user_id") == user_id]
+    if cu.role == "admin":
+        cached = SESSION_CACHE.get("notifications", [])
+    merged = cached + [n for n in db_rows if n.get("notification_id") not in cache_ids]
+    merged.sort(key=lambda n: n.get("created_at") or "", reverse=True)
+    return merged
+
+
+class FcmTokenRegister(BaseModel):
+    fcm_token: str
+    platform: str = "web"
+    user_agent: Optional[str] = None
+
+
+class NotificationPreferencesUpdate(BaseModel):
+    lead_assigned: Optional[bool] = None
+    lead_updated: Optional[bool] = None
+    comments: Optional[bool] = None
+    housing_leads: Optional[bool] = None
+    facebook_leads: Optional[bool] = None
+    reminders: Optional[bool] = None
+    marketing: Optional[bool] = None
+    system_alerts: Optional[bool] = None
+    push_enabled: Optional[bool] = None
+
+
+class BroadcastNotificationRequest(BaseModel):
+    title: str
+    message: str
+    priority: str = "normal"
+
+
 @api_router.get("/customers")
 async def list_customers(cu: User=Depends(get_current_user)):
     customers = sb_select("customers", {"select": "*", "order": "converted_at.desc"})
     cache_ids = {c.get("customer_id") for c in SESSION_CACHE["customers"]}
     return SESSION_CACHE["customers"] + [c for c in customers if c.get("customer_id") not in cache_ids]
 
+
 @api_router.get("/notifications")
-async def list_notifications(cu: User=Depends(get_current_user)):
-    user_id = cu.acting_as_employee_id or cu.user_id
-    params = {"select": "*", "order": "created_at.desc"}
-    if cu.role != "admin":
-        params["user_id"] = f"eq.{user_id}"
-    notifications = sb_select("notifications", params)
-    cache_ids = {n.get("notification_id") for n in SESSION_CACHE["notifications"]}
-    cached = SESSION_CACHE["notifications"]
+async def list_notifications(
+    cu: User = Depends(get_current_user),
+    limit: int = 30,
+    offset: int = 0,
+    search: Optional[str] = None,
+    type: Optional[str] = None,
+    unread_only: bool = False,
+    read_only: bool = False,
+):
+    user_id = _notification_recipient_id(cu)
+    params: Dict[str, Any] = {
+        "select": "*",
+        "order": "created_at.desc",
+        "limit": str(min(max(limit, 1), 100)),
+        "offset": str(max(offset, 0)),
+        "user_id": f"eq.{user_id}",
+    }
+    if unread_only:
+        params["is_read"] = "eq.false"
+    if read_only:
+        params["is_read"] = "eq.true"
+    if type:
+        params["type"] = f"eq.{type}"
+    notifications = sb_select("notifications", params) or []
+    merged = _merge_notifications_for_user(cu, notifications)
+    if search:
+        q = search.strip().lower()
+        merged = [
+            n for n in merged
+            if q in str(n.get("title", "")).lower() or q in str(n.get("message", "")).lower()
+        ]
+    unread = sum(1 for n in merged if not n.get("is_read"))
+    return {
+        "items": merged[:limit],
+        "total": len(merged),
+        "unread_count": unread,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@api_router.get("/notifications/unread-count")
+async def notifications_unread_count(cu: User = Depends(get_current_user)):
+    user_id = _notification_recipient_id(cu)
+    params = {"select": "notification_id,is_read,user_id", "is_read": "eq.false", "user_id": f"eq.{user_id}"}
+    rows = sb_select("notifications", params) or []
+    cached = [n for n in SESSION_CACHE.get("notifications", []) if not n.get("is_read")]
     if cu.role != "admin":
         cached = [n for n in cached if n.get("user_id") == user_id]
-    return cached + [n for n in notifications if n.get("notification_id") not in cache_ids]
+    db_ids = {r.get("notification_id") for r in rows}
+    extra = [n for n in cached if n.get("notification_id") not in db_ids]
+    return {"unread_count": len(rows) + len(extra)}
+
 
 @api_router.patch("/notifications/{notification_id}/read")
 async def mark_notification_read(notification_id: str, cu: User=Depends(get_current_user)):
-    updated = sb_update("notifications", "notification_id", notification_id, {"is_read": True})
+    rows = sb_select("notifications", {
+        "notification_id": f"eq.{notification_id}",
+        "select": "*",
+        "limit": "1",
+    })
+    note = rows[0] if rows else next(
+        (n for n in SESSION_CACHE.get("notifications", []) if n.get("notification_id") == notification_id),
+        None,
+    )
+    if not note:
+        raise HTTPException(404, detail="Notification not found.")
+    if not _owns_notification(cu, note):
+        raise HTTPException(403, detail="Not allowed to update this notification.")
+    patch = {"is_read": True, "read_at": now_utc().isoformat()}
+    updated = sb_update("notifications", "notification_id", notification_id, patch)
     SESSION_CACHE["notifications"] = [
-        ({**n, "is_read": True} if n.get("notification_id") == notification_id else n)
+        ({**n, **patch} if n.get("notification_id") == notification_id else n)
         for n in SESSION_CACHE["notifications"]
     ]
-    return updated or {"notification_id": notification_id, "is_read": True}
+    return updated or {**note, **patch}
+
+
+@api_router.post("/notifications/read-all")
+async def mark_all_notifications_read(cu: User = Depends(get_current_user)):
+    user_id = _notification_recipient_id(cu)
+    stamp = now_utc().isoformat()
+    rows = sb_select("notifications", {
+        "user_id": f"eq.{user_id}",
+        "is_read": "eq.false",
+        "select": "notification_id",
+    }) or []
+    for row in rows:
+        sb_update("notifications", "notification_id", row["notification_id"], {"is_read": True, "read_at": stamp})
+    SESSION_CACHE["notifications"] = [
+        ({**n, "is_read": True, "read_at": stamp} if n.get("user_id") == user_id and not n.get("is_read") else n)
+        for n in SESSION_CACHE["notifications"]
+    ]
+    return {"status": "ok", "marked": len(rows)}
+
+
+@api_router.delete("/notifications/{notification_id}")
+async def delete_notification(notification_id: str, cu: User = Depends(get_current_user)):
+    rows = sb_select("notifications", {
+        "notification_id": f"eq.{notification_id}",
+        "select": "*",
+        "limit": "1",
+    })
+    note = rows[0] if rows else None
+    if note and not _owns_notification(cu, note):
+        raise HTTPException(403, detail="Not allowed to delete this notification.")
+    ok = sb_delete("notifications", "notification_id", notification_id)
+    SESSION_CACHE["notifications"] = [
+        n for n in SESSION_CACHE["notifications"] if n.get("notification_id") != notification_id
+    ]
+    if not ok and not note:
+        raise HTTPException(404, detail="Notification not found.")
+    return {"status": "deleted", "notification_id": notification_id}
+
+
+@api_router.post("/notifications/fcm-token")
+async def register_fcm_token(body: FcmTokenRegister, cu: User = Depends(get_current_user)):
+    user_id = _notification_recipient_id(cu)
+    token = (body.fcm_token or "").strip()
+    if not token:
+        raise HTTPException(400, detail="FCM token is required.")
+    existing = sb_select("fcm_device_tokens", {
+        "fcm_token": f"eq.{token}",
+        "select": "token_id",
+        "limit": "1",
+    })
+    row = {
+        "user_id": user_id,
+        "fcm_token": token,
+        "platform": body.platform or "web",
+        "user_agent": (body.user_agent or "")[:500] or None,
+        "is_active": True,
+        "updated_at": now_utc().isoformat(),
+        "last_used_at": now_utc().isoformat(),
+    }
+    if existing:
+        saved = sb_update("fcm_device_tokens", "token_id", existing[0]["token_id"], row)
+        return saved or {**existing[0], **row}
+    row["token_id"] = gen_id("fcm")
+    row["created_at"] = now_utc().isoformat()
+    saved = sb_insert("fcm_device_tokens", row)
+    return saved or row
+
+
+@api_router.delete("/notifications/fcm-token")
+async def unregister_fcm_token(fcm_token: str, cu: User = Depends(get_current_user)):
+    user_id = _notification_recipient_id(cu)
+    rows = sb_select("fcm_device_tokens", {
+        "fcm_token": f"eq.{fcm_token}",
+        "user_id": f"eq.{user_id}",
+        "select": "token_id",
+        "limit": "1",
+    })
+    if rows:
+        sb_update("fcm_device_tokens", "token_id", rows[0]["token_id"], {"is_active": False, "updated_at": now_utc().isoformat()})
+    return {"status": "ok"}
+
+
+@api_router.get("/notifications/preferences")
+async def get_notification_preferences(cu: User = Depends(get_current_user)):
+    user_id = _notification_recipient_id(cu)
+    return notify_svc.get_user_preferences(user_id)
+
+
+@api_router.patch("/notifications/preferences")
+async def update_notification_preferences(body: NotificationPreferencesUpdate, cu: User = Depends(get_current_user)):
+    user_id = _notification_recipient_id(cu)
+    patch = {k: v for k, v in model_payload(body).items() if v is not None}
+    patch["updated_at"] = now_utc().isoformat()
+    existing = sb_select("notification_preferences", {"user_id": f"eq.{user_id}", "select": "user_id", "limit": "1"})
+    if existing:
+        saved = sb_update("notification_preferences", "user_id", user_id, patch)
+    else:
+        saved = sb_insert("notification_preferences", {"user_id": user_id, **patch})
+    return saved or notify_svc.get_user_preferences(user_id)
+
+
+@api_router.post("/notifications/broadcast")
+async def broadcast_notifications(body: BroadcastNotificationRequest, cu: User = Depends(get_current_user)):
+    ensure_roles(cu, ["admin"])
+    count = notify_svc.broadcast_notification(
+        body.title.strip(),
+        body.message.strip(),
+        sender_id=_notification_recipient_id(cu),
+        priority=body.priority or "normal",
+    )
+    return {"status": "ok", "sent_count": count}
 
 # ---- Employees ----
 def _coerce_allowed_pages(value: Any) -> List[str]:
@@ -7633,6 +7936,24 @@ async def _housing_background_sync_loop() -> None:
 @app.on_event("startup")
 async def start_housing_background_sync() -> None:
     global _housing_sync_task, _facebook_sync_task
+
+    def _deactivate_fcm_token(token: str) -> None:
+        rows = sb_select("fcm_device_tokens", {
+            "fcm_token": f"eq.{token}",
+            "select": "token_id",
+            "limit": "5",
+        }) or []
+        for row in rows:
+            sb_update("fcm_device_tokens", "token_id", row["token_id"], {
+                "is_active": False,
+                "updated_at": now_utc().isoformat(),
+            })
+
+    set_invalid_token_handler(_deactivate_fcm_token)
+    if init_firebase():
+        logging.info("Firebase Admin ready — push notifications enabled")
+    else:
+        logging.info("Firebase Admin not configured — in-app notifications still work")
 
     async def _warm_caches() -> None:
         await asyncio.sleep(2)

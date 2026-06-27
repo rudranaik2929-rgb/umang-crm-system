@@ -3,6 +3,7 @@ import { Stack } from 'expo-router';
 import { View, ActivityIndicator, Platform } from 'react-native';
 import { ThemeProvider, useTheme } from '../src/theme/ThemeContext';
 import { AuthProvider, useAuth } from '../src/auth/AuthContext';
+import { NotificationProvider } from '../src/notifications/NotificationContext';
 import { StatusBar } from 'expo-status-bar';
 
 function useWebPrivacyShield() {
@@ -223,10 +224,12 @@ export default function RootLayout() {
   return (
     <ThemeProvider>
       <AuthProvider>
-        <SessionBootstrap>
-          <ThemedStatus />
-          <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: 'transparent' } }} />
-        </SessionBootstrap>
+        <NotificationProvider>
+          <SessionBootstrap>
+            <ThemedStatus />
+            <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: 'transparent' } }} />
+          </SessionBootstrap>
+        </NotificationProvider>
       </AuthProvider>
     </ThemeProvider>
   );

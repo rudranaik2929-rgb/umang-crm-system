@@ -21,6 +21,7 @@ const ICON_MAP: Record<string, any> = {
   archive: 'archive-outline',
   tracking: 'map-outline',
   integrations: 'git-network-outline',
+  notifications: 'notifications-outline',
 };
 
 interface Props {

@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, TextInput } from 'react-native';
+import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
@@ -59,6 +60,7 @@ const INQUIRY_COLORS: Record<string, string> = {
 export default function AssignLeads() {
   const { colors } = useTheme();
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ openLead?: string }>();
   const cachedAssign = getSnapshot<any>('assign-leads-page');
   const [leads, setLeads] = useState<any[]>(cachedAssign?.leads ?? []);
   const [employees, setEmployees] = useState<any[]>(cachedAssign?.employees ?? []);
@@ -79,6 +81,10 @@ export default function AssignLeads() {
   const [deleteBusy, setDeleteBusy] = useState(false);
 
   const canDeleteLeads = isAdmin(user?.role);
+
+  useEffect(() => {
+    if (params.openLead) setOpenLead(String(params.openLead));
+  }, [params.openLead]);
 
   const load = useCallback(async (activeFilters = filters) => {
     try {

@@ -32,6 +32,10 @@ yarn-error.*
 
 # local env files
 .env*.local
+.env
+
+# Generated at build — contains public Firebase web config (from Vercel env)
+public/firebase-config.js
 
 # typescript
 *.tsbuildinfo

@@ -8,6 +8,7 @@ import { api, clearSnapshots, clearGetCache } from '../lib/api';
 import { useRouter } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
 import { ImportLeadsModal } from './ImportLeadsModal';
+import { NotificationBell } from './NotificationBell';
 
 const ACCENT_OPTIONS: AccentColor[] = ['mono', 'sky', 'forest', 'lavender', 'sunset', 'rose'];
 
@@ -116,6 +117,8 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         contentContainerStyle={styles.actions}
       >
         {rightAction}
+
+        <NotificationBell />
 
         {isAdminOrOwner && (
           <>

@@ -18,7 +18,7 @@ type Tab = 'queue' | 'followups';
 export default function Telecaller() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const params = useLocalSearchParams<{ tab?: string }>();
+  const params = useLocalSearchParams<{ tab?: string; openLead?: string }>();
   const workspaceCacheKey = useMemo(
     () => `telecaller-workspace-${user?.employee_id || user?.email || user?.user_id || 'anon'}`,
     [user?.employee_id, user?.email, user?.user_id],
@@ -34,6 +34,10 @@ export default function Telecaller() {
   useEffect(() => {
     if (params.tab === 'followups') setTab('followups');
   }, [params.tab]);
+
+  useEffect(() => {
+    if (params.openLead) setOpenLead(String(params.openLead));
+  }, [params.openLead]);
 
   const load = useCallback(async () => {
     try {
