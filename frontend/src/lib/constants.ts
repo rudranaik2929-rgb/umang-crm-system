@@ -141,6 +141,9 @@ export function effectivePages(role?: string | null, email?: string | null, allo
     if (!pages.includes('tracking')) pages = [...pages, 'tracking'];
     if (!pages.includes('negative')) pages = [...pages, 'negative'];
   }
+  if (!pages.includes('notifications')) {
+    pages = [...pages, 'notifications'];
+  }
   // Employee Tracking — admin & manager only (never from per-employee grants).
   if (normalizedRole !== 'admin' && normalizedRole !== 'manager') {
     pages = pages.filter((p) => !ADMIN_MANAGER_ONLY_PAGES.has(p));

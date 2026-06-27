@@ -108,9 +108,26 @@ insert into notifications (
 ) on conflict (notification_id) do nothing;
 */
 
--- =============================================================================
--- VERIFICATION QUERIES (run after deploy to check data)
--- =============================================================================
+-- Fix wrong users.employee_id (was set to user_id instead of emp_*)
+-- Example: Khyati Shah — emp_bf700d434343 / user_61ea2268a864
+update users u
+set employee_id = e.employee_id
+from employees e
+where (
+  lower(u.email) = lower(e.email)
+  or u.user_id = e.user_id
+  or u.employee_id = e.user_id
+)
+and e.employee_id is not null
+and (u.employee_id is distinct from e.employee_id);
+
+update employees e
+set user_id = u.user_id
+from users u
+where lower(u.email) = lower(e.email)
+  and u.user_id is not null
+  and (e.user_id is null or e.user_id is distinct from u.user_id);
+
 
 -- All employees (use employee_id as notifications.user_id)
 -- select employee_id, name, email, role, user_id from employees where active = true order by name;

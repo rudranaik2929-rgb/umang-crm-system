@@ -16,6 +16,9 @@ import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { EmployeeMetricModal } from '../../src/components/EmployeeMetricModal';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
+import { useNotifications } from '../../src/notifications/NotificationContext';
+import { NotificationCard } from '../../src/components/NotificationCard';
+import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
 import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel, platformLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
 
@@ -55,6 +58,7 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const isManager = user?.role === 'manager';
   const canLoadDashboard = canAccessMainDashboard(user?.role, user?.email);
+  const { items: notifications, unreadCount, refresh: refreshNotifications, error: notificationError } = useNotifications();
 
   const load = useCallback(async () => {
     setLoadError(null);
@@ -254,6 +258,43 @@ export default function Dashboard() {
             helper={model.campaigns ? `${model.campaigns} campaigns` : 'Team members'}
             onPress={() => router.push('/(app)/employees' as any)}
           />
+        </View>
+
+        <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+          <View style={styles.panelHeader}>
+            <View>
+              <Text style={[styles.panelTitle, { color: colors.text }]}>
+                Notifications{unreadCount > 0 ? ` (${unreadCount} unread)` : ''}
+              </Text>
+              <Text style={[styles.panelSub, { color: colors.textMuted }]}>
+                Lead assignments and team alerts
+              </Text>
+            </View>
+            <Pressable onPress={() => { refreshNotifications(); router.push('/(app)/notifications' as any); }}>
+              <Ionicons name="notifications-outline" size={20} color={colors.primary} />
+            </Pressable>
+          </View>
+          {notificationError ? (
+            <Text style={{ color: colors.negative, fontSize: 12, marginBottom: 8 }}>{notificationError}</Text>
+          ) : null}
+          {notifications.length === 0 ? (
+            <Text style={{ color: colors.textMuted, fontSize: 13 }}>No notifications yet.</Text>
+          ) : (
+            notifications.slice(0, 5).map((n) => (
+              <NotificationCard
+                key={n.notification_id}
+                item={n}
+                compact
+                onPress={() => {
+                  if (n.lead_id) {
+                    router.push(leadDeepLinkPath(n.lead_id, user?.role, user?.email, user?.allowed_pages ?? undefined) as any);
+                  } else {
+                    router.push('/(app)/notifications' as any);
+                  }
+                }}
+              />
+            ))
+          )}
         </View>
 
         <Pressable

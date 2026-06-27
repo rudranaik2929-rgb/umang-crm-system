@@ -34,18 +34,26 @@ def test_fetch_notifications_queries_each_user_id(monkeypatch):
         acting_as_employee_id="emp_khyati",
         created_at=main.now_utc(),
     )
-    calls = []
 
     def fake_select(table, params=None):
-        calls.append((table, dict(params or {})))
-        if (params or {}).get("user_id") == "eq.emp_khyati":
+        params = params or {}
+        if table != "employees":
+            if (params or {}).get("user_id") == "eq.emp_khyati":
+                return [{
+                    "notification_id": "n1",
+                    "user_id": "emp_khyati",
+                    "title": "Lead assigned",
+                    "type": "workflow",
+                    "is_read": False,
+                    "created_at": "2026-06-27T10:00:00+00:00",
+                }]
+            return []
+        if params.get("employee_id") == "eq.emp_khyati":
             return [{
-                "notification_id": "n1",
-                "user_id": "emp_khyati",
-                "title": "Lead assigned",
-                "type": "workflow",
-                "is_read": False,
-                "created_at": "2026-06-27T10:00:00+00:00",
+                "employee_id": "emp_khyati",
+                "name": "Khyati Shah",
+                "user_id": "user_khyati",
+                "active": True,
             }]
         return []
 
@@ -53,4 +61,3 @@ def test_fetch_notifications_queries_each_user_id(monkeypatch):
     rows = main._fetch_notifications_for_user(user)
     assert len(rows) == 1
     assert rows[0]["notification_id"] == "n1"
-    assert any(p.get("user_id") == "eq.emp_khyati" for t, p in calls if t == "notifications")

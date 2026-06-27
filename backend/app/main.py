@@ -1344,11 +1344,23 @@ def actor_activity_keys(cu: User) -> set:
     return {k for k in keys if k}
 
 
+def _employee_id_exists(employee_id: Optional[str]) -> bool:
+    """True only if this id is a real row in employees (not a mistaken user_id)."""
+    clean = clean_text(employee_id)
+    if not clean:
+        return False
+    rows = sb_select("employees", {
+        "employee_id": f"eq.{clean}",
+        "select": "employee_id",
+        "limit": "1",
+    })
+    return bool(rows)
+
+
 def resolve_employee_id(cu: User) -> Optional[str]:
-    if cu.acting_as_employee_id:
-        return cu.acting_as_employee_id
-    if cu.employee_id:
-        return cu.employee_id
+    for candidate in (cu.acting_as_employee_id, cu.employee_id):
+        if candidate and _employee_id_exists(candidate):
+            return candidate
     if cu.email:
         emps = sb_select("employees", {
             "email": f"eq.{normalize_email(cu.email)}",
@@ -1371,10 +1383,10 @@ def resolve_employee_id(cu: User) -> Optional[str]:
 def employee_assignee_ids(cu: User) -> List[str]:
     """IDs that may appear in leads.assigned_to for this login (employee_id, user_id, or legacy name)."""
     ids: List[str] = []
-    for candidate in (resolve_employee_id(cu), cu.acting_as_employee_id, cu.employee_id, cu.user_id):
+    emp_id = resolve_employee_id(cu)
+    for candidate in (emp_id, cu.acting_as_employee_id, cu.employee_id, cu.user_id):
         if candidate and candidate not in ids:
             ids.append(candidate)
-    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
     if emp_id:
         emps = sb_select("employees", {
             "employee_id": f"eq.{emp_id}",
@@ -1424,7 +1436,7 @@ def lead_assigned_to_employee(lead: Dict[str, Any], employee: Dict[str, Any]) ->
 
 
 def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
-    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
+    emp_id = resolve_employee_id(cu)
     if emp_id:
         emps = sb_select("employees", {
             "employee_id": f"eq.{emp_id}",
@@ -1436,6 +1448,14 @@ def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
     if cu.email:
         emps = sb_select("employees", {
             "email": f"eq.{normalize_email(cu.email)}",
+            "select": "employee_id,name,email,user_id,active",
+            "limit": "1",
+        })
+        if emps:
+            return emps[0]
+    if cu.user_id:
+        emps = sb_select("employees", {
+            "user_id": f"eq.{cu.user_id}",
             "select": "employee_id,name,email,user_id,active",
             "limit": "1",
         })
@@ -1722,11 +1742,61 @@ HARDCODED_USERS = {
     },
 }
 
+def _repair_user_employee_link(u: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Fix users.employee_id when it was wrongly set to user_id (e.g. user_61ea… instead of emp_bf70…).
+    Notifications and lead assignment require the real employees.employee_id.
+    """
+    uid = u.get("user_id")
+    if not uid:
+        return u
+
+    true_emp: Optional[str] = None
+    for candidate in (u.get("acting_as_employee_id"), u.get("employee_id")):
+        if candidate and _employee_id_exists(candidate):
+            true_emp = candidate
+            break
+    if not true_emp and u.get("email"):
+        rows = sb_select("employees", {
+            "email": f"eq.{normalize_email(u['email'])}",
+            "select": "employee_id",
+            "limit": "1",
+        })
+        if rows:
+            true_emp = rows[0].get("employee_id")
+    if not true_emp:
+        rows = sb_select("employees", {
+            "user_id": f"eq.{uid}",
+            "select": "employee_id",
+            "limit": "1",
+        })
+        if rows:
+            true_emp = rows[0].get("employee_id")
+
+    if not true_emp:
+        return u
+
+    if u.get("employee_id") != true_emp:
+        u["employee_id"] = true_emp
+        def _persist() -> None:
+            try:
+                sb_update("users", "user_id", uid, {"employee_id": true_emp})
+            except Exception as exc:
+                logging.warning("repair users.employee_id failed for %s: %s", uid, exc)
+        threading.Thread(target=_persist, daemon=True).start()
+
+    role = (u.get("role") or "").strip().lower()
+    if role != "admin":
+        u["acting_as_employee_id"] = u.get("acting_as_employee_id") or true_emp
+    return u
+
+
 def public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
     return User(**_finalize_user_session(dict(user))).model_dump(mode="json")
 
 def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
-    """Normalize role, sidebar pages, and dashboard landing for session/JWT payloads."""
+    """Normalize role, sidebar pages, dashboard landing, and fix wrong employee_id links."""
+    u = _repair_user_employee_link(dict(u))
     role = (u.get("role") or "telecaller").strip().lower()
     u["role"] = role
     pages = u.get("allowed_pages")
@@ -6535,10 +6605,21 @@ def _notification_recipient_id(cu: User) -> str:
 
 def _notification_user_ids(cu: User) -> List[str]:
     """All IDs that may appear in notifications.user_id for this login."""
-    ids = employee_assignee_ids(cu)
-    primary = _notification_recipient_id(cu)
-    if primary and primary not in ids:
-        ids.insert(0, primary)
+    ids: List[str] = []
+    employee = _employee_record_for_user(cu)
+    if employee:
+        for candidate in (
+            employee.get("employee_id"),
+            employee.get("user_id"),
+            clean_text(employee.get("name")),
+        ):
+            if candidate and str(candidate) not in ids:
+                ids.append(str(candidate))
+    canonical = resolve_employee_id(cu)
+    if canonical and canonical not in ids:
+        ids.insert(0, canonical)
+    if cu.user_id and cu.user_id not in ids:
+        ids.append(cu.user_id)
     return ids or [cu.user_id]
 
 
