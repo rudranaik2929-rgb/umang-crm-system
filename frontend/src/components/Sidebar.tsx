@@ -117,7 +117,18 @@ export function Sidebar({ collapsed, onToggle }: Props) {
                 </Text>
               )}
               {item.key === 'notifications' && unreadCount > 0 ? (
-                <View style={[styles.navBadge, { backgroundColor: colors.negative }]}>
+                <View
+                  style={[
+                    styles.navBadge,
+                    {
+                      backgroundColor: colors.negative,
+                      marginLeft: collapsed ? 0 : 'auto',
+                      position: collapsed ? 'absolute' : 'relative',
+                      top: collapsed ? 2 : 0,
+                      right: collapsed ? 6 : 0,
+                    },
+                  ]}
+                >
                   <Text style={styles.navBadgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
                 </View>
               ) : null}
@@ -203,10 +214,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 4,
-    marginLeft: collapsed ? 0 : 'auto',
-    position: collapsed ? 'absolute' : 'relative',
-    top: collapsed ? 2 : 0,
-    right: collapsed ? 6 : 0,
   },
   navBadgeText: { color: '#fff', fontSize: 9, fontWeight: '800' },
   userCard: {
