@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform, useWindowDimensions,
 } from 'react-native';
@@ -20,7 +20,7 @@ import {
 } from '../lib/leadFormat';
 import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
-import { useMainContentOverlayStyle } from '../layout/SidebarLayoutContext';
+import { useMainContentOverlayStyle, useSidebarLayout } from '../layout/SidebarLayoutContext';
 
 interface Props {
   leadId: string | null;
@@ -37,8 +37,18 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const { colors } = useTheme();
   const router = useRouter();
   const portalOverlayStyle = useMainContentOverlayStyle({ portal: true });
-  const { width: windowWidth } = useWindowDimensions();
-  const isWideSheet = windowWidth >= 900;
+  const { width: sidebarWidth } = useSidebarLayout();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const isWideSheet = windowWidth >= 800;
+  const sheetDimensions = useMemo(() => {
+    if (Platform.OS !== 'web') {
+      return { width: '94%' as const, maxWidth: 760, height: '92%' as const, maxHeight: '92%' as const };
+    }
+    const availableW = Math.max(680, windowWidth - sidebarWidth - 40);
+    const w = Math.min(1140, Math.max(820, availableW));
+    const h = Math.min(860, Math.max(560, windowHeight * 0.88));
+    return { width: w, maxWidth: w, height: h, maxHeight: h };
+  }, [windowWidth, windowHeight, sidebarWidth]);
 
   const goFollowUps = () => {
     onChanged?.();
@@ -417,7 +427,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     return (
             <>
               {/* Header */}
-              <View style={[styles.header, { borderBottomColor: colors.border }]}>
+              <View style={[styles.header, { borderBottomColor: colors.border + '80' }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.name, { color: colors.text }]}>{lead.name}</Text>
                   <Text style={[styles.sub, { color: colors.textMuted }]}>{lead.phone}{lead.email ? `  ·  ${lead.email}` : ''}</Text>
@@ -504,9 +514,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 </View>
               )}
 
-              <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, gap: 16 }} keyboardShouldPersistTaps="handled">
+              <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollPad} keyboardShouldPersistTaps="handled">
+                <View style={[styles.columns, isWideSheet && styles.columnsWide]}>
+                <View style={styles.column}>
                 {/* AI Magic Summary */}
-                <View style={[styles.aiBlock, { borderColor: colors.primary + '40', backgroundColor: colors.primary + '08' }]}>
+                <View style={styles.aiBlock}>
                   <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                       <Ionicons name="sparkles" size={16} color={colors.primary} />
@@ -533,7 +545,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
 
                 {/* Assign to Employee — Admin only */}
                 {isAdmin(userRole) && (
-                  <View style={[styles.block, { borderColor: '#8B5CF6' + '40', backgroundColor: '#8B5CF6' + '08' }]}>
+                  <View style={styles.block}>
                     <Text style={[styles.blockTitle, { color: '#8B5CF6' }]}>
                       {lead.stage === 'broker' ? 'ACTIVATE FROM BROKER POOL' : 'ASSIGN TO EMPLOYEE'}
                     </Text>
@@ -644,33 +656,25 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 )}
 
                 {canMoveLeadToBrokerPool(userRole) && lead.stage !== 'broker' ? (
-                  <View style={[styles.block, { borderColor: colors.warning + '50', backgroundColor: colors.warning + '08' }]}>
-                    <Text style={[styles.blockTitle, { color: colors.warning }]}>BROKER POOL</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 10 }}>
+                  <View style={styles.block}>
+                    <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>BROKER POOL</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 10 }}>
                       Move this lead to broker pool — no auto-assign until activated.
                     </Text>
                     <Pressable
                       onPress={moveToBrokerPool}
                       disabled={busy === 'broker'}
-                      style={{
-                        height: 40,
-                        borderRadius: 8,
-                        borderWidth: 1,
-                        borderColor: colors.warning + '60',
-                        backgroundColor: colors.warning + '12',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                      }}
+                      style={[styles.softBtn, { backgroundColor: colors.warning + '14' }]}
                     >
-                      <Text style={{ color: colors.warning, fontWeight: '700', fontSize: 12 }}>
-                        Move to Broker Pool (no auto-assign)
+                      <Text style={{ color: colors.warning, fontWeight: '700', fontSize: 13 }}>
+                        Move to Broker Pool
                       </Text>
                     </Pressable>
                   </View>
                 ) : null}
 
                 {housingRaw ? (
-                  <View style={[styles.block, { borderColor: '#00BFA5' + '50', backgroundColor: '#00BFA5' + '08' }]}>
+                  <View style={styles.block}>
                     <Text style={[styles.blockTitle, { color: '#00BFA5' }]}>HOUSING.COM — ORIGINAL ENQUIRY</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 11, marginBottom: 8 }}>
                       Real lead data imported from Housing.com API (not demo).
@@ -697,7 +701,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 ) : null}
 
                 {/* Details */}
-                <View style={[styles.block, { borderColor: colors.border }]}>
+                <View style={styles.block}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>CUSTOMER DETAILS</Text>
                   <DetailRow label="Budget" value={formatBudgetStringLakhs(lead.budget) || lead.budget} colors={colors} />
                   <DetailRow label="Location" value={lead.location} colors={colors} />
@@ -717,8 +721,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 </View>
 
                 {/* Call / visit note — editable anytime */}
-                <View style={[styles.block, { borderColor: colors.primary + '40', backgroundColor: colors.primary + '06' }]}>
-                  <Text style={[styles.blockTitle, { color: colors.primary }]}>
+                <View style={styles.block}>
+                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>
                     {editingNoteId ? 'EDIT CALL / VISIT NOTE' : 'ADD CALL / VISIT NOTE'}
                   </Text>
                   <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
@@ -772,15 +776,17 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     </Pressable>
                   </View>
                 </View>
+                </View>
 
+                <View style={[styles.column, isWideSheet && { borderLeftWidth: StyleSheet.hairlineWidth, borderLeftColor: colors.border, paddingLeft: 24 }]}>
                 {actionMessage ? (
-                  <View style={[styles.block, { borderColor: colors.positive + '50', backgroundColor: colors.positive + '10' }]}>
-                    <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>{actionMessage}</Text>
+                  <View style={styles.block}>
+                    <Text style={{ color: colors.positive, fontSize: 13, fontWeight: '600' }}>{actionMessage}</Text>
                   </View>
                 ) : null}
 
                 {/* Quick actions Refactored */}
-                <View style={[styles.block, { borderColor: colors.border, overflow: 'hidden' }]}>
+                <View style={styles.block}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>LEAD UPDATE</Text>
                   
                   <View style={styles.categoryRow}>
@@ -948,7 +954,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 </View>
 
                 {/* Timeline */}
-                <View style={[styles.block, { borderColor: colors.border }]}>
+                <View style={styles.block}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>ACTIVITY TIMELINE</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
                     Tap a call / visit note to edit it
@@ -988,6 +994,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       })}
                     </View>
                   )}
+                </View>
+                </View>
                 </View>
               </ScrollView>
 
@@ -1036,8 +1044,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       <View
         style={[
           styles.sheet,
-          isWideSheet && styles.sheetWide,
-          { backgroundColor: colors.surface, borderColor: colors.border },
+          sheetDimensions,
+          { backgroundColor: colors.surface },
         ]}
         {...(Platform.OS === 'web' ? { onClick: (e: any) => e?.stopPropagation?.() } as any : {})}
       >
@@ -1160,36 +1168,55 @@ const styles = StyleSheet.create({
   webOverlay: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: 'rgba(0,0,0,0.55)',
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
   },
   backdrop: {
-    flex: 1, backgroundColor: 'rgba(0,0,0,0.55)',
-    alignItems: 'center', justifyContent: 'center',
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
     ...Platform.select({
       web: { minHeight: '100vh' as any },
       default: {},
     }),
   },
   sheet: {
-    width: '92%', maxWidth: 760, maxHeight: '92%', height: '90%',
-    borderRadius: 14, borderWidth: 1, overflow: 'hidden',
+    borderRadius: 16,
+    borderWidth: 0,
+    overflow: 'hidden',
+    flexDirection: 'column',
+    ...Platform.select({
+      web: {
+        boxShadow: '0 28px 80px rgba(15, 23, 42, 0.35)' as any,
+        display: 'flex' as any,
+      },
+      default: {
+        borderWidth: StyleSheet.hairlineWidth,
+      },
+    }),
   },
-  sheetWide: {
-    width: '96%',
-    maxWidth: 1180,
-    maxHeight: '94%',
-    height: '92%',
-  },
+  scrollPad: { padding: 24, paddingBottom: 28 },
+  columns: { gap: 8 },
+  columnsWide: { flexDirection: 'row', alignItems: 'flex-start', gap: 0 },
+  column: { flex: 1, minWidth: 0, gap: 8 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  header: { padding: 20, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
-  name: { fontSize: 20, fontWeight: '700' },
-  sub: { fontSize: 12, marginTop: 4 },
+  header: { paddingHorizontal: 24, paddingVertical: 18, borderBottomWidth: StyleSheet.hairlineWidth, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },
+  name: { fontSize: 22, fontWeight: '700' },
+  sub: { fontSize: 13, marginTop: 4 },
   contactBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
-    paddingHorizontal: 10, height: 32, borderRadius: 8, borderWidth: 1,
+    paddingHorizontal: 12, height: 34, borderRadius: 8, borderWidth: StyleSheet.hairlineWidth,
   },
-  block: { padding: 16, borderRadius: 10, borderWidth: 1 },
-  blockTitle: { fontSize: 10, fontWeight: '700', letterSpacing: 1.4, marginBottom: 6 },
+  block: { paddingVertical: 12, marginBottom: 4 },
+  blockTitle: { fontSize: 11, fontWeight: '700', letterSpacing: 1, marginBottom: 8 },
+  softBtn: {
+    height: 42,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
   actionsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 8 },
   categoryRow: { flexDirection: 'row', gap: 8, marginTop: 10, flexWrap: 'wrap' },
   catBtn: { flex: 1, minWidth: '22%' as any, height: 70, borderRadius: 12, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center', gap: 6 },
@@ -1206,7 +1233,7 @@ const styles = StyleSheet.create({
     height: 36, borderRadius: 8, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 16, alignSelf: 'flex-end', marginTop: 10,
   },
-  aiBlock: { padding: 16, borderRadius: 12, borderWidth: 1, borderStyle: 'dashed' },
+  aiBlock: { paddingVertical: 12, marginBottom: 4 },
   magicBtn: { backgroundColor: '#7C3AED', paddingHorizontal: 10, height: 24, borderRadius: 12, justifyContent: 'center' },
   timeItem: { flexDirection: 'row', gap: 12, paddingVertical: 8, paddingLeft: 10, borderLeftWidth: 1 },
   timeDot: { width: 8, height: 8, borderRadius: 4, marginTop: 5, marginLeft: -14, borderWidth: 2 },
