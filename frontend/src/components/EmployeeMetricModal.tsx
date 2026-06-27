@@ -19,6 +19,12 @@ const METRIC_LABELS: Record<string, string> = {
   follow_ups: 'Follow Up',
   today_follow_ups: 'Today Follow Up',
   today_activity: 'Today Activity — Last 24 Hours',
+  login_file: 'Login File',
+  sanctioned: 'Sanctioned',
+  registration: 'Registration',
+  disbursement: 'Disbursement',
+  bill_submitted: 'Bill Submitted',
+  amount_received: 'Amt Received',
 };
 
 type Props = {
@@ -47,8 +53,9 @@ export function EmployeeMetricModal({
 }: Props) {
   const { colors } = useTheme();
   const [leads, setLeads] = useState<any[]>([]);
+  const [bookings, setBookings] = useState<any[]>([]);
   const [report, setReport] = useState<any[]>([]);
-  const [kind, setKind] = useState<'leads' | 'today_report'>('leads');
+  const [kind, setKind] = useState<'leads' | 'today_report' | 'bookings'>('leads');
   const [total, setTotal] = useState(0);
   const [actionTotal, setActionTotal] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -59,8 +66,10 @@ export function EmployeeMetricModal({
     setLoading(true);
     try {
       const res = await api.get(`/leads/employee/${employeeId}/metric/${metric}`, { params: { limit: 500 } });
-      setKind(res.data?.kind === 'today_report' ? 'today_report' : 'leads');
+      const responseKind = res.data?.kind;
+      setKind(responseKind === 'today_report' ? 'today_report' : responseKind === 'bookings' ? 'bookings' : 'leads');
       setLeads(res.data?.leads || []);
+      setBookings(res.data?.bookings || []);
       setReport(res.data?.report || []);
       setTotal(Number(res.data?.total || 0));
       setActionTotal(Number(res.data?.action_total || 0));
@@ -75,7 +84,9 @@ export function EmployeeMetricModal({
   const title = employeeName ? `${employeeName} — ${metricLabel}` : metricLabel;
   const subtitle = kind === 'today_report'
     ? `${total} lead${total === 1 ? '' : 's'} · ${actionTotal} actions (24h)`
-    : `${total} lead${total === 1 ? '' : 's'} · tap to open`;
+    : kind === 'bookings'
+      ? `${total} booking${total === 1 ? '' : 's'} · tap to open lead`
+      : `${total} lead${total === 1 ? '' : 's'} · tap to open`;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -110,6 +121,28 @@ export function EmployeeMetricModal({
                         • {act.label} ({formatWhen(act.created_at)})
                       </Text>
                     ))}
+                  </Pressable>
+                ))}
+              </ScrollView>
+            )
+          ) : kind === 'bookings' ? (
+            bookings.length === 0 ? (
+              <Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 32, fontSize: 13 }}>
+                No bookings in this category.
+              </Text>
+            ) : (
+              <ScrollView style={{ maxHeight: 480 }}>
+                {bookings.map((b) => (
+                  <Pressable
+                    key={b.booking_id}
+                    onPress={() => b.lead_id && setOpenLead(b.lead_id)}
+                    style={[styles.row, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+                  >
+                    <View style={{ flex: 1 }}>
+                      <Text style={{ color: colors.text, fontWeight: '700' }}>{b.lead_name || b.property_name}</Text>
+                      <Text style={{ color: colors.textMuted, fontSize: 11 }}>{b.property_name || '—'} · {(b.status || 'active').toUpperCase()}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                   </Pressable>
                 ))}
               </ScrollView>

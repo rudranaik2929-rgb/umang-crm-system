@@ -518,6 +518,15 @@ select 'push_devices_active', count(*)::text from fcm_device_tokens where is_act
 -- order by excel_leads desc;
 
 -- =====================================================================
+-- BOOKING PIPELINE — officer + 6 task tracking (Login → Amt Received)
+-- Full script: supabase/BOOKING_PIPELINE.sql
+-- =====================================================================
+alter table bookings add column if not exists booking_officer_id text;
+create index if not exists idx_bookings_officer on bookings(booking_officer_id);
+create index if not exists idx_bookings_status on bookings(status);
+alter table bookings add column if not exists completed_tasks jsonb not null default '[]'::jsonb;
+
+-- =====================================================================
 -- OPTIONAL: Undo auto-assigned Housing/Meta/Excel leads
 -- =====================================================================
 /*

@@ -2,6 +2,7 @@ import React from 'react';
 import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
+import { BOOKING_TASKS } from '../lib/bookingTasks';
 
 type EmployeePerformanceProps = {
   employees: any[];
@@ -32,6 +33,19 @@ const WORKFLOW_METRICS = [
   { key: 'emp_today_activity', apiKey: 'today_activity', label: 'Today Activity', icon: 'today' as const, colorKey: 'positive' },
 ];
 
+const BOOKING_ROLE_METRICS = BOOKING_TASKS.map((task) => ({
+  key: `emp_${task.key}`,
+  apiKey: task.key,
+  label: task.label,
+  icon: task.icon,
+  color: task.color,
+}));
+
+function metricsForRole(role?: string) {
+  if (role === 'booking') return BOOKING_ROLE_METRICS;
+  return WORKFLOW_METRICS;
+}
+
 export function EmployeePerformance({ employees, onMetricPress }: EmployeePerformanceProps) {
   const { colors } = useTheme();
 
@@ -40,7 +54,9 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
       <View style={styles.headerRow}>
         <View>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Employee Performance</Text>
-          <Text style={[styles.cardSub, { color: colors.textMuted }]}>New = not updated yet · Total = employee has taken action</Text>
+          <Text style={[styles.cardSub, { color: colors.textMuted }]}>
+            Telecaller = lead workflow · Booking = 6 pipeline tasks (same as Booking Management)
+          </Text>
         </View>
         <Text style={[styles.cardSub, { color: colors.textMuted }]}>
           {employees.length} {employees.length === 1 ? 'employee' : 'employees'}
@@ -61,6 +77,8 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
             const isActive = !!employee.last_activity && (Date.now() - new Date(employee.last_activity).getTime()) < 24 * 3600 * 1000;
             const rank = idx + 1;
             const rankColor = rank === 1 ? '#FBBF24' : rank === 2 ? '#94A3B8' : rank === 3 ? '#B45309' : null;
+            const isBookingRole = employee.role === 'booking';
+            const roleMetrics = metricsForRole(employee.role);
             const roleColorMap: Record<string, string> = {
               admin: colors.primary,
               manager: colors.accent,
@@ -117,18 +135,26 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                     style={{ flex: 1 }}
                     disabled={!onMetricPress}
                   >
-                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>NEW LEADS</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>
+                      {isBookingRole ? 'NEW BOOKINGS' : 'NEW LEADS'}
+                    </Text>
                     <Text style={{ color: colors.primary, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.emp_new_leads ?? 0}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Not yet updated</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>
+                      {isBookingRole ? 'Not started yet' : 'Not yet updated'}
+                    </Text>
                   </Pressable>
                   <Pressable
                     onPress={onMetricPress ? () => onMetricPress(employee, 'total') : undefined}
                     style={{ alignItems: 'flex-end' }}
                     disabled={!onMetricPress}
                   >
-                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>TOTAL LEADS</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>
+                      {isBookingRole ? 'TOTAL BOOKINGS' : 'TOTAL LEADS'}
+                    </Text>
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.assigned_total ?? employee.leads_total ?? 0}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>Updated by employee</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>
+                      {isBookingRole ? 'Active pipeline' : 'Updated by employee'}
+                    </Text>
                   </Pressable>
                 </View>
 
@@ -140,7 +166,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                 </View>
 
                 <View style={styles.metricPills}>
-                  {WORKFLOW_METRICS.map((metric) => {
+                  {roleMetrics.map((metric) => {
                     const colorMap: Record<string, string> = {
                       primary: colors.primary,
                       warning: colors.warning,
@@ -149,7 +175,9 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                       positive: colors.positive,
                       accent: colors.accent,
                     };
-                    const pillColor = colorMap[metric.colorKey] || colors.primary;
+                    const pillColor = 'color' in metric
+                      ? metric.color
+                      : colorMap[(metric as typeof WORKFLOW_METRICS[number]).colorKey] || colors.primary;
                     return (
                       <MetricPill
                         key={metric.key}

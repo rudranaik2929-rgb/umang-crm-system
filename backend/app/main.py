@@ -2653,6 +2653,112 @@ def is_legacy_skeleton_booking(booking: Dict[str, Any]) -> bool:
         and not booking.get("agreement_value")
     )
 
+
+BOOKING_PIPELINE_TASKS: List[tuple] = [
+    ("login_file", "login file"),
+    ("sanctioned", "sanctioned"),
+    ("registration", "registration"),
+    ("disbursement", "disbursement"),
+    ("bill_submitted", "bill submitted"),
+    ("amount_received", "amount received"),
+]
+BOOKING_TASK_KEYS = [k for k, _ in BOOKING_PIPELINE_TASKS]
+BOOKING_TASK_STATUS_BY_KEY = {k: s for k, s in BOOKING_PIPELINE_TASKS}
+BOOKING_TASK_KEY_BY_STATUS = {s: k for k, s in BOOKING_PIPELINE_TASKS}
+
+
+def is_cancelled_booking_record(booking: Dict[str, Any]) -> bool:
+    status = str(booking.get("status") or "").lower().strip()
+    agreement = str(booking.get("agreement_status") or "").lower().strip()
+    return status in {"cancellation", "cancelled"} or agreement == "cancelled"
+
+
+def normalize_booking_completed_tasks(booking: Dict[str, Any]) -> List[str]:
+    raw = booking.get("completed_tasks")
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    if isinstance(raw, str) and raw.strip():
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(x).strip() for x in parsed if str(x).strip()]
+        except (TypeError, ValueError):
+            pass
+    status = str(booking.get("status") or "").lower().strip()
+    key = BOOKING_TASK_KEY_BY_STATUS.get(status)
+    return [key] if key else []
+
+
+def booking_matches_task(booking: Dict[str, Any], task_key: str) -> bool:
+    if is_cancelled_booking_record(booking) or is_legacy_skeleton_booking(booking):
+        return False
+    key = (task_key or "").strip().lower()
+    if key not in BOOKING_TASK_KEYS:
+        return False
+    completed = normalize_booking_completed_tasks(booking)
+    if key in completed:
+        return True
+    status = str(booking.get("status") or "").lower().strip()
+    return BOOKING_TASK_STATUS_BY_KEY.get(key) == status
+
+
+def filter_bookings_by_task(bookings: List[Dict[str, Any]], task_key: str) -> List[Dict[str, Any]]:
+    return [b for b in bookings if booking_matches_task(b, task_key)]
+
+
+def active_booking_records(bookings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        b for b in bookings
+        if not is_cancelled_booking_record(b) and not is_legacy_skeleton_booking(b)
+    ]
+
+
+def compute_booking_task_counts(bookings: List[Dict[str, Any]]) -> Dict[str, int]:
+    active = active_booking_records(bookings)
+    return {key: len(filter_bookings_by_task(active, key)) for key in BOOKING_TASK_KEYS}
+
+
+def fetch_all_bookings_merged(select: str = "*") -> List[Dict[str, Any]]:
+    db_rows = sb_select("bookings", {"select": select, "order": "created_at.desc"})
+    cache_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
+    merged = SESSION_CACHE["bookings"] + [b for b in db_rows if b.get("booking_id") not in cache_ids]
+    return [b for b in merged if not is_legacy_skeleton_booking(b)]
+
+
+def bookings_for_employee_record(
+    employee: Dict[str, Any],
+    all_bookings: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    active = active_booking_records(all_bookings)
+    eid = employee.get("employee_id")
+    if not eid:
+        return []
+    owned = [b for b in active if b.get("booking_officer_id") == eid]
+    if owned:
+        return owned
+    if str(employee.get("role") or "").lower() == "booking":
+        return active
+    return []
+
+
+def compute_booking_employee_stats(
+    employee: Dict[str, Any],
+    all_bookings: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    rows = bookings_for_employee_record(employee, all_bookings)
+    task_counts = compute_booking_task_counts(rows)
+    new_count = sum(
+        1 for b in rows
+        if not normalize_booking_completed_tasks(b)
+        and str(b.get("status") or "active").lower() in {"active", "pending", "confirmed", ""}
+    )
+    return {
+        "assigned_total": len(rows),
+        "emp_new_leads": new_count,
+        **{f"emp_{key}": task_counts.get(key, 0) for key in BOOKING_TASK_KEYS},
+        "booking_task_counts": task_counts,
+    }
+
 def ensure_booking_record(lead_id: str, lead_name: Optional[str] = None):
     existing = first_related_record("bookings", "bookings", lead_id)
     if existing:
@@ -6534,6 +6640,9 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
     for k, v in optional_costs.items():
         if v is not None:
             b[k] = v
+    officer_id = resolve_employee_id(cu)
+    if officer_id:
+        b["booking_officer_id"] = officer_id
     result = sb_insert("bookings", b)
     SESSION_CACHE["bookings"].insert(0, result or b)
     sb_update("leads", "lead_id", p.lead_id, {
@@ -6565,6 +6674,9 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
             booking_before = cache_before[0]
 
     data = model_payload(p)
+    officer_id = resolve_employee_id(cu)
+    if officer_id and not (booking_before or {}).get("booking_officer_id"):
+        data["booking_officer_id"] = officer_id
     if "token_received" in data or "booking_amount" in data:
         amount = float(data.get("booking_amount", (booking_before or {}).get("booking_amount", 0)) or 0)
         token = float(data.get("token_received", (booking_before or {}).get("token_received", 0)) or 0)
@@ -7554,7 +7666,7 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
 def _compute_dashboard_stats() -> Dict[str, Any]:
     """Shared pipeline stats for admin + manager main Dashboard."""
     fetched = sb_select_parallel({
-        "bookings": ("bookings", {"select": "booking_amount,status"}),
+        "bookings": ("bookings", {"select": "booking_id,lead_id,status,completed_tasks,booking_officer_id,agreement_status,booking_amount"}),
         "visits": ("visits", {"select": "visit_id,status"}),
         "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage"}),
         "customers": ("customers", {"select": "customer_id,lead_id"}),
@@ -7611,6 +7723,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     today = now_utc().date().isoformat()
     lead_buckets = {key: len(filter_lead_bucket(leads, key, today)) for key in LEAD_BUCKET_KEYS}
     follow_up_total = lead_buckets.get("follow_up", 0)
+    booking_task_buckets = compute_booking_task_counts(bookings)
     pending_follow_up_total = sum(
         1 for f in followups
         if str(f.get("status", "scheduled")).lower() in ["scheduled", "pending", "open"]
@@ -7639,6 +7752,8 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
         "revenue_pipeline": rev,
         "stage_distribution": stage_dist,
         "lead_buckets": lead_buckets,
+        "booking_task_buckets": booking_task_buckets,
+        "active_bookings": len(active_booking_records(bookings)),
     }
 
 
@@ -7723,12 +7838,22 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
     activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
     all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
 
+    all_bookings = fetch_all_bookings_merged(
+        "booking_id,lead_id,lead_name,status,completed_tasks,booking_officer_id,agreement_status,property_name,created_at"
+    )
+
     emp_stats = []
     for e in employees:
         eid = e["employee_id"]
         emp_acts = [a for a in activities if a.get("user_id") in {eid, e.get("user_id")}]
         emp_leads = leads_for_employee_record(e, all_leads)
         assignment = compute_employee_assignment_stats(emp_leads, e.get("role"))
+        if str(e.get("role") or "").lower() == "booking":
+            booking_stats = compute_booking_employee_stats(e, all_bookings)
+            assignment["assigned_total"] = booking_stats["assigned_total"]
+            assignment["emp_new_leads"] = booking_stats["emp_new_leads"]
+            for key in BOOKING_TASK_KEYS:
+                assignment[f"emp_{key}"] = booking_stats.get(f"emp_{key}", 0)
         last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
 
         emp_stats.append({
@@ -8020,7 +8145,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
 EMPLOYEE_METRIC_KEYS = [
     "total", "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
     "ringing", "follow_ups", "today_follow_ups", "missed_leads", "new_leads", "today_activity",
-]
+] + BOOKING_TASK_KEYS
 
 MY_DASHBOARD_METRICS = [
     "new_leads", "total", "missed_leads", "hot", "visited",
@@ -8229,9 +8354,35 @@ async def list_employee_metric_leads(
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(EMPLOYEE_METRIC_KEYS)}")
     limit = min(max(limit, 1), 500)
     all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
-    employees = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,user_id", "limit": "1"})
+    employees = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,user_id,role", "limit": "1"})
     employee = employees[0] if employees else {"employee_id": employee_id}
     emp_leads = leads_for_employee_record(employee, all_leads)
+    emp_role = str(employee.get("role") or "").lower()
+    if key in BOOKING_TASK_KEYS or (emp_role == "booking" and key in ("new_leads", "new", "assigned_new", "total", "backlog", "assigned_total")):
+        all_bookings = fetch_all_bookings_merged(
+            "booking_id,lead_id,lead_name,property_name,status,completed_tasks,booking_officer_id,agreement_status,created_at"
+        )
+        emp_bookings = bookings_for_employee_record(employee, all_bookings)
+        if key in ("new_leads", "new", "assigned_new"):
+            filtered_bookings = [
+                b for b in emp_bookings
+                if not normalize_booking_completed_tasks(b)
+            ]
+        elif key in ("total", "backlog", "assigned_total"):
+            filtered_bookings = emp_bookings
+        elif key in BOOKING_TASK_KEYS:
+            filtered_bookings = filter_bookings_by_task(emp_bookings, key)
+        else:
+            filtered_bookings = []
+        filtered_bookings.sort(key=lambda b: b.get("created_at") or "", reverse=True)
+        return {
+            "employee_id": employee_id,
+            "metric": key,
+            "kind": "bookings",
+            "total": len(filtered_bookings),
+            "bookings": filtered_bookings[:limit],
+            "leads": [],
+        }
     if key in ("today_activity", "today"):
         db_activities = sb_select("activities", {
             "select": "activity_id,user_id,created_at,type,text,lead_id",
@@ -8259,7 +8410,7 @@ async def list_employee_metric_leads(
         filtered = filter_employee_backlog_leads(emp_leads)
     elif key in ("missed_leads", "missed"):
         filtered = filter_employee_missed_leads(emp_leads)
-    elif key in EMPLOYEE_METRIC_KEYS:
+    elif key in EMPLOYEE_METRIC_KEYS and key not in BOOKING_TASK_KEYS:
         filtered = filter_employee_metric_leads(filter_employee_backlog_leads(emp_leads), key)
     else:
         filtered = []

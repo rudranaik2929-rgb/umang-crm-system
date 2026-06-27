@@ -11,6 +11,8 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { canViewBookingFinance } from '../../src/lib/constants';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
 import { RegistrationReceiptModal } from '../../src/components/RegistrationReceiptModal';
+import { BOOKING_TASKS, bookingMatchesTask, countBookingTasks, normalizeCompletedTasks, type BookingTaskKey } from '../../src/lib/bookingTasks';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 
 function leadInBookingQueue(lead: any) {
   const pr = String(lead?.priority || '').toLowerCase();
@@ -23,14 +25,6 @@ function seesAllBookings(role?: string | null) {
 }
 
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };
-const BOOKING_TASKS = [
-  { key: 'login_file', label: 'Login File', status: 'login file', icon: 'folder-open-outline', color: '#0284C7' },
-  { key: 'sanctioned', label: 'Sanctioned', status: 'sanctioned', icon: 'checkmark-done-outline', color: '#111827' },
-  { key: 'registration', label: 'Registration', status: 'registration', icon: 'document-text-outline', color: '#7C3AED' },
-  { key: 'disbursement', label: 'Disbursement', status: 'disbursement', icon: 'cash-outline', color: '#059669' },
-  { key: 'bill_submitted', label: 'Bill Submitted', status: 'bill submitted', icon: 'receipt-outline', color: '#D97706' },
-  { key: 'amount_received', label: 'Amt Received / Receipt', status: 'amount received', icon: 'wallet-outline', color: '#10B981' },
-];
 
 const CHARGE_FIELDS = [
   { key: 'agreement_value', label: 'Agreement Value' },
@@ -55,14 +49,15 @@ function additionalChargesTotal(booking: any) {
 }
 
 function completedTasksFor(booking: any): string[] {
-  if (Array.isArray(booking.completed_tasks)) return booking.completed_tasks;
-  const fromStatus = BOOKING_TASKS.find((task) => task.status === booking.status);
-  return fromStatus ? [fromStatus.key] : [];
+  return normalizeCompletedTasks(booking);
 }
 
 export default function Bookings() {
   const { colors } = useTheme();
   const { user } = useAuth();
+  const params = useLocalSearchParams<{ task?: string }>();
+  const router = useRouter();
+  const taskFilter = String(params.task || '').trim() as BookingTaskKey | '';
   const cachedBookings = getSnapshot<any>('bookings-page');
   const [bookings, setBookings] = useState<any[]>(cachedBookings?.bookings ?? []);
   const [leads, setLeads] = useState<any[]>(cachedBookings?.leads ?? []);
@@ -183,6 +178,10 @@ export default function Bookings() {
 
   const activeBookings = bookings.filter((b) => !isCancelledBooking(b));
   const cancelledBookings = bookings.filter((b) => isCancelledBooking(b));
+  const taskCounts = countBookingTasks(activeBookings);
+  const filteredActiveBookings = taskFilter && BOOKING_TASKS.some((t) => t.key === taskFilter)
+    ? activeBookings.filter((b) => bookingMatchesTask(b, taskFilter))
+    : activeBookings;
 
   const renderBookingCard = (b: any, cancelled = false) => {
     const rawAgreement = b.agreement_status || 'pending';
@@ -438,6 +437,28 @@ export default function Bookings() {
         }
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
+        {!loading && activeBookings.length > 0 ? (
+          <View style={styles.taskSummaryGrid}>
+            {BOOKING_TASKS.map((task) => {
+              const active = taskFilter === task.key;
+              return (
+                <Pressable
+                  key={task.key}
+                  testID={`booking-task-summary-${task.key}`}
+                  onPress={() => router.replace(taskFilter === task.key ? '/(app)/bookings' as any : `/(app)/bookings?task=${task.key}` as any)}
+                  style={[styles.taskSummaryCard, {
+                    backgroundColor: active ? task.color + '14' : colors.surface,
+                    borderColor: active ? task.color : colors.border,
+                  }]}
+                >
+                  <Ionicons name={task.icon} size={16} color={task.color} />
+                  <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', marginTop: 6 }}>{task.label.toUpperCase()}</Text>
+                  <Text style={{ color: task.color, fontSize: 22, fontWeight: '800', marginTop: 2 }}>{taskCounts[task.key] ?? 0}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
         {!loading && leads.length > 0 ? (
           <Pressable
             testID="booking-queue-banner"
@@ -469,11 +490,17 @@ export default function Bookings() {
             />
           ) : (
             <>
-              {activeBookings.length > 0 ? (
+              {filteredActiveBookings.length > 0 ? (
                 <>
-                  <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>ACTIVE BOOKINGS ({activeBookings.length})</Text>
-                  {activeBookings.map((b) => renderBookingCard(b, false))}
+                  <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>
+                    ACTIVE BOOKINGS ({filteredActiveBookings.length}{taskFilter ? ` · ${BOOKING_TASKS.find((t) => t.key === taskFilter)?.label}` : ''})
+                  </Text>
+                  {filteredActiveBookings.map((b) => renderBookingCard(b, false))}
                 </>
+              ) : taskFilter ? (
+                <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', paddingVertical: 24 }}>
+                  No bookings in {BOOKING_TASKS.find((t) => t.key === taskFilter)?.label || taskFilter}.
+                </Text>
               ) : null}
               {cancelledBookings.length > 0 ? (
                 <>
@@ -777,6 +804,17 @@ function FormField({ label, value, onChange, colors, keyboardType, testID, place
 }
 
 const styles = StyleSheet.create({
+  taskSummaryGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 4 },
+  taskSummaryCard: {
+    width: '15%',
+    minWidth: 108,
+    flexGrow: 1,
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
+    alignItems: 'center',
+  },
   sectionTitle: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginBottom: 4 },
   miniLabel: { fontSize: 9, fontWeight: '700', letterSpacing: 1 },
   allDoneBanner: {

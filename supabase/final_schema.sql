@@ -363,6 +363,7 @@ alter table bookings add column if not exists payment_status text not null defau
 alter table bookings add column if not exists payment_progress integer not null default 0;
 alter table bookings add column if not exists agreement_status text not null default 'pending';
 alter table bookings add column if not exists completed_tasks jsonb not null default '[]'::jsonb;
+alter table bookings add column if not exists booking_officer_id text;
 alter table bookings add column if not exists booking_date timestamptz;
 alter table bookings add column if not exists starred boolean not null default false;
 alter table bookings add column if not exists updated_at timestamptz not null default now();

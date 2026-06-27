@@ -20,6 +20,7 @@ import { NotificationCard } from '../../src/components/NotificationCard';
 import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
 import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel, platformLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
+import { BOOKING_TASKS, DASHBOARD_BOOKING_TASK_KEYS } from '../../src/lib/bookingTasks';
 
 const HOT_STAGES = ['positive', 'site_visit', 'booking', 'loan', 'registration', 'closed'];
 
@@ -142,6 +143,8 @@ export default function Dashboard() {
       employees: Number(stats?.employees || 0),
       campaigns: Number(stats?.campaigns || 0),
       revenue: Number(stats?.revenue_pipeline || 0),
+      bookingTaskBuckets: stats?.booking_task_buckets || {},
+      activeBookings: Number(stats?.active_bookings || stats?.bookings || 0),
     };
   }, [leads, stats, buckets]);
 
@@ -249,15 +252,20 @@ export default function Dashboard() {
           <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Filter by employee & source" onPress={() => setLeadsBucket('registration')} />
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Filter by employee & source" onPress={() => setLeadsBucket('booking')} />
           <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · filter by employee`} onPress={() => setLeadsBucket('follow_up')} />
-          <MetricCard icon="business-outline" label="Loans" value={model.loans} accent="#8B5CF6" helper={`${model.disbursedLoans} disbursed`} onPress={() => router.push('/(app)/loans' as any)} />
-          <MetricCard
-            icon="briefcase-outline"
-            label="Employees"
-            value={model.employees}
-            accent="#14B8A6"
-            helper={model.campaigns ? `${model.campaigns} campaigns` : 'Team members'}
-            onPress={() => router.push('/(app)/employees' as any)}
-          />
+          {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
+            const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
+            return (
+              <MetricCard
+                key={task.key}
+                icon={task.icon}
+                label={task.label}
+                value={Number(model.bookingTaskBuckets?.[task.key] ?? 0)}
+                accent={task.color}
+                helper="Booking pipeline · tap to open"
+                onPress={() => router.push(`/(app)/bookings?task=${task.key}` as any)}
+              />
+            );
+          })}
         </View>
 
         <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -302,11 +310,27 @@ export default function Dashboard() {
           style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}
         >
           <View style={styles.panelHeader}>
-            <View>
+            <View style={{ flex: 1 }}>
               <Text style={[styles.panelTitle, { color: colors.text }]}>Follow Ups</Text>
               <Text style={[styles.panelSub, { color: colors.textMuted }]}>
                 {model.pendingFollowUps} pending · {model.followUps} scheduled · tap for full list
               </Text>
+            </View>
+            <View style={styles.followUpMiniRow}>
+              <Pressable
+                onPress={() => setLeadsBucket('new_today')}
+                style={[styles.followUpMiniBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+              >
+                <Text style={[styles.followUpMiniLabel, { color: colors.textMuted }]}>NEW TODAY</Text>
+                <Text style={[styles.followUpMiniValue, { color: colors.primary }]}>{model.newToday}</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => setLeadsBucket('all')}
+                style={[styles.followUpMiniBox, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+              >
+                <Text style={[styles.followUpMiniLabel, { color: colors.textMuted }]}>TOTAL LEADS</Text>
+                <Text style={[styles.followUpMiniValue, { color: colors.text }]}>{model.totalLeads}</Text>
+              </Pressable>
             </View>
             <Ionicons name="calendar-outline" size={20} color="#F97316" />
           </View>
@@ -616,6 +640,10 @@ const styles = StyleSheet.create({
   tinyValue: { fontSize: 16, fontWeight: '800' },
   tinyLabel: { fontSize: 10, marginTop: 1 },
   metricGrid: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
+  followUpMiniRow: { flexDirection: 'row', gap: 8, marginRight: 8 },
+  followUpMiniBox: { minWidth: 88, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
+  followUpMiniLabel: { fontSize: 8, fontWeight: '700', letterSpacing: 0.8 },
+  followUpMiniValue: { fontSize: 18, fontWeight: '800', marginTop: 2 },
   metricCard: { minWidth: 210, flex: 1, borderWidth: 1, borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 },
   metricIcon: { width: 38, height: 38, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
   metricLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 0.7, textTransform: 'uppercase' },
