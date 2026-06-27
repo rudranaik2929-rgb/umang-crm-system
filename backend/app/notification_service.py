@@ -351,18 +351,14 @@ def notify_lead_assigned(
     *,
     sender_id: Optional[str] = None,
     is_reassign: bool = False,
+    manager_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    name = lead.get("name") or "Customer"
-    phone = lead.get("phone") or ""
-    return create_notification(
+    """Deprecated per-lead path — always one summary row (count=1), never customer name."""
+    return notify_bulk_leads_assigned(
         employee_id,
-        "Lead assigned",
-        f"{name} has been assigned to you.",
-        lead_id=lead.get("lead_id"),
-        type_=TYPE_LEAD_ASSIGNED,
+        1,
         sender_id=sender_id,
-        priority="high",
-        metadata={"customer_name": name, "phone": phone},
+        manager_name=manager_name,
     )
 
 
@@ -373,70 +369,12 @@ def notify_bulk_leads_assigned(
     sender_id: Optional[str] = None,
     manager_name: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
-    """One notification per assign batch — merges rapid assigns within 5 minutes."""
+    """Exactly one notification per assign action (1 lead or 400 leads — same short message)."""
     receiver_id = _canonical_receiver(employee_id)
-    if not receiver_id or count < 1 or not _sb_select:
-        return None
-    if not preference_allows(receiver_id, TYPE_LEAD_ASSIGNED):
+    if not receiver_id or count < 1:
         return None
 
     assigner = (manager_name or "Manager").strip() or "Manager"
-    merge_cutoff = _postgrest_cutoff(ASSIGNMENT_MERGE_WINDOW_SEC)
-
-    recent = _sb_select("notifications", {
-        "user_id": f"eq.{receiver_id}",
-        "type": f"eq.{TYPE_LEAD_ASSIGNED}",
-        "created_at": f"gte.{merge_cutoff}",
-        "select": "*",
-        "limit": "20",
-    }) or []
-    recent.sort(key=lambda r: r.get("created_at") or "", reverse=True)
-
-    for row in recent:
-        meta = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
-        if not meta.get("assignment_summary"):
-            continue
-        prev = int(meta.get("assigned_count") or 1)
-        total = prev + count
-        title, message = _assignment_summary_text(assigner, total)
-        nid = row.get("notification_id")
-        if not nid:
-            continue
-        patch = {
-            "title": title,
-            "message": message,
-            "is_read": False,
-            "read_at": None,
-            "expires_at": _expires_at_iso(),
-            "metadata": {
-                **meta,
-                "assigned_count": total,
-                "assignment_summary": True,
-                "manager": assigner,
-            },
-        }
-        saved = None
-        if _sb_update:
-            saved = _sb_update("notifications", "notification_id", nid, patch)
-        saved = saved or {**row, **patch}
-        if _session_cache is not None:
-            cache = _session_cache.setdefault("notifications", [])
-            _session_cache["notifications"] = [
-                saved if n.get("notification_id") == nid else n for n in cache
-            ]
-        try:
-            send_push_for_notification(
-                receiver_id,
-                nid,
-                title,
-                message,
-                lead_id=None,
-                notification_type=TYPE_LEAD_ASSIGNED,
-            )
-        except Exception:
-            logger.exception("Push send failed for merged assignment %s", nid)
-        return saved
-
     title, message = _assignment_summary_text(assigner, count)
     return create_notification(
         receiver_id,

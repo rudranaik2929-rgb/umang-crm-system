@@ -2377,6 +2377,7 @@ def assign_lead_to_employee(
     log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
     old_assignee = clean_text(old_lead.get("assigned_to"))
     if not skip_removed_notify and old_assignee and old_assignee != employee_id:
+        # One short removed notice max — skip during bulk (caller sets skip_removed_notify=True).
         notify_svc.notify_lead_removed(
             old_assignee,
             old_lead,
@@ -6826,6 +6827,21 @@ async def list_customers(cu: User=Depends(get_current_user)):
     return SESSION_CACHE["customers"] + [c for c in customers if c.get("customer_id") not in cache_ids]
 
 
+def _is_legacy_per_lead_assignment(note: Dict[str, Any]) -> bool:
+    """Hide old rows like 'Amit has been assigned to you' — summary rows only."""
+    ntype = str(note.get("type") or "")
+    title = str(note.get("title") or "").lower()
+    if ntype != "lead_assigned" and "assign" not in title:
+        return False
+    meta = note.get("metadata") if isinstance(note.get("metadata"), dict) else {}
+    if meta.get("assignment_summary"):
+        return False
+    if note.get("lead_id"):
+        return True
+    msg = str(note.get("message") or "")
+    return " has been assigned to you." in msg
+
+
 @api_router.get("/notifications")
 async def list_notifications(
     cu: User = Depends(get_current_user),
@@ -6848,6 +6864,7 @@ async def list_notifications(
             notifications = [n for n in notifications if _notification_matches_type_filter(n, type)]
 
         merged = _merge_notifications_for_user(cu, notifications)
+        merged = [n for n in merged if not _is_legacy_per_lead_assignment(n)]
         if search:
             q = search.strip().lower()
             merged = [

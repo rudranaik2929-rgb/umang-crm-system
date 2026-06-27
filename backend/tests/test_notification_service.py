@@ -85,12 +85,11 @@ def test_persist_notification_falls_back_to_minimal_columns():
     assert calls[1]["user_id"] == "emp_1"
 
 
-def test_notify_lead_assigned_message_contains_customer():
+def test_notify_lead_assigned_uses_summary_not_customer_name():
     mock_insert = MagicMock(return_value={"notification_id": "ntf_1"})
-    mock_select = MagicMock(return_value=[])
     ns.configure(
         sb_insert=mock_insert,
-        sb_select=mock_select,
+        sb_select=MagicMock(return_value=[]),
         sb_update=MagicMock(),
         sb_delete=MagicMock(),
         gen_id=lambda p: f"{p}_test",
@@ -99,20 +98,13 @@ def test_notify_lead_assigned_message_contains_customer():
     )
     ns.get_active_fcm_tokens = MagicMock(return_value=[])
 
-    lead = {
-        "lead_id": "lead_1",
-        "name": "Amit Sharma",
-        "phone": "9876543210",
-        "property_type": "2BHK",
-        "budget": "50L",
-    }
-    result = ns.notify_lead_assigned("emp_1", lead, sender_id="mgr_1")
+    lead = {"lead_id": "lead_1", "name": "Amit Sharma", "phone": "9876543210"}
+    result = ns.notify_lead_assigned("emp_1", lead, sender_id="mgr_1", manager_name="Rohit")
     assert result is not None
-    mock_insert.assert_called_once()
     payload = mock_insert.call_args[0][1]
-    assert "Amit Sharma" in payload["message"]
-    assert payload["type"] == ns.TYPE_LEAD_ASSIGNED
-    assert payload["title"] == "Lead assigned"
+    assert "Amit Sharma" not in payload["message"]
+    assert "Rohit assigned 1 lead" in payload["message"]
+    assert payload["metadata"]["assignment_summary"] is True
 
 
 def test_notify_bulk_leads_assigned():
