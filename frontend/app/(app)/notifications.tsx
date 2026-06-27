@@ -17,7 +17,6 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { useNotifications } from '../../src/notifications/NotificationContext';
 import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
 import type { NotificationFilter } from '../../src/notifications/types';
-import { useResponsive } from '../../src/hooks/useResponsive';
 
 const FILTERS: { key: NotificationFilter; label: string }[] = [
   { key: 'all', label: 'All' },
@@ -34,7 +33,6 @@ const FILTERS: { key: NotificationFilter; label: string }[] = [
 export default function NotificationsPage() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const { contentPadding, isMobile } = useResponsive();
   const router = useRouter();
   const params = useLocalSearchParams<{ lead?: string }>();
   const {
@@ -137,7 +135,7 @@ export default function NotificationsPage() {
 
       <ScrollView
         style={{ flex: 1 }}
-        contentContainerStyle={{ padding: contentPadding, paddingBottom: contentPadding + (isMobile ? 8 : 40) }}
+        contentContainerStyle={{ padding: 16, paddingBottom: 40 }}
         onScroll={({ nativeEvent }) => {
           const { layoutMeasurement, contentOffset, contentSize } = nativeEvent;
           if (layoutMeasurement.height + contentOffset.y >= contentSize.height - 120) {

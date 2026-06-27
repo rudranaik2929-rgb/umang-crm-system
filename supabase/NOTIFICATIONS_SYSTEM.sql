@@ -1,19 +1,32 @@
 -- =============================================================================
--- Umang CRM — Production notification system
--- Run once in Supabase → SQL Editor (safe to re-run)
+-- Umang CRM — Production notification system (RUN ONCE in Supabase SQL Editor)
+-- Safe to re-run. Creates tables, indexes, realtime, and sample verification queries.
 -- =============================================================================
 
--- Extend notifications (receiver_id = employee_id in user_id column for backward compat)
+-- 1. Core notifications table (create if missing from older installs)
+create table if not exists notifications (
+  notification_id text primary key,
+  user_id text,
+  lead_id text,
+  type text not null default 'workflow',
+  title text not null,
+  message text not null,
+  is_read boolean not null default false,
+  created_at timestamptz not null default now()
+);
+
+-- 2. Extended columns (new notification system)
 alter table notifications add column if not exists sender_id text;
 alter table notifications add column if not exists priority text not null default 'normal';
 alter table notifications add column if not exists read_at timestamptz;
 alter table notifications add column if not exists metadata jsonb not null default '{}'::jsonb;
 
 create index if not exists idx_notifications_user_created on notifications(user_id, created_at desc);
+create index if not exists idx_notifications_user_read on notifications(user_id, is_read);
 create index if not exists idx_notifications_type on notifications(type);
 create index if not exists idx_notifications_lead on notifications(lead_id);
 
--- FCM device tokens (web PWA + future native)
+-- 3. FCM device tokens (web PWA + future native)
 create table if not exists fcm_device_tokens (
   token_id text primary key,
   user_id text not null,
@@ -29,7 +42,7 @@ create table if not exists fcm_device_tokens (
 create unique index if not exists idx_fcm_token_unique on fcm_device_tokens(fcm_token);
 create index if not exists idx_fcm_user_active on fcm_device_tokens(user_id, is_active);
 
--- Per-user notification preferences
+-- 4. Per-user notification preferences
 create table if not exists notification_preferences (
   user_id text primary key,
   lead_assigned boolean not null default true,
@@ -44,7 +57,7 @@ create table if not exists notification_preferences (
   updated_at timestamptz not null default now()
 );
 
--- Failed push queue for retry
+-- 5. Failed push queue for retry
 create table if not exists notification_push_queue (
   queue_id text primary key,
   notification_id text,
@@ -59,7 +72,7 @@ create table if not exists notification_push_queue (
 
 create index if not exists idx_push_queue_retry on notification_push_queue(next_retry_at, attempts);
 
--- Supabase Realtime — postgres_changes on notifications
+-- 6. Realtime — instant in-app updates (needs EXPO_PUBLIC_SUPABASE_* on Vercel)
 do $$
 begin
   if not exists (
@@ -71,3 +84,51 @@ begin
 exception when others then
   raise notice 'Realtime publication: %', sqlerrm;
 end $$;
+
+-- 7. Grants (anon key used for Realtime subscriptions)
+grant select on notifications to anon, authenticated;
+grant select, insert, update, delete on fcm_device_tokens to anon, authenticated;
+grant select, insert, update, delete on notification_preferences to anon, authenticated;
+
+-- =============================================================================
+-- SAMPLE DATA (optional — uncomment to test; replace employee_id with yours)
+-- =============================================================================
+/*
+insert into notifications (
+  notification_id, user_id, type, title, message, priority, is_read, created_at
+) values (
+  'ntf_test_' || floor(extract(epoch from now()))::text,
+  'emp_YOUR_EMPLOYEE_ID',   -- from: select employee_id, name from employees;
+  'lead_assigned',
+  '🏠 Test Notification',
+  'If you see this in the app, notifications are working.',
+  'high',
+  false,
+  now()
+) on conflict (notification_id) do nothing;
+*/
+
+-- =============================================================================
+-- VERIFICATION QUERIES (run after deploy to check data)
+-- =============================================================================
+
+-- All employees (use employee_id as notifications.user_id)
+-- select employee_id, name, email, role, user_id from employees where active = true order by name;
+
+-- Recent notifications
+-- select notification_id, user_id, type, title, is_read, created_at
+-- from notifications order by created_at desc limit 20;
+
+-- Unread count per employee
+-- select user_id, count(*) as unread
+-- from notifications where is_read = false group by user_id order by unread desc;
+
+-- Registered push tokens
+-- select token_id, user_id, platform, is_active, left(fcm_token, 24) as token_prefix, updated_at
+-- from fcm_device_tokens order by updated_at desc;
+
+-- User preferences
+-- select * from notification_preferences;
+
+-- Failed push retries
+-- select queue_id, user_id, attempts, last_error, next_retry_at from notification_push_queue order by created_at desc limit 20;

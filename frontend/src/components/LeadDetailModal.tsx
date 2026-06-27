@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Modal, ScrollView, TextInput, ActivityIndicator, Animated, Easing, Platform } from 'react-native';
 import { useRouter } from 'expo-router';
 import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,8 +33,6 @@ interface Props {
 export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000, onGoFollowUps }: Props) {
   const { colors } = useTheme();
   const router = useRouter();
-  const { width } = useWindowDimensions();
-  const isMobile = width < 900;
 
   const goFollowUps = () => {
     onChanged?.();
@@ -1022,16 +1020,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   }
 
   const sheet = (
-    <Pressable
-      style={[styles.backdrop, isMobile && styles.backdropMobile]}
-      onPress={onClose}
-    >
+    <Pressable style={styles.backdrop} onPress={onClose}>
       <View
-        style={[
-          styles.sheet,
-          isMobile && styles.sheetMobile,
-          { backgroundColor: colors.surface, borderColor: colors.border },
-        ]}
+        style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
         {...(Platform.OS === 'web' ? { onClick: (e: any) => e?.stopPropagation?.() } as any : {})}
       >
         {renderBody()}
@@ -1165,22 +1156,9 @@ const styles = StyleSheet.create({
       default: {},
     }),
   },
-  backdropMobile: {
-    alignItems: 'stretch',
-    justifyContent: 'flex-end',
-  },
   sheet: {
     width: '92%', maxWidth: 760, maxHeight: '92%', height: '90%',
     borderRadius: 14, borderWidth: 1, overflow: 'hidden',
-  },
-  sheetMobile: {
-    width: '100%',
-    maxWidth: '100%',
-    maxHeight: '96%',
-    height: '96%',
-    borderRadius: 16,
-    borderBottomLeftRadius: 0,
-    borderBottomRightRadius: 0,
   },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   header: { padding: 20, borderBottomWidth: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 12 },

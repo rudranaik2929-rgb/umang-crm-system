@@ -14,7 +14,9 @@ import { MissedLeadsPanel } from '../../src/components/MissedLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { MyActivityModal } from '../../src/components/MyActivityModal';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
-import { useResponsive } from '../../src/hooks/useResponsive';
+import { useNotifications } from '../../src/notifications/NotificationContext';
+import { NotificationCard } from '../../src/components/NotificationCard';
+import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -73,8 +75,8 @@ export default function MyDashboard() {
   const { user } = useAuth();
   const router = useRouter();
   const { width: screenWidth } = useWindowDimensions();
-  const { contentPadding } = useResponsive();
   const kpiCardWidth = screenWidth < 400 ? '48%' : screenWidth < 720 ? '31%' : '23%';
+  const { items: notifications, unreadCount, refresh: refreshNotifications } = useNotifications();
   const cached = getSnapshot<any>('my-dashboard');
   const hasFreshCache = cached?.data?.missed_leads_total != null || cached?.data?.missed_leads != null;
   const [data, setData] = useState<any>(hasFreshCache ? cached.data : null);
@@ -154,7 +156,7 @@ export default function MyDashboard() {
         </Pressable>
         <LivePulse />
       </View>
-      <ScrollView contentContainerStyle={[styles.content, { padding: contentPadding }]}>
+      <ScrollView contentContainerStyle={styles.content}>
         {/* Hero score card */}
         <View style={[styles.hero, { backgroundColor: colors.surface, borderColor: accent + '40' }]}>
           <View style={{ flex: 1 }}>
@@ -224,6 +226,40 @@ export default function MyDashboard() {
               </Text>
             </Pressable>
           </View>
+        </View>
+
+        <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16 }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <Text style={[styles.section, { color: colors.textMuted, marginBottom: 0 }]}>
+              NOTIFICATIONS{unreadCount > 0 ? ` (${unreadCount} unread)` : ''}
+            </Text>
+            <Pressable
+              onPress={() => {
+                refreshNotifications();
+                router.push('/(app)/notifications' as any);
+              }}
+            >
+              <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>See all →</Text>
+            </Pressable>
+          </View>
+          {notifications.length === 0 ? (
+            <Text style={{ color: colors.textMuted, fontSize: 13 }}>No notifications yet. Assign a lead to test.</Text>
+          ) : (
+            notifications.slice(0, 5).map((n) => (
+              <NotificationCard
+                key={n.notification_id}
+                item={n}
+                compact
+                onPress={() => {
+                  if (n.lead_id) {
+                    router.push(leadDeepLinkPath(n.lead_id, user?.role, user?.email, user?.allowed_pages ?? undefined) as any);
+                  } else {
+                    router.push('/(app)/notifications' as any);
+                  }
+                }}
+              />
+            ))
+          )}
         </View>
 
         {/* Personal KPIs */}
@@ -455,7 +491,7 @@ function LivePulse() {
 }
 
 const styles = StyleSheet.create({
-  content: { gap: 24 },
+  content: { padding: 24, gap: 24 },
   hero: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 24,
     padding: 28, borderRadius: 16, borderWidth: 1,

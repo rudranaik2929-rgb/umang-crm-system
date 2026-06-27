@@ -83,7 +83,9 @@ def send_fcm_to_token(
     from firebase_admin import messaging
 
     payload_data = {k: str(v) for k, v in (data or {}).items()}
-    link = payload_data.get("url", "/")
+    payload_data.setdefault("title", title)
+    payload_data.setdefault("body", (body or "")[:500])
+    link = payload_data.get("url", "/notifications")
 
     message = messaging.Message(
         notification=messaging.Notification(

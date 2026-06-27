@@ -1,11 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, Image, ScrollView, Modal, Platform } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, ScrollView } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { visibleNavFor, ROLES } from '../lib/constants';
 import { Ionicons } from '@expo/vector-icons';
-import { useResponsive } from '../hooks/useResponsive';
 
 const ICON_MAP: Record<string, any> = {
   dashboard: 'speedometer-outline',
@@ -28,89 +27,77 @@ const ICON_MAP: Record<string, any> = {
 interface Props {
   collapsed: boolean;
   onToggle: () => void;
-  mobileOverlay?: boolean;
-  onMobileClose?: () => void;
 }
 
-export function Sidebar({ collapsed, onToggle, mobileOverlay, onMobileClose }: Props) {
+export function Sidebar({ collapsed, onToggle }: Props) {
   const { colors } = useTheme();
   const { user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
-  const { isMobile } = useResponsive();
 
   const role = ROLES.find((r) => r.key === user?.role);
   const items = visibleNavFor(user?.role, user?.email, user?.allowed_pages);
 
-  const navigate = (path: string) => {
-    router.push(path as any);
-    onMobileClose?.();
-  };
-
-  const navBody = (
-    <>
+  return (
+    <View style={[styles.wrap, {
+      width: collapsed ? 76 : 264,
+      backgroundColor: colors.sidebar,
+      borderRightColor: colors.border,
+    }]} testID="sidebar">
       <View style={[styles.brand, { borderBottomColor: colors.border }]}>
         <Image
           source={require('../../assets/images/logo.png')}
-          style={[styles.logoImage, collapsed && !mobileOverlay && { width: 38, height: 38 }]}
+          style={[styles.logoImage, collapsed && { width: 38, height: 38 }]}
           resizeMode="contain"
         />
-        {(!collapsed || mobileOverlay) && (
+        {!collapsed && (
           <View style={{ flex: 1 }}>
             <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Hometech LLP</Text>
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>Real Estate CRM</Text>
           </View>
         )}
-        {mobileOverlay ? (
-          <Pressable onPress={onMobileClose} hitSlop={12} testID="sidebar-mobile-close">
-            <Ionicons name="close" size={24} color={colors.textSecondary} />
-          </Pressable>
-        ) : null}
       </View>
 
-      {!mobileOverlay ? (
-        <Pressable
-          onPress={onToggle}
-          testID="sidebar-toggle"
-          hitSlop={10}
-          style={({ hovered }: any) => [
-            styles.floatingToggle,
-            {
-              backgroundColor: hovered ? colors.primary : colors.surface,
-              borderColor: hovered ? colors.primary : colors.border,
-              right: -14,
-            },
-          ]}
-        >
-          {({ hovered }: any) => (
-            <Ionicons
-              name={collapsed ? 'chevron-forward' : 'chevron-back'}
-              size={16}
-              color={hovered ? '#fff' : colors.textSecondary}
-            />
-          )}
-        </Pressable>
-      ) : null}
+      <Pressable
+        onPress={onToggle}
+        testID="sidebar-toggle"
+        hitSlop={10}
+        style={({ hovered }: any) => [
+          styles.floatingToggle,
+          {
+            backgroundColor: hovered ? colors.primary : colors.surface,
+            borderColor: hovered ? colors.primary : colors.border,
+            right: -14,
+          },
+        ]}
+      >
+        {({ hovered }: any) => (
+          <Ionicons
+            name={collapsed ? 'chevron-forward' : 'chevron-back'}
+            size={16}
+            color={hovered ? '#fff' : colors.textSecondary}
+          />
+        )}
+      </Pressable>
 
       <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 12 }}>
-        {(!collapsed || mobileOverlay) && (
+        {!collapsed && (
           <Text style={[styles.section, { color: colors.textMuted }]}>WORKSPACE</Text>
         )}
         {items.map((item) => {
           const active = pathname?.endsWith(item.path.split('/').pop() || '');
-          const showLabel = !collapsed || mobileOverlay;
           return (
             <Pressable
               key={item.key}
-              onPress={() => navigate(item.path)}
+              onPress={() => router.push(item.path as any)}
               testID={`nav-${item.key}`}
               style={({ hovered }: any) => [
                 styles.navItem,
                 {
                   backgroundColor: active ? colors.primary + '20' : (hovered ? colors.surfaceAlt : 'transparent'),
                   borderLeftColor: active ? colors.primary : 'transparent',
-                  paddingHorizontal: collapsed && !mobileOverlay ? 0 : 16,
-                  justifyContent: collapsed && !mobileOverlay ? 'center' : 'flex-start',
+                  paddingHorizontal: collapsed ? 0 : 16,
+                  justifyContent: collapsed ? 'center' : 'flex-start',
                 },
               ]}
             >
@@ -119,7 +106,7 @@ export function Sidebar({ collapsed, onToggle, mobileOverlay, onMobileClose }: P
                 size={18}
                 color={active ? colors.primary : colors.textSecondary}
               />
-              {showLabel && (
+              {!collapsed && (
                 <Text style={[styles.navLabel, {
                   color: active ? colors.text : colors.textSecondary,
                   fontWeight: active ? '600' : '500',
@@ -142,7 +129,7 @@ export function Sidebar({ collapsed, onToggle, mobileOverlay, onMobileClose }: P
             </Text>
           </View>
         )}
-        {(!collapsed || mobileOverlay) && (
+        {!collapsed && (
           <View style={{ flex: 1, marginLeft: 10 }}>
             <Text numberOfLines={1} style={[styles.userName, { color: colors.text }]}>
               {user?.name || 'Guest'}
@@ -153,33 +140,6 @@ export function Sidebar({ collapsed, onToggle, mobileOverlay, onMobileClose }: P
           </View>
         )}
       </View>
-    </>
-  );
-
-  if (mobileOverlay) {
-    return (
-      <Modal transparent visible animationType="slide" onRequestClose={onMobileClose}>
-        <View style={styles.mobileRoot}>
-          <Pressable style={styles.mobileBackdrop} onPress={onMobileClose} />
-          <View style={[styles.mobileDrawer, { backgroundColor: colors.sidebar, borderRightColor: colors.border }]}>
-            {navBody}
-          </View>
-        </View>
-      </Modal>
-    );
-  }
-
-  if (isMobile) {
-    return null;
-  }
-
-  return (
-    <View style={[styles.wrap, {
-      width: collapsed ? 76 : 264,
-      backgroundColor: colors.sidebar,
-      borderRightColor: colors.border,
-    }]} testID="sidebar">
-      {navBody}
     </View>
   );
 }
@@ -235,19 +195,4 @@ const styles = StyleSheet.create({
   avatar: { width: 36, height: 36, borderRadius: 18 },
   userName: { fontSize: 13, fontWeight: '600' },
   userRole: { fontSize: 11, marginTop: 1 },
-  mobileRoot: {
-    flex: 1,
-    flexDirection: 'row',
-  },
-  mobileBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.45)',
-  },
-  mobileDrawer: {
-    width: 280,
-    maxWidth: '85%',
-    height: '100%',
-    borderRightWidth: 1,
-    ...(Platform.OS === 'web' ? { boxShadow: '-4px 0 24px rgba(0,0,0,0.15)' as any } : {}),
-  },
 });

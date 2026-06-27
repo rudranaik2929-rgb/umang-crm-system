@@ -51,6 +51,7 @@ _sb_delete: Optional[Callable] = None
 _gen_id: Optional[Callable] = None
 _now_utc: Optional[Callable] = None
 _session_cache: Optional[Dict[str, Any]] = None
+_resolve_receiver: Optional[Callable[[str], Optional[str]]] = None
 
 
 def configure(
@@ -62,8 +63,9 @@ def configure(
     gen_id,
     now_utc,
     session_cache: Dict[str, Any],
+    resolve_receiver: Optional[Callable[[str], Optional[str]]] = None,
 ) -> None:
-    global _sb_insert, _sb_select, _sb_update, _sb_delete, _gen_id, _now_utc, _session_cache
+    global _sb_insert, _sb_select, _sb_update, _sb_delete, _gen_id, _now_utc, _session_cache, _resolve_receiver
     _sb_insert = sb_insert
     _sb_select = sb_select
     _sb_update = sb_update
@@ -71,6 +73,20 @@ def configure(
     _gen_id = gen_id
     _now_utc = now_utc
     _session_cache = session_cache
+    _resolve_receiver = resolve_receiver
+
+
+def _canonical_receiver(receiver_id: Optional[str]) -> Optional[str]:
+    if not receiver_id:
+        return None
+    ref = str(receiver_id).strip()
+    if not ref:
+        return None
+    if _resolve_receiver:
+        resolved = _resolve_receiver(ref)
+        if resolved:
+            return resolved
+    return ref
 
 
 def _now_iso() -> str:
@@ -173,7 +189,7 @@ def send_push_for_notification(
         "notification_id": notification_id,
         "type": notification_type,
         "lead_id": lead_id or "",
-        "url": f"/notifications?lead={lead_id}" if lead_id else "/notifications",
+        "url": f"/telecaller?openLead={lead_id}" if lead_id else "/notifications",
     }
     result = send_fcm_batch(tokens, title, message, data)
     for tok in result.get("failed_tokens") or []:
@@ -193,6 +209,7 @@ def create_notification(
     skip_push: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Insert in-app notification and optionally send FCM push."""
+    receiver_id = _canonical_receiver(receiver_id)
     if not receiver_id or not _sb_insert:
         return None
     if not preference_allows(receiver_id, type_):

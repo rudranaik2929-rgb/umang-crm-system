@@ -12,14 +12,12 @@ import { LeadQueueTable } from '../../src/components/LeadQueueTable';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { Ionicons } from '@expo/vector-icons';
 import { leadToFollowUpCard } from '../../src/lib/leadFollowUp';
-import { useResponsive } from '../../src/hooks/useResponsive';
 
 type Tab = 'queue' | 'followups';
 
 export default function Telecaller() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const { contentPadding } = useResponsive();
   const params = useLocalSearchParams<{ tab?: string; openLead?: string }>();
   const workspaceCacheKey = useMemo(
     () => `telecaller-workspace-${user?.employee_id || user?.email || user?.user_id || 'anon'}`,
@@ -98,7 +96,7 @@ export default function Telecaller() {
         </Pressable>
       </View>
 
-      <ScrollView contentContainerStyle={[styles.content, { padding: contentPadding }]}>
+      <ScrollView contentContainerStyle={styles.content}>
         {tab === 'queue' ? (
           <>
             <Text style={{ color: colors.textSecondary, fontSize: 13, marginBottom: 16 }}>
@@ -133,7 +131,7 @@ export default function Telecaller() {
 }
 
 const styles = StyleSheet.create({
-  content: { gap: 20 },
+  content: { padding: 24, gap: 20 },
   tabs: { flexDirection: 'row', borderBottomWidth: 1 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   iconBtn: {

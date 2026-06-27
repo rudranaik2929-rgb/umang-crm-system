@@ -1655,6 +1655,22 @@ class FacebookImportRequest(BaseModel):
 LOCAL_SESSIONS = {}
 SESSION_CACHE = {"leads": [], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []}
 
+def normalize_notification_receiver(ref: Optional[str]) -> Optional[str]:
+    """Map employee name, user_id, or employee_id → canonical employee_id for notifications."""
+    clean = clean_text(ref)
+    if not clean:
+        return None
+    for field, op in (
+        ("employee_id", f"eq.{clean}"),
+        ("user_id", f"eq.{clean}"),
+        ("name", f"eq.{clean}"),
+    ):
+        rows = sb_select("employees", {field: op, "select": "employee_id", "limit": "1", "active": "eq.true"})
+        if rows and rows[0].get("employee_id"):
+            return rows[0]["employee_id"]
+    return clean
+
+
 notify_svc.configure(
     sb_insert=sb_insert,
     sb_select=sb_select,
@@ -1663,6 +1679,7 @@ notify_svc.configure(
     gen_id=gen_id,
     now_utc=now_utc,
     session_cache=SESSION_CACHE,
+    resolve_receiver=normalize_notification_receiver,
 )
 
 DEMO_LEADS = []
@@ -6503,19 +6520,36 @@ async def delete_loan(loan_id: str, cu: User=Depends(get_current_user)):
 # ---- Customers & Notifications ----
 
 def _notification_recipient_id(cu: User) -> str:
-    return cu.acting_as_employee_id or cu.employee_id or cu.user_id
+    return resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id or cu.user_id
+
+
+def _notification_user_ids(cu: User) -> List[str]:
+    """All IDs that may appear in notifications.user_id for this login."""
+    ids = employee_assignee_ids(cu)
+    primary = _notification_recipient_id(cu)
+    if primary and primary not in ids:
+        ids.insert(0, primary)
+    return ids or [cu.user_id]
+
+
+def _notification_user_filter(cu: User) -> str:
+    ids = _notification_user_ids(cu)
+    if len(ids) == 1:
+        return f"eq.{ids[0]}"
+    return f"in.({','.join(ids)})"
 
 
 def _owns_notification(cu: User, notification: Dict[str, Any]) -> bool:
-    return notification.get("user_id") == _notification_recipient_id(cu)
+    note_user = notification.get("user_id")
+    if not note_user:
+        return False
+    return note_user in _notification_user_ids(cu)
 
 
 def _merge_notifications_for_user(cu: User, db_rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    user_id = _notification_recipient_id(cu)
+    user_ids = set(_notification_user_ids(cu))
     cache_ids = {n.get("notification_id") for n in db_rows}
-    cached = [n for n in SESSION_CACHE.get("notifications", []) if n.get("user_id") == user_id]
-    if cu.role == "admin":
-        cached = SESSION_CACHE.get("notifications", [])
+    cached = [n for n in SESSION_CACHE.get("notifications", []) if n.get("user_id") in user_ids]
     merged = cached + [n for n in db_rows if n.get("notification_id") not in cache_ids]
     merged.sort(key=lambda n: n.get("created_at") or "", reverse=True)
     return merged
@@ -6562,13 +6596,12 @@ async def list_notifications(
     unread_only: bool = False,
     read_only: bool = False,
 ):
-    user_id = _notification_recipient_id(cu)
     params: Dict[str, Any] = {
         "select": "*",
         "order": "created_at.desc",
         "limit": str(min(max(limit, 1), 100)),
         "offset": str(max(offset, 0)),
-        "user_id": f"eq.{user_id}",
+        "user_id": _notification_user_filter(cu),
     }
     if unread_only:
         params["is_read"] = "eq.false"
@@ -6596,12 +6629,14 @@ async def list_notifications(
 
 @api_router.get("/notifications/unread-count")
 async def notifications_unread_count(cu: User = Depends(get_current_user)):
-    user_id = _notification_recipient_id(cu)
-    params = {"select": "notification_id,is_read,user_id", "is_read": "eq.false", "user_id": f"eq.{user_id}"}
+    user_ids = set(_notification_user_ids(cu))
+    params = {
+        "select": "notification_id,is_read,user_id",
+        "is_read": "eq.false",
+        "user_id": _notification_user_filter(cu),
+    }
     rows = sb_select("notifications", params) or []
-    cached = [n for n in SESSION_CACHE.get("notifications", []) if not n.get("is_read")]
-    if cu.role != "admin":
-        cached = [n for n in cached if n.get("user_id") == user_id]
+    cached = [n for n in SESSION_CACHE.get("notifications", []) if not n.get("is_read") and n.get("user_id") in user_ids]
     db_ids = {r.get("notification_id") for r in rows}
     extra = [n for n in cached if n.get("notification_id") not in db_ids]
     return {"unread_count": len(rows) + len(extra)}
@@ -6633,17 +6668,17 @@ async def mark_notification_read(notification_id: str, cu: User=Depends(get_curr
 
 @api_router.post("/notifications/read-all")
 async def mark_all_notifications_read(cu: User = Depends(get_current_user)):
-    user_id = _notification_recipient_id(cu)
+    user_ids = set(_notification_user_ids(cu))
     stamp = now_utc().isoformat()
     rows = sb_select("notifications", {
-        "user_id": f"eq.{user_id}",
+        "user_id": _notification_user_filter(cu),
         "is_read": "eq.false",
         "select": "notification_id",
     }) or []
     for row in rows:
         sb_update("notifications", "notification_id", row["notification_id"], {"is_read": True, "read_at": stamp})
     SESSION_CACHE["notifications"] = [
-        ({**n, "is_read": True, "read_at": stamp} if n.get("user_id") == user_id and not n.get("is_read") else n)
+        ({**n, "is_read": True, "read_at": stamp} if n.get("user_id") in user_ids and not n.get("is_read") else n)
         for n in SESSION_CACHE["notifications"]
     ]
     return {"status": "ok", "marked": len(rows)}

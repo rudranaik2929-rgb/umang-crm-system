@@ -14,6 +14,7 @@ import { getSupabaseClient, isSupabaseRealtimeConfigured } from '../lib/supabase
 import { useAuth } from '../auth/AuthContext';
 import type { CrmNotification, NotificationFilter, NotificationListResponse } from './types';
 import { FILTER_TYPE_MAP } from './types';
+import { usePushNotifications } from './usePushNotifications';
 
 interface NotificationContextValue {
   items: CrmNotification[];
@@ -40,7 +41,15 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const [offset, setOffset] = useState(0);
   const [hasMore, setHasMore] = useState(true);
   const listOpts = useRef<{ search?: string; filter?: NotificationFilter }>({});
-  const recipientId = user?.acting_as_employee_id || user?.employee_id || user?.user_id;
+  const [pushEnabled, setPushEnabled] = useState(false);
+
+  const recipientIds = useMemo(() => {
+    const ids = new Set<string>();
+    if (user?.acting_as_employee_id) ids.add(user.acting_as_employee_id);
+    if (user?.employee_id) ids.add(user.employee_id);
+    if (user?.user_id) ids.add(user.user_id);
+    return [...ids];
+  }, [user?.acting_as_employee_id, user?.employee_id, user?.user_id]);
 
   const refreshUnread = useCallback(async () => {
     if (!user) return;
@@ -148,23 +157,42 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   }, [user, refreshUnread]);
 
   useEffect(() => {
-    if (!user || !recipientId || !isSupabaseRealtimeConfigured()) return;
+    if (!user) {
+      setPushEnabled(false);
+      return;
+    }
+    api
+      .get('/notifications/preferences', { bypassCache: true } as any)
+      .then((r) => setPushEnabled(Boolean(r.data?.push_enabled ?? true)))
+      .catch(() => setPushEnabled(true));
+  }, [user?.user_id, user?.acting_as_employee_id]);
+
+  usePushNotifications(pushEnabled, refresh);
+
+  useEffect(() => {
+    if (!user || recipientIds.length === 0 || !isSupabaseRealtimeConfigured()) return;
     const sb = getSupabaseClient();
     if (!sb) return;
 
+    const filter =
+      recipientIds.length === 1
+        ? `user_id=eq.${recipientIds[0]}`
+        : `user_id=in.(${recipientIds.join(',')})`;
+
     const channel = sb
-      .channel(`notifications:${recipientId}`)
+      .channel(`notifications:${recipientIds.join('-')}`)
       .on(
         'postgres_changes',
         {
           event: 'INSERT',
           schema: 'public',
           table: 'notifications',
-          filter: `user_id=eq.${recipientId}`,
+          filter,
         },
         (payload) => {
           const row = payload.new as CrmNotification;
           if (!row?.notification_id) return;
+          if (row.user_id && !recipientIds.includes(row.user_id)) return;
           setItems((prev) => {
             if (prev.some((n) => n.notification_id === row.notification_id)) return prev;
             return [row, ...prev];
@@ -177,7 +205,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
     return () => {
       sb.removeChannel(channel);
     };
-  }, [user, recipientId]);
+  }, [user, recipientIds]);
 
   const value = useMemo(
     () => ({

@@ -4,7 +4,7 @@ import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api } from '../../src/lib/api';
-import { usePushNotifications } from '../../src/notifications/usePushNotifications';
+import { usePushNotifications, registerPushToken } from '../../src/notifications/usePushNotifications';
 import type { NotificationPreferences } from '../../src/notifications/types';
 
 const TOGGLES: { key: keyof NotificationPreferences; label: string; hint: string }[] = [
@@ -50,8 +50,8 @@ export default function NotificationSettingsPage() {
     setSaving(true);
     try {
       await api.patch('/notifications/preferences', { [key]: value });
-      if (key === 'push_enabled' && value && Platform.OS === 'web' && typeof Notification !== 'undefined') {
-        await Notification.requestPermission();
+      if (key === 'push_enabled' && value && Platform.OS === 'web') {
+        await registerPushToken();
       }
     } finally {
       setSaving(false);

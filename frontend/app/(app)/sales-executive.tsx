@@ -11,14 +11,12 @@ import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { LeadQueueTable } from '../../src/components/LeadQueueTable';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { Ionicons } from '@expo/vector-icons';
-import { useResponsive } from '../../src/hooks/useResponsive';
 
 type Tab = 'queue' | 'followups';
 
 export default function SalesExecutive() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const { contentPadding } = useResponsive();
   const params = useLocalSearchParams<{ tab?: string; openLead?: string }>();
   const workspaceCacheKey = useMemo(
     () => `sales-workspace-${user?.employee_id || user?.email || user?.user_id || 'anon'}`,
@@ -80,7 +78,7 @@ export default function SalesExecutive() {
           </Text>
         </Pressable>
       </View>
-      <ScrollView contentContainerStyle={[styles.content, { padding: contentPadding }]}>
+      <ScrollView contentContainerStyle={styles.content}>
         {tab === 'queue' ? (
           loading ? <ActivityIndicator color={colors.primary} /> : queueLeads.length === 0 ? (
             <EmptyState variant="leads" title="No leads in your queue" description="Leads appear when assigned to you." />
@@ -107,7 +105,7 @@ export default function SalesExecutive() {
 }
 
 const styles = StyleSheet.create({
-  content: { gap: 20 },
+  content: { padding: 24, gap: 20 },
   tabs: { flexDirection: 'row', borderBottomWidth: 1 },
   tab: { flex: 1, alignItems: 'center', paddingVertical: 12, borderBottomWidth: 2, borderBottomColor: 'transparent' },
   iconBtn: { width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
