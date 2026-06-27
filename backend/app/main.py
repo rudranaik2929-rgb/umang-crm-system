@@ -1558,7 +1558,7 @@ def safe_json(value: Any) -> Any:
 # ---- Pydantic Models ----
 class User(BaseModel):
     user_id: str; email: str; name: str; picture: Optional[str]=None
-    role: Optional[str]=None; acting_as_employee_id: Optional[str]=None; created_at: datetime
+    role: Optional[str]=None; acting_as_employee_id: Optional[str]=None; created_at: Optional[datetime]=None
     employee_id: Optional[str]=None
     allowed_pages: Optional[List[str]] = None
     dashboard_type: Optional[str] = None
@@ -1805,6 +1805,8 @@ def public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
 def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize role, sidebar pages, dashboard landing, and fix wrong employee_id links."""
     u = _repair_user_employee_link(dict(u))
+    if not u.get("created_at"):
+        u["created_at"] = now_utc().isoformat()
     role = (u.get("role") or "telecaller").strip().lower()
     u["role"] = role
     pages = u.get("allowed_pages")
