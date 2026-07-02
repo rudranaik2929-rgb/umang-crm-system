@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet, Pressable, Image, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, ScrollView, useWindowDimensions } from 'react-native';
 import { usePathname, useRouter } from 'expo-router';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { visibleNavFor, ROLES } from '../lib/constants';
+import { NARROW_BREAKPOINT, SIDEBAR_WIDTH_COLLAPSED, SIDEBAR_WIDTH_EXPANDED, SIDEBAR_WIDTH_MOBILE } from '../layout/SidebarLayoutContext';
 import { Ionicons } from '@expo/vector-icons';
 
 const ICON_MAP: Record<string, any> = {
@@ -34,23 +35,29 @@ export function Sidebar({ collapsed, onToggle }: Props) {
   const { user } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const { width: windowWidth } = useWindowDimensions();
+  const isNarrow = windowWidth < NARROW_BREAKPOINT;
+  const effectiveCollapsed = isNarrow || collapsed;
+  const sidebarWidth = isNarrow
+    ? SIDEBAR_WIDTH_MOBILE
+    : (effectiveCollapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED);
 
   const role = ROLES.find((r) => r.key === user?.role);
   const items = visibleNavFor(user?.role, user?.email, user?.allowed_pages);
 
   return (
     <View style={[styles.wrap, {
-      width: collapsed ? 76 : 264,
+      width: sidebarWidth,
       backgroundColor: colors.sidebar,
       borderRightColor: colors.border,
     }]} testID="sidebar">
-      <View style={[styles.brand, { borderBottomColor: colors.border }]}>
+      <View style={[styles.brand, { borderBottomColor: colors.border, height: isNarrow ? 56 : 64, paddingHorizontal: isNarrow ? 8 : 14 }]}>
         <Image
           source={require('../../assets/images/logo.png')}
-          style={[styles.logoImage, collapsed && { width: 38, height: 38 }]}
+          style={[styles.logoImage, effectiveCollapsed && { width: isNarrow ? 34 : 38, height: isNarrow ? 34 : 38 }]}
           resizeMode="contain"
         />
-        {!collapsed && (
+        {!effectiveCollapsed && (
           <View style={{ flex: 1 }}>
             <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Hometech LLP</Text>
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>Real Estate CRM</Text>
@@ -58,6 +65,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
         )}
       </View>
 
+      {!isNarrow ? (
       <Pressable
         onPress={onToggle}
         testID="sidebar-toggle"
@@ -73,15 +81,16 @@ export function Sidebar({ collapsed, onToggle }: Props) {
       >
         {({ hovered }: any) => (
           <Ionicons
-            name={collapsed ? 'chevron-forward' : 'chevron-back'}
+            name={effectiveCollapsed ? 'chevron-forward' : 'chevron-back'}
             size={16}
             color={hovered ? '#fff' : colors.textSecondary}
           />
         )}
       </Pressable>
+      ) : null}
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: 12 }}>
-        {!collapsed && (
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingVertical: isNarrow ? 8 : 12 }}>
+        {!effectiveCollapsed && (
           <Text style={[styles.section, { color: colors.textMuted }]}>WORKSPACE</Text>
         )}
         {items.map((item) => {
@@ -96,17 +105,19 @@ export function Sidebar({ collapsed, onToggle }: Props) {
                 {
                   backgroundColor: active ? colors.primary + '20' : (hovered ? colors.surfaceAlt : 'transparent'),
                   borderLeftColor: active ? colors.primary : 'transparent',
-                  paddingHorizontal: collapsed ? 0 : 16,
-                  justifyContent: collapsed ? 'center' : 'flex-start',
+                  paddingHorizontal: effectiveCollapsed ? 0 : 16,
+                  justifyContent: effectiveCollapsed ? 'center' : 'flex-start',
+                  height: isNarrow ? 44 : 40,
+                  marginHorizontal: isNarrow ? 4 : 8,
                 },
               ]}
             >
               <Ionicons
                 name={ICON_MAP[item.icon] || 'ellipse-outline'}
-                size={18}
+                size={isNarrow ? 20 : 18}
                 color={active ? colors.primary : colors.textSecondary}
               />
-              {!collapsed && (
+              {!effectiveCollapsed && (
                 <Text style={[styles.navLabel, {
                   color: active ? colors.text : colors.textSecondary,
                   fontWeight: active ? '600' : '500',
@@ -119,17 +130,17 @@ export function Sidebar({ collapsed, onToggle }: Props) {
         })}
       </ScrollView>
 
-      <View style={[styles.userCard, { borderTopColor: colors.border }]}>
+      <View style={[styles.userCard, { borderTopColor: colors.border, padding: isNarrow ? 8 : 12, justifyContent: effectiveCollapsed ? 'center' : 'flex-start' }]}>
         {user?.picture ? (
-          <Image source={{ uri: user.picture }} style={styles.avatar} />
+          <Image source={{ uri: user.picture }} style={[styles.avatar, isNarrow && { width: 32, height: 32, borderRadius: 16 }]} />
         ) : (
-          <View style={[styles.avatar, { backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }]}>
-            <Text style={{ color: '#fff', fontWeight: '600' }}>
+          <View style={[styles.avatar, isNarrow && { width: 32, height: 32, borderRadius: 16 }, { backgroundColor: colors.primary, alignItems: 'center', justifyContent: 'center' }]}>
+            <Text style={{ color: '#fff', fontWeight: '600', fontSize: isNarrow ? 12 : 14 }}>
               {user?.name?.[0]?.toUpperCase() || 'U'}
             </Text>
           </View>
         )}
-        {!collapsed && (
+        {!effectiveCollapsed && (
           <View style={{ flex: 1, marginLeft: 10 }}>
             <Text numberOfLines={1} style={[styles.userName, { color: colors.text }]}>
               {user?.name || 'Guest'}

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Animated, Easing, useWindowDimensions } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
@@ -17,6 +17,7 @@ import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { useNotifications } from '../../src/notifications/NotificationContext';
 import { NotificationCard } from '../../src/components/NotificationCard';
 import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
+import { useSidebarLayout } from '../../src/layout/SidebarLayoutContext';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
@@ -74,8 +75,10 @@ export default function MyDashboard() {
   const { colors } = useTheme();
   const { user } = useAuth();
   const router = useRouter();
-  const { width: screenWidth } = useWindowDimensions();
-  const kpiCardWidth = screenWidth < 400 ? '48%' : screenWidth < 720 ? '31%' : '23%';
+  const { contentWidth, isNarrow } = useSidebarLayout();
+  const isCompact = isNarrow || contentWidth < 640;
+  const kpiCardWidth = contentWidth < 360 ? '100%' : contentWidth < 520 ? '48%' : contentWidth < 720 ? '31%' : '23%';
+  const kpiMaxWidth = isCompact ? undefined : 220;
   const { items: notifications, unreadCount, refresh: refreshNotifications } = useNotifications();
   const cached = getSnapshot<any>('my-dashboard');
   const hasFreshCache = cached?.data?.missed_leads_total != null || cached?.data?.missed_leads != null;
@@ -141,27 +144,34 @@ export default function MyDashboard() {
   };
 
   return (
-    <View style={{ flex: 1 }}>
+    <View style={{ flex: 1, minWidth: 0 }}>
       <NewLeadPopup enabled={false} />
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <View style={{ flex: 1 }}>
-          <TopBar title="My Dashboard" subtitle={`${roleLabel(role)} workspace`} />
-        </View>
-        <Pressable
-          onPress={load}
-          disabled={loading}
-          style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1 }]}
-        >
-          <Ionicons name="refresh" size={18} color={colors.primary} />
-        </Pressable>
-        <LivePulse />
-      </View>
-      <ScrollView contentContainerStyle={styles.content}>
+      <TopBar
+        title="My Dashboard"
+        subtitle={`${roleLabel(role)} workspace`}
+        rightAction={
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: isCompact ? 8 : 12 }}>
+            <Pressable
+              onPress={load}
+              disabled={loading}
+              style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1, marginRight: 0 }]}
+            >
+              <Ionicons name="refresh" size={18} color={colors.primary} />
+            </Pressable>
+            {!isCompact ? <LivePulse /> : null}
+          </View>
+        }
+      />
+      <ScrollView contentContainerStyle={[styles.content, isCompact && styles.contentCompact]}>
         {/* Hero score card */}
-        <View style={[styles.hero, { backgroundColor: colors.surface, borderColor: accent + '40' }]}>
-          <View style={{ flex: 1 }}>
+        <View style={[
+          styles.hero,
+          isCompact && styles.heroCompact,
+          { backgroundColor: colors.surface, borderColor: accent + '40' },
+        ]}>
+          <View style={{ flex: 1, minWidth: 0, width: isCompact ? '100%' : undefined }}>
             <Text style={[styles.greeting, { color: colors.textMuted }]}>WELCOME BACK</Text>
-            <Text style={[styles.heroName, { color: colors.text }]}>{user?.name || data.employee?.name || 'You'}</Text>
+            <Text style={[styles.heroName, isCompact && styles.heroNameCompact, { color: colors.text }]}>{user?.name || data.employee?.name || 'You'}</Text>
             <View style={[styles.heroRoleChip, { backgroundColor: accent + '20', borderColor: accent + '50' }]}>
               <Ionicons name="briefcase-outline" size={12} color={accent} />
               <Text style={{ color: accent, fontSize: 11, fontWeight: '700', letterSpacing: 0.6 }}>
@@ -186,7 +196,7 @@ export default function MyDashboard() {
             <Pressable
               testID="my-dashboard-cta"
               onPress={() => router.push(cta.route as any)}
-              style={[styles.ctaBtn, { backgroundColor: accent }]}
+              style={[styles.ctaBtn, isCompact && styles.ctaBtnCompact, { backgroundColor: accent }]}
             >
               <Text style={styles.ctaText}>{cta.label}</Text>
               <Ionicons name="arrow-forward" size={14} color="#fff" />
@@ -204,7 +214,7 @@ export default function MyDashboard() {
           </View>
 
           {/* New leads + backlog summary */}
-          <View style={styles.scoreWrap}>
+          <View style={[styles.scoreWrap, isCompact && styles.scoreWrapCompact]}>
             <Pressable
               onPress={() => handleKpiPress('new_leads')}
               style={[styles.newLeadsCard, { backgroundColor: accent + '12', borderColor: accent + '40' }]}
@@ -319,6 +329,8 @@ export default function MyDashboard() {
                     color={c}
                     colors={colors}
                     cardWidth={kpiCardWidth}
+                    cardMaxWidth={kpiMaxWidth}
+                    compact={isCompact}
                     highlight={forceHighlight || roleHighlights.includes(kpi.metric)}
                     onPress={() => handleKpiPress(kpi.metric)}
                     helper={helper}
@@ -435,26 +447,28 @@ function TempCard({ icon, label, value, color, desc, colors, testID }: any) {
   );
 }
 
-function KPI({ label, value, icon, color, colors, highlight, onPress, testID, helper, cardWidth }: any) {
+function KPI({ label, value, icon, color, colors, highlight, onPress, testID, helper, cardWidth, cardMaxWidth, compact }: any) {
   return (
     <Pressable
       testID={testID}
       onPress={onPress}
-      style={[styles.kpiCard, {
+      style={[styles.kpiCard, compact && styles.kpiCardCompact, {
         width: cardWidth,
+        maxWidth: cardMaxWidth,
+        minWidth: compact ? undefined : 130,
         backgroundColor: colors.surface,
         borderColor: highlight ? color + '60' : colors.border,
         borderWidth: highlight ? 1.5 : 1,
       }]}
     >
       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
           <Ionicons name={icon} size={13} color={color} />
-          <Text style={[styles.kpiLabel, { color: colors.textMuted }]}>{label.toUpperCase()}</Text>
+          <Text style={[styles.kpiLabel, { color: colors.textMuted }]} numberOfLines={compact ? 1 : 2}>{label.toUpperCase()}</Text>
         </View>
         <Ionicons name="chevron-forward" size={14} color={colors.textMuted} />
       </View>
-      <Text style={[styles.kpiVal, { color: highlight ? color : colors.text }]}>{value}</Text>
+      <Text style={[styles.kpiVal, compact && styles.kpiValCompact, { color: highlight ? color : colors.text }]}>{value}</Text>
       {helper ? (
         <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }} numberOfLines={2}>{helper}</Text>
       ) : (
@@ -492,13 +506,21 @@ function LivePulse() {
 
 const styles = StyleSheet.create({
   content: { padding: 24, gap: 24 },
+  contentCompact: { padding: 12, gap: 16 },
   hero: {
     flexDirection: 'row', flexWrap: 'wrap', gap: 24,
     padding: 28, borderRadius: 16, borderWidth: 1,
     alignItems: 'center',
   },
+  heroCompact: {
+    flexDirection: 'column',
+    alignItems: 'stretch',
+    padding: 16,
+    gap: 16,
+  },
   greeting: { fontSize: 11, fontWeight: '700', letterSpacing: 1.4 },
   heroName: { fontSize: 32, fontWeight: '700', letterSpacing: -0.6, marginTop: 6 },
+  heroNameCompact: { fontSize: 24 },
   heroRoleChip: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     alignSelf: 'flex-start', paddingHorizontal: 10, height: 26,
@@ -510,6 +532,11 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     paddingHorizontal: 18, height: 42, borderRadius: 10, marginTop: 18,
   },
+  ctaBtnCompact: {
+    alignSelf: 'stretch',
+    justifyContent: 'center',
+    paddingHorizontal: 14,
+  },
   ctaBtnOutline: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     alignSelf: 'flex-start',
@@ -518,6 +545,7 @@ const styles = StyleSheet.create({
   },
   ctaText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   scoreWrap: { alignItems: 'stretch', gap: 10, width: '100%', maxWidth: 320, flexGrow: 1, minWidth: 150 },
+  scoreWrapCompact: { maxWidth: undefined, minWidth: undefined, flexGrow: 0 },
   newLeadsCard: {
     padding: 16, borderRadius: 12, borderWidth: 1, alignItems: 'center', gap: 4,
   },
@@ -542,8 +570,10 @@ const styles = StyleSheet.create({
 
   kpiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, justifyContent: 'flex-start' },
   kpiCard: { minWidth: 130, flexGrow: 1, maxWidth: 220, padding: 14, borderRadius: 10, gap: 6 },
-  kpiLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
+  kpiCardCompact: { padding: 12, gap: 4 },
+  kpiLabel: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, flexShrink: 1 },
   kpiVal: { fontSize: 26, fontWeight: '700', letterSpacing: -0.5 },
+  kpiValCompact: { fontSize: 22 },
   missedBanner: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -1,17 +1,23 @@
 import React, { createContext, useContext, useMemo } from 'react';
-import { Platform, ViewStyle } from 'react-native';
+import { Platform, ViewStyle, useWindowDimensions } from 'react-native';
 
 export const SIDEBAR_WIDTH_EXPANDED = 264;
 export const SIDEBAR_WIDTH_COLLAPSED = 76;
+export const SIDEBAR_WIDTH_MOBILE = 56;
+export const NARROW_BREAKPOINT = 900;
 
 type SidebarLayoutValue = {
   collapsed: boolean;
   width: number;
+  isNarrow: boolean;
+  contentWidth: number;
 };
 
 const SidebarLayoutContext = createContext<SidebarLayoutValue>({
   collapsed: false,
   width: SIDEBAR_WIDTH_EXPANDED,
+  isNarrow: false,
+  contentWidth: 0,
 });
 
 export function SidebarLayoutProvider({
@@ -21,13 +27,20 @@ export function SidebarLayoutProvider({
   collapsed: boolean;
   children: React.ReactNode;
 }) {
-  const value = useMemo(
-    () => ({
-      collapsed,
-      width: collapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED,
-    }),
-    [collapsed],
-  );
+  const { width: windowWidth } = useWindowDimensions();
+  const isNarrow = windowWidth < NARROW_BREAKPOINT;
+  const value = useMemo(() => {
+    const effectiveCollapsed = isNarrow || collapsed;
+    const sidebarWidth = isNarrow
+      ? SIDEBAR_WIDTH_MOBILE
+      : (effectiveCollapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED);
+    return {
+      collapsed: effectiveCollapsed,
+      width: sidebarWidth,
+      isNarrow,
+      contentWidth: Math.max(280, windowWidth - sidebarWidth),
+    };
+  }, [collapsed, isNarrow, windowWidth]);
   return (
     <SidebarLayoutContext.Provider value={value}>
       {children}
