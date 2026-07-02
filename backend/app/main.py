@@ -1937,23 +1937,13 @@ def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
         return
     if cu.role == "marketing" and lead.get("status") == "negative":
         return
-    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
-    if emp_id:
-        emps = sb_select("employees", {
-            "employee_id": f"eq.{emp_id}",
-            "select": "employee_id,name,user_id",
-            "limit": "1",
-        })
-        if emps and lead_assigned_to_employee(lead, emps[0]):
-            return
+    employee = _employee_record_for_user(cu)
+    if employee and lead_assigned_to_employee(lead, employee):
+        return
     assignee_ids = employee_assignee_ids(cu)
     assigned = clean_text(lead.get("assigned_to"))
     if assigned and assigned in assignee_ids:
         return
-    if emp_id:
-        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "name", "limit": "1"})
-        if emps and assigned.lower() == clean_text(emps[0].get("name")).lower():
-            return
     raise HTTPException(status_code=403, detail="You can only update leads assigned to you.")
 
 
@@ -6525,6 +6515,7 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
     lead = rows[0] if rows else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
     if not lead:
         raise HTTPException(404, "Lead not found")
+    ensure_lead_edit_access(cu, lead)
 
     if p.follow_up_date and p.follow_up_time:
         follow_up_at = parse_follow_up_at(p.follow_up_date, p.follow_up_time)

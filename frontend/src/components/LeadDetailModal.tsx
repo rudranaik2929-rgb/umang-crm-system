@@ -82,11 +82,16 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   }) => {
     if (!leadId || !followUpPayload) return;
     setBusy(followUpAction);
+    setActionError(null);
     try {
       await api.patch(`/leads/${leadId}`, followUpPayload);
       await api.post(`/leads/${leadId}/follow-up`, form);
       setFollowUpOpen(false);
       goFollowUps();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not schedule follow-up. Please try again.');
+      setFollowUpOpen(false);
     } finally {
       setBusy(null);
       setFollowUpAction(null);
@@ -110,6 +115,10 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [showAssignDropdown, setShowAssignDropdown] = useState(false);
   const [assignSearch, setAssignSearch] = useState('');
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [editingDetails, setEditingDetails] = useState(false);
+  const [detailForm, setDetailForm] = useState({ budget: '', location: '', property_type: '', notes: '' });
+  const [savingDetails, setSavingDetails] = useState(false);
   const [brokerageAmount, setBrokerageAmount] = useState('');
   const subAnim = React.useRef(new Animated.Value(0)).current;
   const confettiAnims = React.useRef([...Array(50)].map(() => new Animated.Value(0))).current;
@@ -184,6 +193,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setShowAssignDropdown(false);
       setAssignSearch('');
       setActionMessage(null);
+      setActionError(null);
+      setEditingDetails(false);
       setBrokerageAmount('');
       api.get('/employees').then(r => setEmployees((r.data || []).filter((e: any) => e.active))).catch(() => {});
     }
@@ -194,6 +205,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setActiveCategory(null);
       setNote('');
       setEditingNoteId(null);
+      setEditingDetails(false);
       setNoteError(null);
       setNoteSaved(null);
       noteDirtyRef.current = false;
@@ -205,6 +217,21 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setBrokerageAmount(String(data.lead.brokerage_amount));
     }
   }, [data?.lead?.brokerage_amount]);
+
+  useEffect(() => {
+    if (!data?.lead || editingDetails) return;
+    let notesValue = data.lead.notes || '';
+    if (notesValue.startsWith('Preferred Property:')) {
+      const lines = notesValue.split('\n');
+      notesValue = lines.slice(1).join('\n').trim();
+    }
+    setDetailForm({
+      budget: data.lead.budget || '',
+      location: data.lead.location || '',
+      property_type: data.lead.property_type || '',
+      notes: notesValue,
+    });
+  }, [data?.lead, editingDetails]);
 
   const fetchSummary = async () => {
     if (!leadId) return;
@@ -244,6 +271,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const updateLead = async (payload: any, action: string, opts?: { closeAfter?: boolean }) => {
     if (!leadId) return;
     setBusy(action);
+    setActionError(null);
     try {
       await api.patch(`/leads/${leadId}`, payload);
       if (payload.stage === 'closed') {
@@ -256,6 +284,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
         return;
       }
       await load(true);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not update lead. Please try again.');
     } finally {
       setBusy(null);
     }
@@ -412,6 +443,37 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       preferredProperty = String(housingRaw.project_name || housingRaw.project || '').trim();
     }
   }
+
+  const saveCustomerDetails = async () => {
+    if (!leadId) return;
+    setSavingDetails(true);
+    setActionError(null);
+    setActionMessage(null);
+    try {
+      let notesPayload = detailForm.notes.trim();
+      if (preferredProperty) {
+        notesPayload = notesPayload
+          ? `Preferred Property: ${preferredProperty}\n${notesPayload}`
+          : `Preferred Property: ${preferredProperty}`;
+      }
+      await api.patch(`/leads/${leadId}`, {
+        budget: detailForm.budget.trim() || null,
+        location: detailForm.location.trim() || null,
+        property_type: detailForm.property_type.trim() || null,
+        notes: notesPayload || null,
+      });
+      setEditingDetails(false);
+      setActionMessage('Customer details updated.');
+      onChanged?.();
+      broadcastDataChanged();
+      await load(true);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not save customer details.');
+    } finally {
+      setSavingDetails(false);
+    }
+  };
 
   if (!visible) return null;
 
@@ -700,22 +762,69 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
 
                 {/* Details */}
                 <View style={styles.block}>
-                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>CUSTOMER DETAILS</Text>
-                  <DetailRow label="Budget" value={formatBudgetStringLakhs(lead.budget) || lead.budget} colors={colors} />
-                  <DetailRow label="Location" value={lead.location} colors={colors} />
-                  <DetailRow
-                    label="Configuration"
-                    value={
-                      (housingRaw ? formatHousingConfiguration(housingRaw) : null)
-                      || lead.property_type
-                    }
-                    colors={colors}
-                  />
-                  {preferredProperty ? (
-                    <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
-                  ) : null}
-                  <DetailRow label="Source" value={lead.source} colors={colors} />
-                  <DetailRow label="Notes" value={cleanNotes} colors={colors} />
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+                    <Text style={[styles.blockTitle, { color: colors.textSecondary, marginBottom: 0 }]}>CUSTOMER DETAILS</Text>
+                    {!editingDetails ? (
+                      <Pressable
+                        testID="lead-details-edit"
+                        onPress={() => setEditingDetails(true)}
+                        style={[styles.contactBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '10' }]}
+                      >
+                        <Ionicons name="create-outline" size={14} color={colors.primary} />
+                        <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>Edit</Text>
+                      </Pressable>
+                    ) : (
+                      <Pressable
+                        onPress={() => {
+                          setEditingDetails(false);
+                          setActionError(null);
+                        }}
+                        style={[styles.contactBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+                      >
+                        <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '700' }}>Cancel</Text>
+                      </Pressable>
+                    )}
+                  </View>
+                  {editingDetails ? (
+                    <View style={{ gap: 10, marginTop: 4 }}>
+                      <DetailField label="Budget" value={detailForm.budget} onChangeText={(v) => setDetailForm((f) => ({ ...f, budget: v }))} colors={colors} placeholder="e.g. 45 - 50 L" />
+                      <DetailField label="Location" value={detailForm.location} onChangeText={(v) => setDetailForm((f) => ({ ...f, location: v }))} colors={colors} placeholder="Area / city" />
+                      <DetailField label="Configuration" value={detailForm.property_type} onChangeText={(v) => setDetailForm((f) => ({ ...f, property_type: v }))} colors={colors} placeholder="e.g. 2BHK" />
+                      <DetailField label="Notes" value={detailForm.notes} onChangeText={(v) => setDetailForm((f) => ({ ...f, notes: v }))} colors={colors} placeholder="Customer notes" multiline />
+                      {preferredProperty ? (
+                        <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
+                      ) : null}
+                      <DetailRow label="Source" value={lead.source} colors={colors} />
+                      <Pressable
+                        testID="lead-details-save"
+                        onPress={saveCustomerDetails}
+                        disabled={savingDetails}
+                        style={[styles.saveBtn, { backgroundColor: colors.primary, opacity: savingDetails ? 0.6 : 1 }]}
+                      >
+                        {savingDetails ? <ActivityIndicator color="#fff" size="small" /> : (
+                          <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Save Details</Text>
+                        )}
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <>
+                      <DetailRow label="Budget" value={formatBudgetStringLakhs(lead.budget) || lead.budget} colors={colors} />
+                      <DetailRow label="Location" value={lead.location} colors={colors} />
+                      <DetailRow
+                        label="Configuration"
+                        value={
+                          (housingRaw ? formatHousingConfiguration(housingRaw) : null)
+                          || lead.property_type
+                        }
+                        colors={colors}
+                      />
+                      {preferredProperty ? (
+                        <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
+                      ) : null}
+                      <DetailRow label="Source" value={lead.source} colors={colors} />
+                      <DetailRow label="Notes" value={cleanNotes} colors={colors} />
+                    </>
+                  )}
                 </View>
 
                 {/* Call / visit note — editable anytime */}
@@ -778,6 +887,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 {actionMessage ? (
                   <View style={styles.block}>
                     <Text style={{ color: colors.positive, fontSize: 13, fontWeight: '600' }}>{actionMessage}</Text>
+                  </View>
+                ) : null}
+
+                {actionError ? (
+                  <View style={[styles.block, { borderColor: colors.negative + '55', backgroundColor: colors.negative + '10' }]}>
+                    <Text style={{ color: colors.negative, fontSize: 13, fontWeight: '600' }}>{actionError}</Text>
                   </View>
                 ) : null}
 
@@ -1122,6 +1237,33 @@ function DetailRow({ label, value, colors }: any) {
     <View style={{ flexDirection: 'row', paddingVertical: 6 }}>
       <Text style={{ width: 110, fontSize: 12, color: colors.textMuted }}>{label}</Text>
       <Text style={{ flex: 1, fontSize: 13, color: colors.text }}>{value || '—'}</Text>
+    </View>
+  );
+}
+
+function DetailField({ label, value, onChangeText, colors, placeholder, multiline }: any) {
+  return (
+    <View style={{ gap: 4 }}>
+      <Text style={{ fontSize: 12, color: colors.textMuted, fontWeight: '600' }}>{label}</Text>
+      <TextInput
+        value={value}
+        onChangeText={onChangeText}
+        placeholder={placeholder}
+        placeholderTextColor={colors.textMuted}
+        multiline={multiline}
+        style={{
+          borderWidth: 1,
+          borderColor: colors.border,
+          borderRadius: 8,
+          paddingHorizontal: 12,
+          paddingVertical: multiline ? 10 : 8,
+          minHeight: multiline ? 72 : 40,
+          color: colors.text,
+          backgroundColor: colors.surfaceAlt,
+          fontSize: 13,
+          textAlignVertical: multiline ? 'top' : 'center',
+        }}
+      />
     </View>
   );
 }
