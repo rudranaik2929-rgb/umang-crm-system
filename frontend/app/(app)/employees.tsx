@@ -281,7 +281,10 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [showNewPassword, setShowNewPassword] = useState(false);
   const [role, setRole] = useState('telecaller');
   const [pages, setPages] = useState<string[]>([]);
   const [active, setActive] = useState(true);
@@ -298,7 +301,10 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
     setName(employee.name || '');
     setEmail(employee.email || '');
     setPhone(employee.phone || '');
-    setPassword(getEmployeePassword(employee.employee_id));
+    setCurrentPassword(getEmployeePassword(employee.employee_id));
+    setShowCurrentPassword(false);
+    setNewPassword('');
+    setShowNewPassword(false);
     setRole(employee.role || 'telecaller');
     setPages(pagesForEmployee(employee));
     setActive(employee.active !== false);
@@ -350,10 +356,10 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
 
   const submit = async () => {
     const trimmedEmail = email.trim().toLowerCase();
-    const trimmedPassword = password.trim();
+    const trimmedNewPassword = newPassword.trim();
     if (!employee?.employee_id || !name.trim() || !trimmedEmail) return;
-    if (trimmedPassword.length > 0 && trimmedPassword.length < 4) {
-      setError('Password must be at least 4 characters when changing it.');
+    if (trimmedNewPassword.length > 0 && trimmedNewPassword.length < 4) {
+      setError('New password must be at least 4 characters.');
       return;
     }
     setBusy(true);
@@ -367,9 +373,13 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
         active,
         allowed_pages: pages,
       };
-      if (trimmedPassword.length >= 4) payload.password = trimmedPassword;
+      if (trimmedNewPassword.length >= 4) payload.password = trimmedNewPassword;
       await api.patch(`/employees/${employee.employee_id}`, payload);
-      if (trimmedPassword.length >= 4) setEmployeePassword(employee.employee_id, trimmedPassword);
+      if (trimmedNewPassword.length >= 4) {
+        setEmployeePassword(employee.employee_id, trimmedNewPassword);
+        setCurrentPassword(trimmedNewPassword);
+        setNewPassword('');
+      }
       onSaved();
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
@@ -387,7 +397,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
         <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '88%' }]} onPress={(e: any) => e?.stopPropagation?.()}>
           <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Employee</Text>
           <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 4 }}>
-            Sidebar checkboxes save automatically — no password needed. Change password only when you want a new login password.
+            Sidebar checkboxes save automatically. View current login password below; enter a new password only when you want to change it.
           </Text>
           <ScrollView style={{ marginTop: 4 }} contentContainerStyle={{ paddingBottom: 4 }}>
             <Field label="FULL NAME" testID="edit-emp-name" value={name} onChange={setName} colors={colors} />
@@ -429,16 +439,27 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
               })}
             </View>
 
+            <PasswordDisplayField
+              label="CURRENT LOGIN PASSWORD"
+              testID="edit-emp-current-password"
+              value={currentPassword}
+              visible={showCurrentPassword}
+              onToggleVisible={() => setShowCurrentPassword((v) => !v)}
+              colors={colors}
+              emptyHint="Not saved in this browser — set a new password below if needed"
+            />
             <Field
-              label={password ? 'LOGIN PASSWORD (SAVED — CHANGE ONLY IF NEEDED)' : 'LOGIN PASSWORD (OPTIONAL — SET NEW PASSWORD)'}
-              testID="edit-emp-password"
-              value={password}
-              onChange={setPassword}
+              label="NEW PASSWORD (OPTIONAL)"
+              testID="edit-emp-new-password"
+              value={newPassword}
+              onChange={setNewPassword}
               colors={colors}
               secureTextEntry
               showPasswordToggle
-              autoComplete="off"
-              placeholder={password ? '' : 'Leave blank to keep current password'}
+              showPassword={showNewPassword}
+              onTogglePassword={() => setShowNewPassword((v) => !v)}
+              autoComplete="new-password"
+              placeholder="Type new password to change login"
             />
           </ScrollView>
           {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
@@ -461,8 +482,39 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
   );
 }
 
-function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry, required, showPasswordToggle, autoComplete, placeholder }: any) {
-  const [show, setShow] = React.useState(false);
+function PasswordDisplayField({ label, value, visible, onToggleVisible, colors, testID, emptyHint }: any) {
+  return (
+    <View>
+      <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>{label}</Text>
+      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+        <TextInput
+          testID={testID}
+          value={value}
+          editable={false}
+          secureTextEntry={!visible}
+          placeholder={emptyHint}
+          placeholderTextColor={colors.textMuted}
+          style={{
+            flex: 1, height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
+            padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt + '80',
+          }}
+        />
+        <Pressable
+          onPress={onToggleVisible}
+          style={[styles.eyeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+          accessibilityLabel={visible ? 'Hide current password' : 'Show current password'}
+        >
+          <Ionicons name={visible ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.textSecondary} />
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function Field({ label, value, onChange, colors, testID, keyboardType, secureTextEntry, required, showPasswordToggle, showPassword, onTogglePassword, autoComplete, placeholder }: any) {
+  const [showInternal, setShowInternal] = React.useState(false);
+  const show = showPasswordToggle && onTogglePassword ? showPassword : showInternal;
+  const toggleShow = onTogglePassword || (() => setShowInternal((v) => !v));
   return (
     <View>
       <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>
@@ -486,7 +538,7 @@ function Field({ label, value, onChange, colors, testID, keyboardType, secureTex
         />
         {showPasswordToggle ? (
           <Pressable
-            onPress={() => setShow((v) => !v)}
+            onPress={toggleShow}
             style={[styles.eyeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
           >
             <Ionicons name={show ? 'eye-off-outline' : 'eye-outline'} size={18} color={colors.textSecondary} />

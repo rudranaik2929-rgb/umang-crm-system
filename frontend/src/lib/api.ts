@@ -155,7 +155,9 @@ api.interceptors.response.use(
     }
     config.__isRetry = true;
     const authPath = String(config.url || '').includes('/auth/');
-    const longRunning = isImportUpload || String(config.url || '').includes('/integrations/');
+    const longRunning = isImportUpload
+        || String(config.url || '').includes('/integrations/')
+        || String(config.url || '').includes('/bookings');
     config.timeout = Math.max(
         Number(config.timeout) || 0,
         authPath ? AUTH_TIMEOUT_MS : (longRunning ? IMPORT_TIMEOUT_MS : 30000),
@@ -262,6 +264,9 @@ api.interceptors.request.use(async (config) => {
     if (url.includes('/leads/import')) {
         config.timeout = Math.max(Number(config.timeout) || 0, IMPORT_TIMEOUT_MS);
     }
+    if (url.includes('/bookings') && (config.method === 'post' || config.method === 'patch')) {
+        config.timeout = Math.max(Number(config.timeout) || 0, BOOKING_REQUEST_TIMEOUT_MS);
+    }
     if (t) {
           (config.headers as any)['Authorization'] = `Bearer ${t}`;
     }
@@ -320,6 +325,7 @@ export { LIVE_REFRESH_MS } from './liveSync';
 
 export const META_INTEGRATION_TIMEOUT_MS = 180000;
 export const AUTH_REQUEST_TIMEOUT_MS = AUTH_TIMEOUT_MS;
+export const BOOKING_REQUEST_TIMEOUT_MS = 90000;
 
 export function integrationErrorMessage(error: any, fallback: string): string {
     if (error?.code === 'ECONNABORTED' || String(error?.message || '').toLowerCase().includes('timeout')) {

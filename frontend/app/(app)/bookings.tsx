@@ -1,8 +1,8 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot, BOOKING_REQUEST_TIMEOUT_MS } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
@@ -574,17 +574,33 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
   const [societyCharges, setSocietyCharges] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const openedRef = useRef(false);
 
   useEffect(() => {
-    if (visible && leads[0]) setLeadId(leads[0].lead_id);
-    if (visible) {
-      setError(null);
-      setLeadSearch('');
-      setProperty(''); setAmount(''); setToken('');
-      setFlatCost(''); setAgreementValue(''); setStampDuty('');
-      setRegistrationFees(''); setGst(''); setSocietyCharges('');
+    if (!visible) {
+      openedRef.current = false;
+      return;
     }
-  }, [visible, leads]);
+    if (openedRef.current) return;
+    openedRef.current = true;
+    setError(null);
+    setLeadSearch('');
+    setProperty('');
+    setAmount('');
+    setToken('');
+    setFlatCost('');
+    setAgreementValue('');
+    setStampDuty('');
+    setRegistrationFees('');
+    setGst('');
+    setSocietyCharges('');
+    setLeadId(leads[0]?.lead_id || '');
+  }, [visible]);
+
+  useEffect(() => {
+    if (!visible || leadId) return;
+    if (leads[0]?.lead_id) setLeadId(leads[0].lead_id);
+  }, [visible, leadId, leads]);
 
   const parseNum = (v: string) => {
     const n = parseFloat(v);
@@ -608,30 +624,45 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
       const reg = parseNum(registrationFees); if (reg !== undefined) payload.registration_fees = reg;
       const gstVal = parseNum(gst); if (gstVal !== undefined) payload.gst = gstVal;
       const soc = parseNum(societyCharges); if (soc !== undefined) payload.society_charges = soc;
-      const res = await api.post('/bookings', payload);
+      const res = await api.post('/bookings', payload, { timeout: BOOKING_REQUEST_TIMEOUT_MS });
       onCreated(res.data);
     } catch (e: any) {
-      setError(e?.response?.data?.detail || 'Could not create booking.');
+      const timedOut = e?.code === 'ECONNABORTED' || String(e?.message || '').toLowerCase().includes('timeout');
+      if (timedOut) {
+        setError('Could not create booking — server took too long. Wait a few seconds and try again.');
+      } else {
+        const detail = e?.response?.data?.detail;
+        setError(typeof detail === 'string' ? detail : 'Could not create booking.');
+      }
     } finally { setBusy(false); }
   };
 
-  const selectedLead = leads.find((l: any) => l.lead_id === leadId);
-  const filteredLeads = leads.filter((l: any) => {
+  const selectedLead = useMemo(
+    () => leads.find((l: any) => l.lead_id === leadId),
+    [leads, leadId],
+  );
+
+  const leadOptions = useMemo(() => {
     const q = leadSearch.trim().toLowerCase();
-    if (!q) return true;
-    return String(l.name || '').toLowerCase().includes(q)
+    const matches = (l: any) => !q
+      || String(l.name || '').toLowerCase().includes(q)
       || String(l.phone || '').toLowerCase().includes(q)
       || String(l.location || '').toLowerCase().includes(q);
-  });
-  const leadOptions = filteredLeads.map((l: any) => {
-    const pr = String(l.priority || '').toLowerCase();
-    const tag = pr === 'hot' ? '🔥 Hot' : pr === 'handoff_booking' ? 'Ready' : '';
-    return {
-      key: l.lead_id,
-      label: l.name || 'Lead',
-      sublabel: `${tag ? `${tag} · ` : ''}${l.phone || '—'}${l.location ? ` · ${l.location}` : ''}`,
-    };
-  });
+    const filtered = leads.filter(matches);
+    const selected = leads.find((l: any) => l.lead_id === leadId);
+    const list = selected && !filtered.some((l: any) => l.lead_id === leadId)
+      ? [selected, ...filtered]
+      : filtered;
+    return list.map((l: any) => {
+      const pr = String(l.priority || '').toLowerCase();
+      const tag = pr === 'hot' ? '🔥 Hot' : pr === 'handoff_booking' ? 'Ready' : '';
+      return {
+        key: l.lead_id,
+        label: l.name || 'Lead',
+        sublabel: `${tag ? `${tag} · ` : ''}${l.phone || '—'}${l.location ? ` · ${l.location}` : ''}`,
+      };
+    });
+  }, [leads, leadId, leadSearch]);
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>

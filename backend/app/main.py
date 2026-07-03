@@ -6718,6 +6718,7 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
         "updated_at": now_utc().isoformat(),
     })
     update_cached_lead(p.lead_id, {"stage": "booking", "priority": None, "updated_at": now_utc().isoformat()})
+    invalidate_leads_cache()
     return result or b
 
 @api_router.get("/bookings")
