@@ -15,6 +15,15 @@ from app import main  # noqa: E402
 
 
 UMANG_HEADERS = [
+    "Lead date",
+    "Customer Name",
+    "Mobile number",
+    "Locality",
+    "Source",
+    "Assign to",
+]
+
+LEGACY_HEADERS = [
     "Lead Date",
     "Lead Name",
     "Phone Number",
@@ -39,17 +48,35 @@ def _build_xlsx_bytes(rows):
 
 def test_map_import_headers_umang_template():
     header_map = main.map_import_headers(UMANG_HEADERS)
+    assert header_map["lead_date"] == 0
+    assert header_map["name"] == 1
+    assert header_map["phone"] == 2
+    assert header_map["location"] == 3
+    assert header_map["source"] == 4
+    assert header_map["assign_to"] == 5
+
+
+def test_map_import_headers_legacy_still_works():
+    header_map = main.map_import_headers(LEGACY_HEADERS)
     assert header_map["name"] == 1
     assert header_map["phone"] == 2
     assert header_map["location"] == 3
     assert header_map["assign_to"] == 7
 
 
+def test_normalize_phone_meta_style():
+    assert main.normalize_phone("919973937387") == "919973937387"
+    assert main.normalize_phone("9973937387") == "919973937387"
+    assert main.normalize_phone("+919973937387") == "919973937387"
+    assert main.normalize_phone("(+91)-9973937387") == "919973937387"
+    assert main.normalize_phone("0919973937387") == "919973937387"
+
+
 def test_locate_import_header_skips_blank_title_row():
     rows = [
         ["", "", ""],
         UMANG_HEADERS,
-        ["30/12/2025", "mukesh", "(+91)-9869122319", "Nalasopara West", "1 BHK", "31.5 Lac", "Vimal Classic", "Khyati Shah"],
+        ["30/12/2025", "mukesh", "919869122319", "Nalasopara West", "Facebook", "Khyati Shah"],
     ]
     idx, header_map = main.locate_import_header(rows)
     assert idx == 1
@@ -65,13 +92,15 @@ def test_sniff_upload_extension_from_zip_magic():
 def test_load_excel_import_rows_parses_umang_sheet():
     xlsx = _build_xlsx_bytes([
         UMANG_HEADERS,
-        ["30/12/2025", "mukesh", "(+91)-9869122319", "Nalasopara West", "1 BHK", "31.5 Lac", "Vimal Classic", "Khyati Shah"],
+        ["30/12/2025", "mukesh", "919869122319", "Nalasopara West", "Facebook", "Khyati Shah"],
     ])
     rows, header_idx, header_map = main.load_excel_import_rows(xlsx)
     record = main.import_row_to_record(list(rows[header_idx + 1]), header_map)
     assert record["name"] == "mukesh"
-    assert record["phone"] == "(+91)-9869122319"
+    assert record["phone"] == "919869122319"
     assert record["location"] == "Nalasopara West"
+    assert record["source"] == "Facebook"
+    assert record["assign_to"] == "Khyati Shah"
 
 
 def test_normalize_import_source_empty_defaults_bulk():
@@ -116,7 +145,7 @@ def test_import_leads_endpoint_accepts_excel(monkeypatch):
 
     xlsx = _build_xlsx_bytes([
         UMANG_HEADERS,
-        ["30/12/2025", "mukesh", "9869122319", "Nalasopara West", "1 BHK", "31.5 Lac", "Vimal Classic", "Khyati Shah"],
+        ["30/12/2025", "mukesh", "919869122319", "Nalasopara West", "Facebook", "Khyati Shah"],
     ])
     client = TestClient(main.app)
     try:
@@ -130,5 +159,7 @@ def test_import_leads_endpoint_accepts_excel(monkeypatch):
         assert body["imported_count"] == 1
         assert len(inserted_leads) == 1
         assert inserted_leads[0]["name"] == "mukesh"
+        assert inserted_leads[0]["phone"] == "919869122319"
+        assert inserted_leads[0]["source"] == "Facebook"
     finally:
         main.app.dependency_overrides.clear()

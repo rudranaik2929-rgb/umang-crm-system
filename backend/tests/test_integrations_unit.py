@@ -143,7 +143,7 @@ def test_housing_webhook_creates_housing_lead(monkeypatch):
     assert response.json()["created"]
     lead = inserted["leads"][0]
     assert lead["source"] == "Housing.com"
-    assert lead["phone"] == "+919876543210"
+    assert lead["phone"] == "919876543210"
     assert lead["external_lead_id"] == "housing-123"
     assert "Umang Heights" in lead["notes"]
 
@@ -237,7 +237,8 @@ def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
     # l5 (Meta test id 444444444444) is filtered out, leaving 4 real leads.
     assert data["total"] == 4
     by_key = {p["platform"]: p for p in data["platforms"]}
-    assert by_key["manual"]["count"] == 1
+    # website + manual_entry both map to Database / manual platform.
+    assert by_key["manual"]["count"] == 2
     assert by_key["housing"]["count"] == 1
     assert by_key["meta"]["count"] == 1
 

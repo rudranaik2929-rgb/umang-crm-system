@@ -423,19 +423,26 @@ def clean_text(value: Any) -> Optional[str]:
     return text or None
 
 def normalize_phone(value: Any) -> str:
+    """Normalize phone to Meta-style Indian digits: 91XXXXXXXXXX (no +).
+
+    Accepts Excel forms like (+91)-9869122319, +919869122319, 9869122319,
+    or already Meta-style 919869122319.
+    """
     raw = clean_text(value) or ""
     if not raw:
         return ""
-    has_plus = raw.startswith("+")
     digits = re.sub(r"\D", "", raw)
     if not digits:
         return ""
-    if has_plus:
-        return f"+{digits}"
+    # Drop trunk 0 prefix (e.g. 091XXXXXXXXXX / 0XXXXXXXXXX)
+    while digits.startswith("0") and len(digits) > 10:
+        digits = digits[1:]
     if len(digits) == 10:
-        return f"+91{digits}"
+        return f"91{digits}"
     if len(digits) == 12 and digits.startswith("91"):
-        return f"+{digits}"
+        return digits
+    if len(digits) > 12 and digits.startswith("91"):
+        return digits[:12]
     return digits
 
 def pick_first(payload: Dict[str, Any], keys: Iterable[str]) -> Optional[Any]:
@@ -4676,7 +4683,11 @@ def load_excel_import_rows(contents: bytes) -> Tuple[List[Any], int, Dict[str, i
 
 
 def map_import_headers(headers: List[Any]) -> Dict[str, int]:
-    """Map spreadsheet headers — supports Umang Excel template + legacy columns."""
+    """Map spreadsheet headers — current template + legacy Umang columns.
+
+    Preferred template (only these 6):
+      Lead date · Customer Name · Mobile number · Locality · Source · Assign to
+    """
     header_mapping: Dict[str, int] = {}
     for idx, h in enumerate(headers):
         if h is None or str(h).strip() == "":
@@ -4695,9 +4706,13 @@ def map_import_headers(headers: List[Any]) -> Dict[str, int]:
             header_mapping["assign_to"] = idx
         elif any(term in h_clean for term in ("lead date", "enquiry date", "inquiry date")) or h_clean == "date":
             header_mapping["lead_date"] = idx
-        elif "lead name" in h_clean or h_clean in ("name", "full name", "customer name"):
+        elif (
+            "customer name" in h_clean
+            or "lead name" in h_clean
+            or h_clean in ("name", "full name", "customer")
+        ):
             header_mapping["name"] = idx
-        elif any(term in h_clean for term in ("phone", "mobile", "contact")):
+        elif any(term in h_clean for term in ("mobile number", "mobile no", "mobile", "phone number", "phone", "contact number", "contact")):
             header_mapping["phone"] = idx
         elif any(term in h_clean for term in ("email", "mail")):
             header_mapping["email"] = idx
@@ -4833,7 +4848,7 @@ def locate_import_header(rows: List[Any]) -> Tuple[int, Dict[str, int]]:
             return i, header_map
     raise HTTPException(
         status_code=400,
-        detail="Could not find header row with 'Lead Name' and 'Phone Number' columns.",
+        detail="Could not find header row with 'Customer Name' and 'Mobile number' columns.",
     )
 
 
