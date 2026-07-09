@@ -253,15 +253,18 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
                 </Text>
 
                 <View style={[styles.infoCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
-                  <Text style={[styles.infoTitle, { color: colors.text }]}>Excel headers (row 1) — only these</Text>
+                  <Text style={[styles.infoTitle, { color: colors.text }]}>Excel headers (row 1)</Text>
                   <Text style={[styles.infoText, { color: colors.textSecondary }]}>
-                    Lead date · Customer Name · Mobile number · Locality · Source · Assign to
+                    Lead date · Customer Name · Mobile number · Locality · Assign to
+                  </Text>
+                  <Text style={[styles.infoText, { color: colors.textMuted, marginTop: 6 }]}>
+                    Source is optional (6th column). Assign to must match an employee name from the Employees page.
                   </Text>
                   <Text style={[styles.infoText, { color: colors.textMuted, marginTop: 8 }]}>
                     Mobile: use Meta style 12 digits like 919973937387 (91 + 10 digits). Also accepts 9973937387 or +91 numbers.
                   </Text>
                   <Text style={[styles.infoText, { color: colors.textMuted, marginTop: 8, fontStyle: 'italic' }]}>
-                    Example: 30/12/2025 · Shastri Ramnarayan · 919869122319 · Nalasopara West · Facebook · Khyati Shah
+                    Example: 30/12/2025 · Shastri Ramnarayan · 919869122319 · Nalasopara West · Khyati Shah
                   </Text>
                 </View>
 

@@ -23,6 +23,14 @@ UMANG_HEADERS = [
     "Assign to",
 ]
 
+FIVE_COLUMN_HEADERS = [
+    "Lead date",
+    "Customer Name",
+    "Mobile number",
+    "Locality",
+    "Assign to",
+]
+
 LEGACY_HEADERS = [
     "Lead Date",
     "Lead Name",
@@ -54,6 +62,16 @@ def test_map_import_headers_umang_template():
     assert header_map["location"] == 3
     assert header_map["source"] == 4
     assert header_map["assign_to"] == 5
+
+
+def test_map_import_headers_five_column_template():
+    header_map = main.map_import_headers(FIVE_COLUMN_HEADERS)
+    assert header_map["lead_date"] == 0
+    assert header_map["name"] == 1
+    assert header_map["phone"] == 2
+    assert header_map["location"] == 3
+    assert header_map["assign_to"] == 4
+    assert "source" not in header_map
 
 
 def test_map_import_headers_legacy_still_works():
@@ -116,6 +134,7 @@ def test_parse_import_lead_date_mar_format():
 
 def test_import_leads_endpoint_accepts_excel(monkeypatch):
     inserted_leads = []
+    assigned_calls = []
 
     def fake_select_all(table, params=None):
         return [{"employee_id": "emp1", "name": "Khyati Shah", "email": "k@test.com", "active": True}]
@@ -125,13 +144,18 @@ def test_import_leads_endpoint_accepts_excel(monkeypatch):
             inserted_leads.extend(rows)
         return list(rows)
 
+    def fake_assign(lead_id, old_lead, employee_id, actor, **kw):
+        assigned_calls.append((lead_id, employee_id))
+        return {**old_lead, **main.stamp_lead_assignment(employee_id, current_stage="new")}
+
     monkeypatch.setattr(main, "sb_select_all", fake_select_all)
     monkeypatch.setattr(main, "sb_insert_many", fake_insert_many)
     monkeypatch.setattr(main, "sb_update", lambda *args, **kwargs: {})
     monkeypatch.setattr(main, "log_activity", lambda *args, **kwargs: None)
     monkeypatch.setattr(main, "invalidate_leads_cache", lambda: None)
     monkeypatch.setattr(main, "invalidate_employees_cache", lambda: None)
-    monkeypatch.setattr(main, "assign_lead_to_employee", lambda lid, lead, eid, cu, **kw: lead)
+    monkeypatch.setattr(main, "assign_lead_to_employee", fake_assign)
+    monkeypatch.setattr(main, "_notify_assignment_summary", lambda *args, **kwargs: None)
     main.SESSION_CACHE["leads"] = []
 
     admin = main.User(
@@ -157,9 +181,69 @@ def test_import_leads_endpoint_accepts_excel(monkeypatch):
         body = res.json()
         assert body["status"] == "success"
         assert body["imported_count"] == 1
+        assert body["assigned_count"] == 1
         assert len(inserted_leads) == 1
         assert inserted_leads[0]["name"] == "mukesh"
         assert inserted_leads[0]["phone"] == "919869122319"
         assert inserted_leads[0]["source"] == "Facebook"
+        assert len(assigned_calls) == 1
+        assert assigned_calls[0][1] == "emp1"
+    finally:
+        main.app.dependency_overrides.clear()
+
+
+def test_import_leads_five_column_auto_assigns(monkeypatch):
+    inserted_leads = []
+    assigned_calls = []
+
+    def fake_select_all(table, params=None):
+        return [{"employee_id": "emp1", "name": "Khyati Shah", "email": "k@test.com", "active": True}]
+
+    def fake_insert_many(table, rows):
+        if table == "leads":
+            inserted_leads.extend(rows)
+        return list(rows)
+
+    def fake_assign(lead_id, old_lead, employee_id, actor, **kw):
+        assigned_calls.append((lead_id, employee_id))
+        return {**old_lead, **main.stamp_lead_assignment(employee_id, current_stage="new")}
+
+    monkeypatch.setattr(main, "sb_select_all", fake_select_all)
+    monkeypatch.setattr(main, "sb_insert_many", fake_insert_many)
+    monkeypatch.setattr(main, "sb_update", lambda *args, **kwargs: {})
+    monkeypatch.setattr(main, "log_activity", lambda *args, **kwargs: None)
+    monkeypatch.setattr(main, "invalidate_leads_cache", lambda: None)
+    monkeypatch.setattr(main, "invalidate_employees_cache", lambda: None)
+    monkeypatch.setattr(main, "assign_lead_to_employee", fake_assign)
+    monkeypatch.setattr(main, "_notify_assignment_summary", lambda *args, **kwargs: None)
+    main.SESSION_CACHE["leads"] = []
+
+    admin = main.User(
+        user_id="admin1",
+        email="admin@test.com",
+        name="Admin",
+        role="admin",
+        created_at=datetime.now(timezone.utc),
+    )
+    main.app.dependency_overrides[main.get_current_user] = lambda: admin
+
+    xlsx = _build_xlsx_bytes([
+        FIVE_COLUMN_HEADERS,
+        ["30/12/2025", "mukesh", "919869122319", "Nalasopara West", "Khyati Shah"],
+    ])
+    client = TestClient(main.app)
+    try:
+        res = client.post(
+            "/api/leads/import",
+            files={"file": ("leads.xlsx", xlsx, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["status"] == "success"
+        assert body["imported_count"] == 1
+        assert body["assigned_count"] == 1
+        assert len(assigned_calls) == 1
+        assert assigned_calls[0][1] == "emp1"
+        assert inserted_leads[0]["assigned_to"] == "emp1"
     finally:
         main.app.dependency_overrides.clear()

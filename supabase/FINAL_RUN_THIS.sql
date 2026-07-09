@@ -20,15 +20,18 @@
 --   • Assign Leads: custom row selection (e.g. 10 or 40-50) + bulk/single delete
 --     (admin/manager only — backend purges lead + visits, bookings, loans, activities)
 --
--- Excel import (no extra columns — uses fields below):
---   Lead Date        → external_created_at + created_at
---   Lead Name        → name
---   Phone Number     → phone
+-- Excel import (current template — row 1 headers):
+--   Lead date        → external_created_at + created_at
+--   Customer Name    → name
+--   Mobile number    → phone (91XXXXXXXXXX)
 --   Locality         → location
---   Configuration    → property_type
---   Price            → budget
---   Building/Project → notes
+--   Source           → source (optional — defaults to bulk_import)
 --   Assign to        → assigned_to + assigned_at + assigned_by + stage assigned
+--
+-- Minimal 5-column template (no Source) also supported:
+--   Lead date · Customer Name · Mobile number · Locality · Assign to
+--
+-- Excel-only SQL fix: supabase/EXCEL_IMPORT_AUTO_ASSIGN_FIX.sql
 --
 -- ORDER:
 --   1. Run THIS file in Supabase → SQL Editor → Run
@@ -170,6 +173,54 @@ create policy integration_events_backend_all on integration_events for all using
 -- ---------------------------------------------------------------------
 update leads set call_status = null where call_status is not null and trim(call_status) = '';
 update leads set priority = null where priority is not null and trim(priority) = '';
+
+-- ---------------------------------------------------------------------
+-- 8b. FIX assigned_to — must be employee_id (Excel often stored name)
+-- ---------------------------------------------------------------------
+update leads l
+set assigned_to = e.employee_id, updated_at = now()
+from employees e
+where l.assigned_to is not null
+  and l.assigned_to <> e.employee_id
+  and lower(trim(l.assigned_to)) = lower(trim(e.name));
+
+update leads l
+set assigned_to = e.employee_id, updated_at = now()
+from employees e
+where l.assigned_to is not null
+  and l.assigned_to not like 'emp_%'
+  and not exists (select 1 from employees x where x.employee_id = l.assigned_to)
+  and lower(trim(l.assigned_to)) = lower(trim(split_part(e.name, ' ', 1)))
+  and coalesce(e.active, true) is not false
+  and (
+    select count(*)::int from employees e2
+    where coalesce(e2.active, true) is not false
+      and lower(trim(split_part(e2.name, ' ', 1))) = lower(trim(l.assigned_to))
+  ) = 1;
+
+update leads l
+set assigned_to = e.employee_id, updated_at = now()
+from employees e
+where l.assigned_to = e.user_id and e.user_id is not null and l.assigned_to <> e.employee_id;
+
+update leads l
+set assigned_to = u.employee_id, updated_at = now()
+from users u
+where l.assigned_to = u.user_id and u.employee_id is not null and l.assigned_to <> u.employee_id;
+
+-- Backfill from Excel import activity log when assign did not persist
+update leads l
+set assigned_to = e.employee_id,
+    assigned_at = coalesce(l.assigned_at, a.created_at, l.updated_at, l.created_at, now()),
+    stage = 'assigned',
+    updated_at = now()
+from activities a
+join employees e on lower(trim(e.name)) = lower(trim(regexp_replace(coalesce(a.text, ''), '^.*→\s*', '')))
+where a.lead_id = l.lead_id
+  and a.type = 'bulk_import_assign'
+  and l.source = 'bulk_import'
+  and (l.assigned_to is null or l.assigned_to <> e.employee_id)
+  and coalesce(a.text, '') like '%Excel import assigned%→%';
 
 -- ---------------------------------------------------------------------
 -- 9. BACKFILL assigned_at (manager assign + Excel import)

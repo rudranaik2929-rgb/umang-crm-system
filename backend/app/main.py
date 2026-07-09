@@ -4682,54 +4682,75 @@ def load_excel_import_rows(contents: bytes) -> Tuple[List[Any], int, Dict[str, i
     raise HTTPException(status_code=400, detail=last_detail)
 
 
+def _is_import_assign_to_header(h_clean: str, h_compact: str) -> bool:
+  """True when a spreadsheet column is the employee assign column."""
+  if h_compact in ("assignto", "assigneto", "assignedto", "assignee", "employeename", "telecaller", "telecallername"):
+    return True
+  if h_clean in (
+    "assign to", "assigne to", "assigned to", "employee name", "employee",
+    "telecaller name", "telecaller", "assign employee", "assigned employee",
+  ):
+    return True
+  if re.search(r"assign", h_clean) and re.search(r"\bto\b|employee|telecaller|agent|executive", h_clean):
+    return True
+  return False
+
+
 def map_import_headers(headers: List[Any]) -> Dict[str, int]:
     """Map spreadsheet headers — current template + legacy Umang columns.
 
-    Preferred template (only these 6):
-      Lead date · Customer Name · Mobile number · Locality · Source · Assign to
+    Preferred template:
+      Lead date · Customer Name · Mobile number · Locality · Assign to
+      (Source optional)
     """
     header_mapping: Dict[str, int] = {}
+    assign_idx: Optional[int] = None
+
     for idx, h in enumerate(headers):
         if h is None or str(h).strip() == "":
             continue
         h_clean = _normalize_import_header_text(h)
         h_compact = h_clean.replace(" ", "")
+        if assign_idx is None and _is_import_assign_to_header(h_clean, h_compact):
+            assign_idx = idx
 
-        if (
-            "assign_to" not in header_mapping
-            and (
-                h_compact in ("assignto", "assigneto", "assignedto", "assignee")
-                or (re.search(r"assign", h_clean) and re.search(r"\bto\b|employee|telecaller|agent|executive", h_clean))
-                or h_clean in ("assign to", "assigne to", "assigned to", "employee name")
-            )
-        ):
-            header_mapping["assign_to"] = idx
-        elif any(term in h_clean for term in ("lead date", "enquiry date", "inquiry date")) or h_clean == "date":
-            header_mapping["lead_date"] = idx
+    if assign_idx is not None:
+        header_mapping["assign_to"] = assign_idx
+
+    for idx, h in enumerate(headers):
+        if h is None or str(h).strip() == "":
+            continue
+        if idx == assign_idx:
+            continue
+        h_clean = _normalize_import_header_text(h)
+        h_compact = h_clean.replace(" ", "")
+
+        if any(term in h_clean for term in ("lead date", "enquiry date", "inquiry date")) or h_clean == "date":
+            header_mapping.setdefault("lead_date", idx)
         elif (
             "customer name" in h_clean
             or "lead name" in h_clean
             or h_clean in ("name", "full name", "customer")
         ):
-            header_mapping["name"] = idx
+            header_mapping.setdefault("name", idx)
         elif any(term in h_clean for term in ("mobile number", "mobile no", "mobile", "phone number", "phone", "contact number", "contact")):
-            header_mapping["phone"] = idx
+            header_mapping.setdefault("phone", idx)
         elif any(term in h_clean for term in ("email", "mail")):
-            header_mapping["email"] = idx
+            header_mapping.setdefault("email", idx)
         elif any(term in h_clean for term in ("price", "budget", "amount")):
-            header_mapping["budget"] = idx
+            header_mapping.setdefault("budget", idx)
         elif any(term in h_clean for term in ("locality", "location", "address", "area")):
-            header_mapping["location"] = idx
+            header_mapping.setdefault("location", idx)
         elif any(term in h_clean for term in ("configuration", "config", "bhk", "property type", "requirement")):
-            header_mapping["property_type"] = idx
+            header_mapping.setdefault("property_type", idx)
         elif any(term in h_clean for term in (
             "building/project", "building project", "project name", "building name", "society", "tower",
         )) or (("building" in h_clean or "project" in h_clean) and "name" in h_clean):
-            header_mapping["preferred_property"] = idx
+            header_mapping.setdefault("preferred_property", idx)
         elif any(term in h_clean for term in ("notes", "remarks", "comments")):
-            header_mapping["notes"] = idx
+            header_mapping.setdefault("notes", idx)
         elif any(term in h_clean for term in ("source", "lead source", "platform")):
-            header_mapping["source"] = idx
+            header_mapping.setdefault("source", idx)
         elif "name" in h_clean and not any(
             term in h_clean for term in ("building", "project", "property", "assign", "employee")
         ):
@@ -4739,10 +4760,17 @@ def map_import_headers(headers: List[Any]) -> Dict[str, int]:
 
 def build_employee_assign_lookup() -> Tuple[Dict[str, str], List[Dict[str, str]]]:
     """Name/email → employee_id lookup (includes inactive=null as active)."""
-    emps = sb_select_all("employees", {"select": "employee_id,name,email,active", "order": "name.asc"})
-    emps = [e for e in emps if e.get("active", True) is not False]
+    emps: List[Dict[str, Any]] = []
+    now = time.time()
+    if _employees_cache.get("ts") and (now - float(_employees_cache["ts"])) < _EMPLOYEES_CACHE_TTL:
+        emps = list(_employees_cache.get("data") or [])
     if not emps:
-        emps = sb_select_all("employees", {"select": "employee_id,name,email,active", "order": "name.asc"})
+        emps = sb_select_all("employees", {"select": "employee_id,name,email,active,user_id", "order": "name.asc"})
+    if not emps:
+        emps = sb_select("employees", {"select": "employee_id,name,email,active,user_id", "order": "name.asc"}) or []
+    active_emps = [e for e in emps if e.get("active", True) is not False]
+    if active_emps:
+        emps = active_emps
 
     exact: Dict[str, str] = {}
     roster: List[Dict[str, str]] = []
@@ -4759,11 +4787,16 @@ def build_employee_assign_lookup() -> Tuple[Dict[str, str], List[Dict[str, str]]
             parts = norm.split()
             if len(parts) >= 2:
                 exact.setdefault(f"{parts[0]} {parts[-1]}", eid)
-            if parts:
+                exact.setdefault(parts[0], eid)
                 exact.setdefault(parts[-1], eid)
+            elif parts:
+                exact.setdefault(parts[0], eid)
         email = (emp.get("email") or "").strip().lower()
         if email:
             exact[email] = eid
+        uid = clean_text(emp.get("user_id"))
+        if uid:
+            exact[uid.lower()] = eid
     return exact, roster
 
 
@@ -4773,7 +4806,7 @@ def resolve_import_assignee(
     roster: List[Dict[str, str]],
 ) -> Tuple[Optional[str], str]:
     """Return (employee_id, cleaned_assignee_label)."""
-    raw = import_cell_text(assignee_raw)
+    raw = import_cell_text(assignee_raw).strip()
     if not raw:
         return None, raw
     roster_ids = {r["employee_id"] for r in roster}
@@ -4794,6 +4827,10 @@ def resolve_import_assignee(
             eid = exact[joined]
             name = next((r["name"] for r in roster if r["employee_id"] == eid), raw)
             return eid, name
+        if len(key_tokens) == 1 and key_tokens[0] in exact:
+            eid = exact[key_tokens[0]]
+            name = next((r["name"] for r in roster if r["employee_id"] == eid), raw)
+            return eid, name
 
     best_id: Optional[str] = None
     best_score = 0
@@ -4812,6 +4849,10 @@ def resolve_import_assignee(
                 best_score = overlap
                 best_id = emp["employee_id"]
         elif len(key_tokens) == 1 and key_tokens[0] in emp_tokens:
+            if 1 > best_score:
+                best_score = 1
+                best_id = emp["employee_id"]
+        elif key_tokens and emp_tokens and key_tokens[0] == emp_tokens[0]:
             if 1 > best_score:
                 best_score = 1
                 best_id = emp["employee_id"]
@@ -4957,6 +4998,7 @@ def _commit_lead_import(
 
     leads_batch: List[Dict[str, Any]] = []
     activities_batch: List[Dict[str, Any]] = []
+    pending_assignments: List[Dict[str, Any]] = []
 
     for r in records:
         name = r["name"].strip()
@@ -5011,29 +5053,14 @@ def _commit_lead_import(
         })
 
         if emp_id:
-            if lead.get("assigned_to") == emp_id:
-                activities_batch.append({
-                    "activity_id": gen_id("act"),
-                    "lead_id": lid,
-                    "user_id": actor_user_id,
-                    "type": "bulk_import_assign",
-                    "text": f"[{actor_name}] Excel import assigned {name} → {matched_emp_name}",
-                    "created_at": now,
-                })
-                employees_touched.add(emp_id)
-                assigned_count += 1
-                bucket = assignment_breakdown.setdefault(emp_id, {
-                    "employee_id": emp_id,
-                    "employee_name": matched_emp_name,
-                    "count": 0,
-                })
-                bucket["count"] += 1
-            else:
-                assign_failed.append({
-                    "name": name,
-                    "assign_to": assignee_name,
-                    "reason": "assign_failed",
-                })
+            pending_assignments.append({
+                "lead_id": lid,
+                "lead": lead,
+                "emp_id": emp_id,
+                "matched_emp_name": matched_emp_name,
+                "assignee_name": assignee_name,
+                "name": name,
+            })
         elif assignee_name:
             assign_failed.append({
                 "name": name,
@@ -5048,16 +5075,75 @@ def _commit_lead_import(
         skipped_count += len(leads_batch) - len(saved_rows)
         imported_count = len(saved_rows)
 
+    saved_by_id = {str(row.get("lead_id")): row for row in saved_rows if row.get("lead_id")}
+
+    for pending in pending_assignments:
+        lid = pending["lead_id"]
+        saved = saved_by_id.get(lid)
+        if not saved:
+            assign_failed.append({
+                "name": pending["name"],
+                "assign_to": pending["assignee_name"],
+                "reason": "assign_failed",
+            })
+            continue
+        emp_id = pending["emp_id"]
+        matched_emp_name = pending["matched_emp_name"]
+        name = pending["name"]
+        try:
+            updated = assign_lead_to_employee(
+                lid,
+                saved,
+                emp_id,
+                cu,
+                skip_removed_notify=True,
+            )
+            if clean_text(updated.get("assigned_to")) == emp_id:
+                activities_batch.append({
+                    "activity_id": gen_id("act"),
+                    "lead_id": lid,
+                    "user_id": actor_user_id,
+                    "type": "bulk_import_assign",
+                    "text": f"[{actor_name}] Excel import assigned {name} → {matched_emp_name}",
+                    "created_at": now_utc().isoformat(),
+                })
+                employees_touched.add(emp_id)
+                assigned_count += 1
+                bucket = assignment_breakdown.setdefault(emp_id, {
+                    "employee_id": emp_id,
+                    "employee_name": matched_emp_name,
+                    "count": 0,
+                })
+                bucket["count"] += 1
+                saved_by_id[lid] = updated
+            else:
+                assign_failed.append({
+                    "name": name,
+                    "assign_to": pending["assignee_name"],
+                    "reason": "assign_failed",
+                })
+        except Exception:
+            assign_failed.append({
+                "name": name,
+                "assign_to": pending["assignee_name"],
+                "reason": "assign_failed",
+            })
+
     if activities_batch and saved_rows:
         sb_insert_many("activities", activities_batch)
 
     for saved in saved_rows:
-        enriched = enrich_lead_display_fields(saved)
+        lid = str(saved.get("lead_id") or "")
+        row = saved_by_id.get(lid, saved)
+        enriched = enrich_lead_display_fields(row)
         SESSION_CACHE["leads"].insert(0, enriched)
         imported_leads.append(enriched)
 
     for eid in employees_touched:
         sb_update("employees", "employee_id", eid, {"last_assigned_at": now_utc().isoformat()})
+        count = int(assignment_breakdown.get(eid, {}).get("count") or 0)
+        if count:
+            _notify_assignment_summary(eid, count, cu)
 
     invalidate_leads_cache()
     invalidate_employees_cache()
