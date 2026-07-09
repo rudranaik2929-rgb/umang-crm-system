@@ -20,11 +20,13 @@ export default function Index() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
-  const [serverWarming, setServerWarming] = useState(false);
+  const [loginStatus, setLoginStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    setServerWarming(true);
-    warmUpBackend().finally(() => setServerWarming(false));
+    setLoginStatus('Connecting to server…');
+    warmUpBackend().then((ok) => {
+      setLoginStatus(ok ? null : 'Server is waking up — login may take up to a minute the first time.');
+    });
   }, []);
 
   // Already signed in (valid session) → go to app; never show "Continue as …" bypass.
@@ -43,20 +45,23 @@ export default function Index() {
     }
 
     setIsLoggingIn(true);
+    setLoginStatus('Signing in…');
     try {
-      await warmUpBackend();
+      await warmUpBackend(true);
       const loggedInUser = await exchangeSession({
         email: trimmedEmail,
         password: trimmedPassword,
       });
       if (loggedInUser) {
+        setLoginStatus(null);
         if (!loggedInUser.role) router.replace('/select-role' as any);
         else router.replace(defaultRouteFor(loggedInUser.role, loggedInUser.email, loggedInUser.allowed_pages) as any);
       } else {
+        setLoginStatus(null);
         alert('Invalid email or password. Use the login created by your manager.');
       }
     } catch (e: any) {
-      alert(e?.message || 'Invalid email or password. Use the login created by your manager.');
+      setLoginStatus(e?.message || 'Could not sign in. Try again in a minute.');
     } finally {
       setIsLoggingIn(false);
     }
@@ -136,9 +141,9 @@ export default function Index() {
           <Text style={[styles.subhead, { color: colors.textSecondary, marginBottom: 20 }]}>
             Enter the email and password provided by your manager. Each employee has a separate login.
           </Text>
-          {serverWarming ? (
+          {loginStatus ? (
             <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 8 }}>
-              Connecting to server… first load may take up to a minute if the server was idle.
+              {loginStatus}
             </Text>
           ) : null}
 

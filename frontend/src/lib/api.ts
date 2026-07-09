@@ -169,19 +169,51 @@ api.interceptors.response.use(
     return api(config);
 });
 
-let warmUpPromise: Promise<void> | null = null;
+let warmUpPromise: Promise<boolean> | null = null;
 
-export function warmUpBackend(): Promise<void> {
-    if (warmUpPromise) return warmUpPromise;
-    warmUpPromise = Promise.all([
-        axios.get(`${BACKEND_URL}/`, { timeout: 12000 }).catch(() => undefined),
-        axios.get(`${BACKEND_URL}/api/health`, { timeout: 12000 }).catch(() => undefined),
-    ])
-        .then(() => undefined)
-        .finally(() => {
-            setTimeout(() => { warmUpPromise = null; }, 5 * 60 * 1000);
-        });
+function sleep(ms: number) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Ping Render until /api/health responds — handles cold starts before login. */
+export async function warmUpBackend(force = false): Promise<boolean> {
+    if (!force && warmUpPromise) return warmUpPromise;
+
+    warmUpPromise = (async () => {
+        const attempts = 8;
+        for (let i = 0; i < attempts; i++) {
+            try {
+                await axios.get(`${BACKEND_URL}/`, { timeout: 20000 });
+            } catch {
+                // Render may return 502 while the container boots.
+            }
+            try {
+                const health = await axios.get(`${BACKEND_URL}/api/health`, { timeout: 25000 });
+                if (health.status === 200) return true;
+            } catch {
+                // keep retrying
+            }
+            if (i < attempts - 1) {
+                await sleep(2500 + i * 2000);
+            }
+        }
+        return false;
+    })().finally(() => {
+        setTimeout(() => { warmUpPromise = null; }, 2 * 60 * 1000);
+    });
+
     return warmUpPromise;
+}
+
+export function isTransientApiError(e: any): boolean {
+    const msg = String(e?.message || '').toLowerCase();
+    const status = e?.response?.status;
+    if (status === 401 || status === 403) return false;
+    if (status === 502 || status === 503 || status === 504) return true;
+    if (!e?.response) {
+        return msg.includes('network error') || e?.code === 'ERR_NETWORK' || e?.code === 'ECONNABORTED' || msg.includes('timeout');
+    }
+    return false;
 }
 
 const KEEP_ALIVE_MS = 8 * 60 * 1000;

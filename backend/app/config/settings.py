@@ -43,6 +43,11 @@ def _ensure_www_cors_pair(origins: List[str]) -> List[str]:
 
 
 CORS_ORIGINS = _ensure_www_cors_pair(CORS_ORIGINS)
+# Regex fallback — works even if Render env only lists one of www / apex.
+CORS_ORIGIN_REGEX = os.environ.get(
+    "CORS_ORIGIN_REGEX",
+    r"^https://(www\.)?umanghometechllp\.in$|^https://umang-home-tech.*\.vercel\.app$|^http://localhost(:\d+)?$|^http://127\.0\.0\.1(:\d+)?$",
+)
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://umanghometechllp.in").rstrip("/")
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://xlaiwmyyldxmuvopqomi.supabase.co")
 SUPABASE_KEY = (

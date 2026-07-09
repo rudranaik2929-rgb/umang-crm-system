@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
 import { Platform } from 'react-native';
-import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots, getSnapshot, setSnapshot, USER_SNAPSHOT_KEY } from '../lib/api';
+import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots, getSnapshot, setSnapshot, USER_SNAPSHOT_KEY, isTransientApiError } from '../lib/api';
 import { useEmployeeLocation } from '../hooks/useEmployeeLocation';
 import { registerPushToken } from '../notifications/usePushNotifications';
 
@@ -108,34 +108,47 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const exchangeSession = useCallback(async (credentials: { email: string; password: string }): Promise<User | null> => {
-    try {
-      await warmUpBackend();
-      const r = await api.post('/auth/session', credentials, { timeout: 90000 });
-      if (r.data?.session_token) {
-        await setToken(r.data.session_token);
+    const maxAttempts = 4;
+    let lastError: any = null;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        await warmUpBackend(attempt > 1);
+        const r = await api.post('/auth/session', credentials, { timeout: 90000 });
+        if (r.data?.session_token) {
+          await setToken(r.data.session_token);
+        }
+        setUser(r.data.user);
+        setSnapshot(USER_SNAPSHOT_KEY, r.data.user);
+        return r.data.user as User;
+      } catch (e: any) {
+        lastError = e;
+        const detail = e?.response?.data?.detail;
+        if (e?.response?.status === 401) {
+          console.warn('exchangeSession failed: invalid credentials');
+          return null;
+        }
+        if (attempt < maxAttempts && isTransientApiError(e)) {
+          console.warn(`exchangeSession attempt ${attempt}/${maxAttempts} — server not ready, retrying…`, BACKEND);
+          await new Promise((r) => setTimeout(r, 3000 * attempt));
+          continue;
+        }
+        console.warn('exchangeSession failed', detail || e);
+        break;
       }
-      setUser(r.data.user);
-      setSnapshot(USER_SNAPSHOT_KEY, r.data.user);
-      return r.data.user as User;
-    } catch (e: any) {
-      const detail = e?.response?.data?.detail;
-      const msg = e?.message || '';
-      const timedOut = e?.code === 'ECONNABORTED' || msg.toLowerCase().includes('timeout');
-      if (!e?.response && (msg.includes('Network Error') || e?.code === 'ERR_NETWORK' || timedOut)) {
-        console.warn('exchangeSession failed: cannot reach API', BACKEND, e);
-        const host = typeof window !== 'undefined' ? window.location.hostname : '';
-        const wwwHint = host.startsWith('www.')
-          ? ' Your site uses www — on Render set CORS_ORIGINS to include both https://umanghometechllp.in and https://www.umanghometechllp.in, then redeploy the backend.'
-          : '';
-        throw new Error(
-          timedOut
-            ? `Server is waking up (Render cold start). Wait 30–60 seconds and try Log in again.${wwwHint}`
-            : `Cannot reach the CRM server (${BACKEND}). On Vercel set EXPO_PUBLIC_BACKEND_URL to your Render URL and redeploy.${wwwHint}`,
-        );
-      }
-      console.warn('exchangeSession failed', detail || e);
-      return null;
     }
+
+    const e = lastError;
+    const msg = e?.message || '';
+    const timedOut = e?.code === 'ECONNABORTED' || msg.toLowerCase().includes('timeout');
+    if (!e?.response && (msg.includes('Network Error') || e?.code === 'ERR_NETWORK' || timedOut)) {
+      throw new Error(
+        'Server is still waking up on Render. Wait about a minute, then tap Log in again — the app will retry automatically.',
+      );
+    }
+    if (e?.response?.status === 401) return null;
+    const detail = e?.response?.data?.detail;
+    throw new Error(typeof detail === 'string' ? detail : 'Could not sign in. Check email/password and try again.');
   }, []);
 
   const setRoleFn = useCallback(async (role: string) => {

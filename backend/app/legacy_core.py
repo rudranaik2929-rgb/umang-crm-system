@@ -125,12 +125,14 @@ async def debug_config():
         "key_configured": bool(SUPABASE_KEY),
         "jwt_secret_ok": bool(JWT_SECRET) and JWT_SECRET not in ("change-me-in-production", "YOUR_RANDOM_SECRET"),
         "cors_origins": CORS_ORIGINS,
+        "cors_origin_regex": CORS_ORIGIN_REGEX,
         "frontend_url": FRONTEND_URL,
     }
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
+    allow_origin_regex=CORS_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
