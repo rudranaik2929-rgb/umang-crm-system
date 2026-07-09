@@ -85,11 +85,13 @@ export default function Employees() {
     }
   };
 
+  const activeCount = employees.filter((e) => e.active !== false).length;
+
   return (
     <View style={{ flex: 1 }}>
       <TopBar
         title="Employee Management"
-        subtitle="Roles, departments & login activity"
+        subtitle={`${employees.length} employee${employees.length === 1 ? '' : 's'} · ${activeCount} active`}
         rightAction={
           <Pressable testID="add-employee-btn" onPress={() => setShowAdd(true)} style={[styles.primary, { backgroundColor: colors.primary }]}>
             <Ionicons name="person-add" size={14} color="#fff" />
@@ -110,16 +112,27 @@ export default function Employees() {
             />
           ) : (
             <View style={[styles.tableCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+              <View style={[styles.tableSummary, { borderBottomColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+                <Text style={{ color: colors.text, fontSize: 13, fontWeight: '700' }}>
+                  Total employees: {employees.length}
+                </Text>
+                <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                  {activeCount} active · {employees.length - activeCount} disabled
+                </Text>
+              </View>
               <View style={[styles.tHead, { borderBottomColor: colors.border }]}>
+                <Text style={[styles.th, { color: colors.textMuted, width: 44 }]}>#</Text>
                 <Text style={[styles.th, { color: colors.textMuted, flex: 2 }]}>NAME</Text>
+                <Text style={[styles.th, { color: colors.textMuted, flex: 1.5 }]}>LOCALITY</Text>
                 <Text style={[styles.th, { color: colors.textMuted, flex: 2 }]}>EMAIL</Text>
-                <Text style={[styles.th, { color: colors.textMuted, flex: 1.5 }]}>ROLE</Text>
-                <Text style={[styles.th, { color: colors.textMuted, flex: 1.5 }]}>DEPARTMENT</Text>
-                <Text style={[styles.th, { color: colors.textMuted, width: 100 }]}>STATUS</Text>
+                <Text style={[styles.th, { color: colors.textMuted, flex: 1.3 }]}>ROLE</Text>
+                <Text style={[styles.th, { color: colors.textMuted, flex: 1.2 }]}>DEPARTMENT</Text>
+                <Text style={[styles.th, { color: colors.textMuted, width: 90 }]}>STATUS</Text>
                 <Text style={[styles.th, { color: colors.textMuted, width: 120, textAlign: 'right' }]}>ACTIONS</Text>
               </View>
-              {employees.map((e) => (
+              {employees.map((e, index) => (
                 <View key={e.employee_id} style={[styles.tRow, { borderBottomColor: colors.border }]}>
+                  <Text style={[styles.serialNo, { color: colors.textMuted, width: 44 }]}>{index + 1}</Text>
                   <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
                     <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
                       <Text style={{ color: '#fff', fontWeight: '700' }}>{e.name?.[0]?.toUpperCase() || '?'}</Text>
@@ -129,10 +142,13 @@ export default function Employees() {
                       <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{e.phone || '—'}</Text>
                     </View>
                   </View>
+                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.5 }]} numberOfLines={2}>
+                    {e.locality || '—'}
+                  </Text>
                   <Text style={[styles.cellPrimary, { color: colors.text, flex: 2 }]}>{e.email}</Text>
-                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.5 }]}>{roleLabel(e.role)}</Text>
-                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.5 }]}>{e.department}</Text>
-                  <View style={{ width: 100 }}>
+                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.3 }]}>{roleLabel(e.role)}</Text>
+                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.2 }]}>{e.department}</Text>
+                  <View style={{ width: 90 }}>
                     <Badge text={e.active ? 'ACTIVE' : 'DISABLED'} color={e.active ? colors.positive : colors.textMuted} />
                   </View>
                   <View style={{ width: 120, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 }}>
@@ -172,6 +188,7 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [locality, setLocality] = useState('');
   const [password, setPassword] = useState('');
   const [role, setRole] = useState('telecaller');
   const [pages, setPages] = useState<string[]>(ROLE_DEFAULT_SERVICES.telecaller);
@@ -189,14 +206,15 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
   };
 
   const reset = () => {
-    setName(''); setEmail(''); setPhone(''); setPassword('');
+    setName(''); setEmail(''); setPhone(''); setLocality(''); setPassword('');
     setRole('telecaller'); setPages(ROLE_DEFAULT_SERVICES.telecaller); setError(null);
   };
 
   const submit = async () => {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedPassword = password.trim();
-    if (!name.trim() || !trimmedEmail || trimmedPassword.length < 4) return;
+    const trimmedLocality = locality.trim();
+    if (!name.trim() || !trimmedEmail || trimmedPassword.length < 4 || !trimmedLocality) return;
     setBusy(true);
     setError(null);
     try {
@@ -205,6 +223,7 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
         name: name.trim(),
         email: trimmedEmail,
         phone: phone.trim() || undefined,
+        locality: trimmedLocality,
         password: trimmedPassword,
         role,
         department: dept,
@@ -218,7 +237,7 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
     } finally { setBusy(false); }
   };
 
-  const canSubmit = !!name.trim() && !!email.trim() && password.trim().length >= 4;
+  const canSubmit = !!name.trim() && !!email.trim() && !!locality.trim() && password.trim().length >= 4;
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
@@ -233,6 +252,14 @@ function AddEmployeeModal({ visible, onClose, onCreated, colors }: any) {
             <Field label="LOGIN EMAIL" testID="emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
             <Field label="LOGIN PASSWORD (REQUIRED)" testID="emp-password" value={password} onChange={setPassword} colors={colors} secureTextEntry required showPasswordToggle />
             <Field label="PHONE" testID="emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
+            <Field
+              label="LOCALITY (REQUIRED)"
+              testID="emp-locality"
+              value={locality}
+              onChange={setLocality}
+              colors={colors}
+              placeholder="e.g. Nalasopara West, Virar, Naigaon"
+            />
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE (DASHBOARD TYPE)</Text>
             <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
               {ROLES.filter((r) => r.key !== 'admin').map((r) => (
@@ -281,6 +308,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
+  const [locality, setLocality] = useState('');
   const [currentPassword, setCurrentPassword] = useState('');
   const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
@@ -301,6 +329,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
     setName(employee.name || '');
     setEmail(employee.email || '');
     setPhone(employee.phone || '');
+    setLocality(employee.locality || '');
     setCurrentPassword(getEmployeePassword(employee.employee_id));
     setShowCurrentPassword(false);
     setNewPassword('');
@@ -357,7 +386,8 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
   const submit = async () => {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedNewPassword = newPassword.trim();
-    if (!employee?.employee_id || !name.trim() || !trimmedEmail) return;
+    const trimmedLocality = locality.trim();
+    if (!employee?.employee_id || !name.trim() || !trimmedEmail || !trimmedLocality) return;
     if (trimmedNewPassword.length > 0 && trimmedNewPassword.length < 4) {
       setError('New password must be at least 4 characters.');
       return;
@@ -369,6 +399,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
         name: name.trim(),
         email: trimmedEmail,
         phone: phone.trim() || undefined,
+        locality: trimmedLocality,
         role,
         active,
         allowed_pages: pages,
@@ -387,7 +418,7 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
     } finally { setBusy(false); }
   };
 
-  const canSave = !!name.trim() && !!email.trim();
+  const canSave = !!name.trim() && !!email.trim() && !!locality.trim();
 
   if (!employee) return null;
 
@@ -403,6 +434,14 @@ function EditEmployeeModal({ visible, employee, onClose, onSaved, onReload, colo
             <Field label="FULL NAME" testID="edit-emp-name" value={name} onChange={setName} colors={colors} />
             <Field label="LOGIN EMAIL" testID="edit-emp-email" value={email} onChange={setEmail} colors={colors} keyboardType="email-address" />
             <Field label="PHONE" testID="edit-emp-phone" value={phone} onChange={setPhone} colors={colors} keyboardType="phone-pad" />
+            <Field
+              label="LOCALITY (REQUIRED)"
+              testID="edit-emp-locality"
+              value={locality}
+              onChange={setLocality}
+              colors={colors}
+              placeholder="e.g. Nalasopara West, Virar, Naigaon"
+            />
             <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>ROLE</Text>
             <View style={{ flexDirection: 'row', gap: 6, flexWrap: 'wrap' }}>
               {ROLES.filter((r) => r.key !== 'admin').map((r) => (
@@ -554,9 +593,11 @@ const styles = StyleSheet.create({
   primaryText: { color: '#fff', fontWeight: '600', fontSize: 12 },
   cardTitle: { fontSize: 15, fontWeight: '700' },
   tableCard: { borderWidth: 1, borderRadius: 12, overflow: 'hidden' },
+  tableSummary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   tHead: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   th: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
   tRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
+  serialNo: { fontSize: 12, fontWeight: '700' },
   cellPrimary: { fontSize: 13, fontWeight: '500' },
   cellSecondary: { fontSize: 11, marginTop: 2 },
   avatar: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
