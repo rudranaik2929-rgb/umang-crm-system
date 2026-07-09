@@ -7,6 +7,7 @@ import { notifyLiveDataChanged } from './liveSync';
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-systemumang-home-tech.onrender.com').replace(/\/$/, '');
 
 const REQUEST_TIMEOUT_MS = 15000;
+const DASHBOARD_TIMEOUT_MS = 90000;
 const AUTH_TIMEOUT_MS = 90000;
 export const IMPORT_TIMEOUT_MS = 300000;
 /** Short TTL for non-live endpoints only (auth, static config). */
@@ -90,6 +91,7 @@ const LIVE_GET_PREFIXES = ['/stats', '/leads', '/employees', '/activities', '/bo
 function isLiveGetUrl(url: string) {
     const path = String(url || '').split('?')[0];
     if (path === '/notifications/unread-count') return false;
+    if (path === '/stats/dashboard-bundle' || path === '/stats/me-bundle') return false;
     return LIVE_GET_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 
@@ -173,7 +175,7 @@ export function warmUpBackend(): Promise<void> {
     if (warmUpPromise) return warmUpPromise;
     warmUpPromise = Promise.all([
         axios.get(`${BACKEND_URL}/`, { timeout: 12000 }).catch(() => undefined),
-        axios.get(`${BACKEND_URL}/api/`, { timeout: 12000 }).catch(() => undefined),
+        axios.get(`${BACKEND_URL}/api/health`, { timeout: 12000 }).catch(() => undefined),
     ])
         .then(() => undefined)
         .finally(() => {
@@ -182,8 +184,15 @@ export function warmUpBackend(): Promise<void> {
     return warmUpPromise;
 }
 
+const KEEP_ALIVE_MS = 8 * 60 * 1000;
+
 if (Platform.OS === 'web' && typeof window !== 'undefined') {
     warmUpBackend();
+    setInterval(() => {
+        if (document.visibilityState === 'visible') {
+            axios.get(`${BACKEND_URL}/api/health`, { timeout: 10000 }).catch(() => undefined);
+        }
+    }, KEEP_ALIVE_MS);
 }
 
 const TOKEN_KEY = 'umang_session_token';
@@ -255,6 +264,9 @@ api.interceptors.request.use(async (config) => {
     const url = String(config.url || '');
     if (url.includes('/auth/session') || url.includes('/auth/me')) {
         config.timeout = Math.max(Number(config.timeout) || 0, AUTH_TIMEOUT_MS);
+    }
+    if (url.includes('/stats/dashboard-bundle') || url.includes('/stats/me-bundle') || url.includes('/stats/dashboard')) {
+        config.timeout = Math.max(Number(config.timeout) || 0, DASHBOARD_TIMEOUT_MS);
     }
     // Let the browser set multipart boundary for file uploads (Excel/CSV import).
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {

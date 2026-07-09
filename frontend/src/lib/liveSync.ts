@@ -1,7 +1,7 @@
 import { Platform } from 'react-native';
 
 /** How often open screens poll for changes made by other users. */
-export const LIVE_REFRESH_MS = 45000;
+export const LIVE_REFRESH_MS = 180000;
 
 const STORAGE_KEY = 'umang_live_rev';
 

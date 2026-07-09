@@ -226,16 +226,19 @@ def sb_url(table: str) -> str:
 _http = httpx.Client(timeout=20, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
 
 # Short-lived caches — cut repeated full-table Supabase reads on dashboard/login.
-LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "15"))
+LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "60"))
 _USER_CACHE_TTL_SEC = int(os.environ.get("USER_CACHE_TTL_SEC", "300"))
+_USER_PROFILE_CACHE_MAX = int(os.environ.get("USER_PROFILE_CACHE_MAX", "150"))
+_SESSION_CACHE_MAX_ITEMS = int(os.environ.get("SESSION_CACHE_MAX_ITEMS", "400"))
 _leads_cache: Dict[str, Any] = {"ts": 0.0, "select": "", "data": []}
 _user_profile_cache: Dict[str, Dict[str, Any]] = {}
 _employees_cache: Dict[str, Any] = {"ts": 0.0, "data": []}
-_EMPLOYEES_CACHE_TTL = 60
+_EMPLOYEES_CACHE_TTL = 120
 _assignment_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _employee_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _dashboard_stats_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
-_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "8"))
+_graph_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "60"))
 _leads_cache_lock = threading.Lock()
 _leads_cache_loading = threading.Event()
 
@@ -639,6 +642,23 @@ def invalidate_leads_cache() -> None:
     _assignment_stats_cache["ts"] = 0.0
     _employee_stats_cache["ts"] = 0.0
     _dashboard_stats_cache["ts"] = 0.0
+    _graph_cache["ts"] = 0.0
+    _trim_session_cache()
+
+
+def _trim_session_cache() -> None:
+    """Prevent unbounded RAM growth from SESSION_CACHE on long-running workers."""
+    cap = max(_SESSION_CACHE_MAX_ITEMS, 50)
+    for key, rows in list(SESSION_CACHE.items()):
+        if isinstance(rows, list) and len(rows) > cap:
+            SESSION_CACHE[key] = rows[:cap]
+
+
+def _user_profile_cache_set(uid: str, row: Dict[str, Any]) -> None:
+    if len(_user_profile_cache) >= _USER_PROFILE_CACHE_MAX:
+        oldest = min(_user_profile_cache.keys(), key=lambda k: float(_user_profile_cache[k].get("_cached_at", 0)))
+        _user_profile_cache.pop(oldest, None)
+    _user_profile_cache[uid] = {**row, "_cached_at": time.time()}
 
 
 def invalidate_employees_cache() -> None:
@@ -2056,7 +2076,7 @@ def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
         })
         if emps and emps[0].get("active") is False:
             raise HTTPException(401, "Account is disabled. Contact your manager.")
-    _user_profile_cache[uid] = {**u, "_cached_at": time.time()}
+    _user_profile_cache_set(uid, u)
     return _finalize_user_session(_hydrate_allowed_pages_from_employee(u))
 
 def invalidate_sessions_for_user(user_id: str):
@@ -5158,6 +5178,7 @@ def _commit_lead_import(
 
     invalidate_leads_cache()
     invalidate_employees_cache()
+    _trim_session_cache()
 
     breakdown_list = sorted(
         assignment_breakdown.values(),
@@ -7860,7 +7881,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     cache_vis_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
     visits = SESSION_CACHE["visits"] + [v for v in visits if v.get("visit_id") not in cache_vis_ids]
 
-    followups = sb_select_all("visit_followups", {"select": "followup_id,status"})
+    followups = sb_select("visit_followups", {"select": "followup_id,status", "limit": "2000", "order": "follow_up_at.desc"})
     cache_followup_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
     followups = SESSION_CACHE["followups"] + [f for f in followups if f.get("followup_id") not in cache_followup_ids]
 
@@ -7937,6 +7958,9 @@ def _get_dashboard_stats_cached() -> Dict[str, Any]:
 
 
 def _compute_dashboard_graph_sync() -> Dict[str, Any]:
+    now_ts = time.time()
+    if _graph_cache["data"] is not None and (now_ts - float(_graph_cache["ts"])) < _STATS_CACHE_TTL_SEC:
+        return _graph_cache["data"]
     now = now_utc()
     graph_data = sb_select_parallel({
         "leads": ("leads", {"select": "lead_id,created_at,source,status,stage", "created_at": f"gte.{(now - timedelta(days=400)).isoformat()}"}),
@@ -7985,13 +8009,15 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
             rev_months_map[d] += booking_brokerage_amount(b)
     rev_by_month = [{"month": d, "revenue": rev} for d, rev in sorted(rev_months_map.items())]
 
-    return {
+    result = {
         "leads_by_day": leads_by_day,
         "leads_by_month": leads_by_month,
         "leads_by_month_platform": leads_by_month_platform,
         "revenue_by_month": rev_by_month,
         "total_leads_in_chart": sum(months_map.values()),
     }
+    _graph_cache.update({"ts": now_ts, "data": result})
+    return result
 
 
 def _stats_employees_sync() -> List[Dict[str, Any]]:
@@ -8057,17 +8083,23 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
     return await asyncio.to_thread(_get_dashboard_stats_cached)
 
 
+@api_router.get("/health")
+async def api_health():
+    """Lightweight health check — used by frontend keep-alive to prevent Render cold starts."""
+    return {"status": "ok", "ts": now_utc().isoformat()}
+
+
 @api_router.get("/stats/dashboard-bundle")
 async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
     """One round-trip for main Dashboard — admin (full) + manager (team, no revenue UI)."""
     ensure_main_dashboard(cu)
-    stats, graph, employees, recent, leads_page = await asyncio.gather(
+    stats, graph, employees, leads_page = await asyncio.gather(
         asyncio.to_thread(_get_dashboard_stats_cached),
         asyncio.to_thread(_compute_dashboard_graph_sync),
         asyncio.to_thread(_stats_employees_sync),
-        list_recent_leads(20, cu),
         list_leads(limit=80, offset=0, cu=cu),
     )
+    recent = await list_recent_leads(20, cu)
     return {
         "stats": stats,
         "graph": graph,
