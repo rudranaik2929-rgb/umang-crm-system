@@ -5,8 +5,9 @@ import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel, defaultRouteFor } from '../lib/constants';
 import { api, clearSnapshots, clearGetCache } from '../lib/api';
-import { useRouter } from 'expo-router';
+import { useRouter, usePathname } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
+import { AddBookingLeadModal } from './AddBookingLeadModal';
 import { ImportLeadsModal } from './ImportLeadsModal';
 import { NotificationBell } from './NotificationBell';
 
@@ -29,8 +30,11 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const [addLeadVisible, setAddLeadVisible] = useState(false);
   const [importLeadsVisible, setImportLeadsVisible] = useState(false);
   const router = useRouter();
+  const pathname = usePathname();
   
   const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
+  const isBookingEmployee = user?.role === 'booking';
+  const canImportLeads = user?.role === 'admin' || user?.role === 'manager';
 
   const resetAssignments = async () => {
     if (typeof window === 'undefined') return;
@@ -139,21 +143,33 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
           </>
         )}
 
-        <Pressable
-          onPress={() => setImportLeadsVisible(true)}
-          testID="topbar-import-leads"
-          style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
-        >
-          <Ionicons name="cloud-upload-outline" size={18} color={colors.accent} />
-        </Pressable>
+        {canImportLeads ? (
+          <Pressable
+            onPress={() => setImportLeadsVisible(true)}
+            testID="topbar-import-leads"
+            style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
+          >
+            <Ionicons name="cloud-upload-outline" size={18} color={colors.accent} />
+          </Pressable>
+        ) : null}
 
-        <Pressable
-          onPress={() => setAddLeadVisible(true)}
-          testID="topbar-add-lead"
-          style={[styles.iconBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '15' }]}
-        >
-          <Ionicons name="add" size={20} color={colors.primary} />
-        </Pressable>
+        {isBookingEmployee ? (
+          <Pressable
+            onPress={() => setAddLeadVisible(true)}
+            testID="topbar-add-booking-lead"
+            style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
+          >
+            <Ionicons name="person-add-outline" size={18} color={colors.accent} />
+          </Pressable>
+        ) : (
+          <Pressable
+            onPress={() => setAddLeadVisible(true)}
+            testID="topbar-add-lead"
+            style={[styles.iconBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '15' }]}
+          >
+            <Ionicons name="add" size={20} color={colors.primary} />
+          </Pressable>
+        )}
 
         {isAdminOrOwner ? (
           <>
@@ -380,11 +396,26 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
       </Modal>
 
       <AddLeadModal
-        visible={addLeadVisible}
+        visible={addLeadVisible && !isBookingEmployee}
         onClose={() => setAddLeadVisible(false)}
         onSuccess={() => {
-          // Success!
           if (typeof window !== 'undefined') {
+            window.location.reload();
+          }
+        }}
+      />
+
+      <AddBookingLeadModal
+        visible={addLeadVisible && isBookingEmployee}
+        onClose={() => setAddLeadVisible(false)}
+        onSuccess={() => {
+          setAddLeadVisible(false);
+          clearGetCache();
+          clearSnapshots();
+          const onBookings = pathname?.includes('bookings');
+          if (!onBookings) {
+            router.push('/(app)/bookings' as any);
+          } else if (typeof window !== 'undefined') {
             window.location.reload();
           }
         }}

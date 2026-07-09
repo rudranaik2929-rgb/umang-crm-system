@@ -8,9 +8,10 @@ import { Badge } from '../../src/components/Badge';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
-import { canViewBookingFinance } from '../../src/lib/constants';
+import { canViewBookingFinance, canAddBookingManualLead } from '../../src/lib/constants';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
 import { RegistrationReceiptModal } from '../../src/components/RegistrationReceiptModal';
+import { AddBookingLeadModal } from '../../src/components/AddBookingLeadModal';
 import { BOOKING_TASKS, bookingMatchesTask, countBookingTasks, normalizeCompletedTasks, type BookingTaskKey } from '../../src/lib/bookingTasks';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 
@@ -63,6 +64,8 @@ export default function Bookings() {
   const [leads, setLeads] = useState<any[]>(cachedBookings?.leads ?? []);
   const [loading, setLoading] = useState(!cachedBookings);
   const [showCreate, setShowCreate] = useState(false);
+  const [showAddLead, setShowAddLead] = useState(false);
+  const [prefillLeadId, setPrefillLeadId] = useState<string | null>(null);
   const [editingBooking, setEditingBooking] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [localBrokerage, setLocalBrokerage] = useState<Record<string, string>>({});
@@ -430,10 +433,22 @@ export default function Bookings() {
         title="Booking Management"
         subtitle="Token, agreement & payment tracking"
         rightAction={
-          <Pressable testID="create-booking-btn" onPress={() => setShowCreate(true)} style={[styles.primary, { backgroundColor: colors.primary }]}>
-            <Ionicons name="add" size={14} color="#fff" />
-            <Text style={styles.primaryText}>New Booking</Text>
-          </Pressable>
+          <View style={styles.topActions}>
+            {canAddBookingManualLead(user?.role) ? (
+              <Pressable
+                testID="add-booking-lead-btn"
+                onPress={() => setShowAddLead(true)}
+                style={[styles.secondaryBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '12' }]}
+              >
+                <Ionicons name="person-add-outline" size={14} color={colors.accent} />
+                <Text style={[styles.primaryText, { color: colors.accent }]}>Add Lead</Text>
+              </Pressable>
+            ) : null}
+            <Pressable testID="create-booking-btn" onPress={() => setShowCreate(true)} style={[styles.primary, { backgroundColor: colors.primary }]}>
+              <Ionicons name="add" size={14} color="#fff" />
+              <Text style={styles.primaryText}>New Booking</Text>
+            </Pressable>
+          </View>
         }
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
@@ -516,9 +531,14 @@ export default function Bookings() {
 
       <CreateBookingModal
         visible={showCreate}
-        onClose={() => setShowCreate(false)}
+        onClose={() => {
+          setShowCreate(false);
+          setPrefillLeadId(null);
+        }}
+        initialLeadId={prefillLeadId}
         onCreated={async (created) => {
           setShowCreate(false);
+          setPrefillLeadId(null);
           if (created?.booking_id) {
             setBookings((prev) => {
               const ids = new Set(prev.map((x) => x.booking_id));
@@ -530,6 +550,22 @@ export default function Bookings() {
         }}
         leads={leads}
         colors={colors}
+      />
+      <AddBookingLeadModal
+        visible={showAddLead}
+        onClose={() => setShowAddLead(false)}
+        onSuccess={async (lead) => {
+          setShowAddLead(false);
+          if (lead?.lead_id) {
+            setLeads((prev) => {
+              const ids = new Set(prev.map((x) => x.lead_id));
+              return ids.has(lead.lead_id) ? prev : [lead, ...prev];
+            });
+            setPrefillLeadId(lead.lead_id);
+            setShowCreate(true);
+          }
+          await load();
+        }}
       />
       <EditBookingModal
         booking={editingBooking}
@@ -560,7 +596,7 @@ export default function Bookings() {
   );
 }
 
-function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any) {
+function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initialLeadId }: any) {
   const [leadId, setLeadId] = useState('');
   const [leadSearch, setLeadSearch] = useState('');
   const [property, setProperty] = useState('');
@@ -594,13 +630,14 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors }: any)
     setRegistrationFees('');
     setGst('');
     setSocietyCharges('');
-    setLeadId(leads[0]?.lead_id || '');
-  }, [visible]);
+    setLeadId(initialLeadId || leads[0]?.lead_id || '');
+  }, [visible, initialLeadId]);
 
   useEffect(() => {
     if (!visible || leadId) return;
-    if (leads[0]?.lead_id) setLeadId(leads[0].lead_id);
-  }, [visible, leadId, leads]);
+    const pick = initialLeadId || leads[0]?.lead_id;
+    if (pick) setLeadId(pick);
+  }, [visible, leadId, leads, initialLeadId]);
 
   const parseNum = (v: string) => {
     const n = parseFloat(v);
@@ -907,6 +944,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   primary: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 14, height: 36, borderRadius: 8 },
+  topActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  secondaryBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, height: 36, borderRadius: 8, borderWidth: 1 },
   primaryText: { color: '#fff', fontWeight: '600', fontSize: 12 },
   card: { borderRadius: 12, borderWidth: 1, padding: 16, gap: 6 },
   cardTitle: { fontSize: 15, fontWeight: '700' },

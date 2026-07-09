@@ -140,6 +140,10 @@ export function effectivePages(role?: string | null, email?: string | null, allo
     if (!pages.includes('tracking')) pages = [...pages, 'tracking'];
     if (!pages.includes('negative')) pages = [...pages, 'negative'];
   }
+  // Booking employees always need the Bookings page for manual leads & new bookings.
+  if (normalizedRole === 'booking' && !pages.includes('bookings')) {
+    pages = [...pages, 'bookings'];
+  }
   // Employee Tracking — admin & manager only (never from per-employee grants).
   if (normalizedRole !== 'admin' && normalizedRole !== 'manager') {
     pages = pages.filter((p) => !ADMIN_MANAGER_ONLY_PAGES.has(p));
@@ -183,6 +187,12 @@ export function canSeeRevenue(role?: string | null, email?: string | null) {
 /** Booking page: manager sees same financial fields as admin/owner. */
 export function canViewBookingFinance(role?: string | null, email?: string | null) {
   return isAdmin(role) || role === 'booking' || isOwner(role, email);
+}
+
+/** Manual walk-in lead for booking queue — booking team + admin/manager. */
+export function canAddBookingManualLead(role?: string | null) {
+  const r = normalizeRole(role);
+  return r === 'booking' || r === 'admin' || r === 'manager';
 }
 
 export function canAccess(role: string | null | undefined, page: string, email?: string | null, allowedPages?: string[] | null): boolean {

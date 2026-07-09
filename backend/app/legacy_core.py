@@ -5167,6 +5167,59 @@ async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
     log_activity(cu, "manual_enquiry", f"Manual lead entry created for {p.name}.", lead_id=lid)
     return result or lead
 
+
+@api_router.post("/leads/booking-manual")
+async def create_booking_manual_lead(p: LeadCreatePublic, cu: User = Depends(get_current_user)):
+    """Booking team walk-in / manual lead — lands in booking queue for New Booking."""
+    ensure_roles(cu, ["admin", "manager", "booking"])
+    phone = normalize_phone(p.phone)
+    if not phone:
+        raise HTTPException(status_code=400, detail="A valid phone number is required.")
+    if not clean_text(p.name):
+        raise HTTPException(status_code=400, detail="Customer name is required.")
+
+    officer_id = resolve_employee_id(cu)
+    note_bits = [clean_text(p.notes)] if clean_text(p.notes) else []
+    if officer_id:
+        emps = sb_select("employees", {"employee_id": f"eq.{officer_id}", "select": "name", "limit": "1"})
+        officer_name = emps[0]["name"] if emps else "Booking team"
+        note_bits.append(f"Added manually by booking team ({officer_name}).")
+
+    lid = gen_id("lead")
+    now_iso = now_utc().isoformat()
+    lead = {
+        "lead_id": lid,
+        "name": clean_text(p.name),
+        "phone": phone,
+        "email": clean_text(p.email),
+        "budget": clean_text(p.budget),
+        "location": clean_text(p.location),
+        "property_type": clean_text(p.property_type),
+        "notes": " · ".join(note_bits) if note_bits else None,
+        "source": p.source or "booking_manual",
+        "stage": "booking",
+        "status": "active",
+        "priority": "handoff_booking",
+        "assigned_to": None,
+        "created_at": now_iso,
+        "updated_at": now_iso,
+        "last_employee_action_at": now_iso,
+    }
+    if p.starred is not None:
+        lead["starred"] = p.starred
+
+    result = sb_insert("leads", lead)
+    record = result or lead
+    SESSION_CACHE["leads"].insert(0, record)
+    invalidate_leads_cache()
+    log_activity(
+        cu,
+        "booking_manual_lead",
+        f"Booking team added manual lead for {record.get('name')}.",
+        lead_id=lid,
+    )
+    return record
+
 @api_router.get("/leads")
 async def list_leads(
     stage: Optional[str]=None,
@@ -7318,8 +7371,13 @@ def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
 def _employee_allowed_pages(employee: Dict[str, Any]) -> List[str]:
     """Pages stored on the employee row; fall back to role defaults only when unset."""
     if employee.get("allowed_pages") is None:
-        return _default_pages_for_role(employee.get("role") or "telecaller")
-    return _coerce_allowed_pages(employee.get("allowed_pages"))
+        pages = _default_pages_for_role(employee.get("role") or "telecaller")
+    else:
+        pages = _coerce_allowed_pages(employee.get("allowed_pages"))
+    role = str(employee.get("role") or "").strip().lower()
+    if role == "booking" and "bookings" not in pages:
+        pages = ["bookings", *pages]
+    return pages
 
 
 def _default_pages_for_role(role: str) -> List[str]:
