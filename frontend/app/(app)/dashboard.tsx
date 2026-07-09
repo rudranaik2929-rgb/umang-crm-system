@@ -132,6 +132,7 @@ export default function Dashboard() {
       positiveLeads: Number(bucketSource?.positive ?? stats?.positive_leads ?? 0),
       negativeLeads: Number(bucketSource?.not_interested ?? stats?.negative_leads ?? 0),
       registrationLeads: Number(bucketSource?.registration ?? stats?.registration_leads ?? 0),
+      visitedLeads: Number(bucketSource?.visited ?? stats?.visited_leads ?? 0),
       bookingLeads: Number(bucketSource?.booking ?? 0),
       ringingLeads: Number(bucketSource?.ringing ?? 0),
       bookings: Number(stats?.bookings || 0),
@@ -250,6 +251,7 @@ export default function Dashboard() {
           <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="All ringing / call-back leads" onPress={() => setLeadsBucket('ringing')} />
           <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Filter by employee & source" onPress={() => setLeadsBucket('not_interested')} />
           <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Filter by employee & source" onPress={() => setLeadsBucket('registration')} />
+          <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Site visit marked · filter by employee" onPress={() => setLeadsBucket('visited')} />
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Filter by employee & source" onPress={() => setLeadsBucket('booking')} />
           <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · filter by employee`} onPress={() => setLeadsBucket('follow_up')} />
           {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {

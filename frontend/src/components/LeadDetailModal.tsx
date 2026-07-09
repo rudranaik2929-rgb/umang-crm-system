@@ -119,6 +119,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [editingDetails, setEditingDetails] = useState(false);
   const [detailForm, setDetailForm] = useState({ budget: '', location: '', property_type: '', notes: '' });
   const [savingDetails, setSavingDetails] = useState(false);
+  const [savingRemarks, setSavingRemarks] = useState(false);
   const [brokerageAmount, setBrokerageAmount] = useState('');
   const subAnim = React.useRef(new Animated.Value(0)).current;
   const confettiAnims = React.useRef([...Array(50)].map(() => new Animated.Value(0))).current;
@@ -475,6 +476,31 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     }
   };
 
+  const saveRemarks = async () => {
+    if (!leadId) return;
+    setSavingRemarks(true);
+    setActionError(null);
+    setActionMessage(null);
+    try {
+      let notesPayload = detailForm.notes.trim();
+      if (preferredProperty) {
+        notesPayload = notesPayload
+          ? `Preferred Property: ${preferredProperty}\n${notesPayload}`
+          : `Preferred Property: ${preferredProperty}`;
+      }
+      await api.patch(`/leads/${leadId}`, { notes: notesPayload || null });
+      setActionMessage('Remarks saved.');
+      onChanged?.();
+      broadcastDataChanged();
+      await load(true);
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not save remarks.');
+    } finally {
+      setSavingRemarks(false);
+    }
+  };
+
   if (!visible) return null;
 
   function renderBody() {
@@ -790,7 +816,6 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       <DetailField label="Budget" value={detailForm.budget} onChangeText={(v) => setDetailForm((f) => ({ ...f, budget: v }))} colors={colors} placeholder="e.g. 45 - 50 L" />
                       <DetailField label="Location" value={detailForm.location} onChangeText={(v) => setDetailForm((f) => ({ ...f, location: v }))} colors={colors} placeholder="Area / city" />
                       <DetailField label="Configuration" value={detailForm.property_type} onChangeText={(v) => setDetailForm((f) => ({ ...f, property_type: v }))} colors={colors} placeholder="e.g. 2BHK" />
-                      <DetailField label="Notes" value={detailForm.notes} onChangeText={(v) => setDetailForm((f) => ({ ...f, notes: v }))} colors={colors} placeholder="Customer notes" multiline />
                       {preferredProperty ? (
                         <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
                       ) : null}
@@ -822,9 +847,39 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                         <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
                       ) : null}
                       <DetailRow label="Source" value={lead.source} colors={colors} />
-                      <DetailRow label="Notes" value={cleanNotes} colors={colors} />
                     </>
                   )}
+                </View>
+
+                <View style={styles.block}>
+                  <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>REMARKS / NOTES</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                    Any team member can edit — telecaller, sales, booking, manager
+                  </Text>
+                  <TextInput
+                    testID="lead-remarks-input"
+                    value={detailForm.notes}
+                    onChangeText={(v) => setDetailForm((f) => ({ ...f, notes: v }))}
+                    editable={!savingRemarks}
+                    multiline
+                    placeholder="Customer requirements, visit feedback, payment plan..."
+                    placeholderTextColor={colors.textMuted}
+                    style={{
+                      minHeight: 88, padding: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
+                      color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 14, marginTop: 10,
+                      textAlignVertical: 'top',
+                    }}
+                  />
+                  <Pressable
+                    testID="lead-remarks-save"
+                    onPress={saveRemarks}
+                    disabled={savingRemarks}
+                    style={[styles.saveBtn, { marginTop: 10, backgroundColor: colors.primary, opacity: savingRemarks ? 0.6 : 1 }]}
+                  >
+                    {savingRemarks ? <ActivityIndicator color="#fff" size="small" /> : (
+                      <Text style={{ color: '#fff', fontWeight: '600', fontSize: 13 }}>Save Remarks</Text>
+                    )}
+                  </Pressable>
                 </View>
 
                 {/* Call / visit note — editable anytime */}
@@ -833,7 +888,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     {editingNoteId ? 'EDIT CALL / VISIT NOTE' : 'ADD CALL / VISIT NOTE'}
                   </Text>
                   <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                    Type or edit anytime · tap a note in timeline below to switch
+                    Type or edit anytime · any employee or manager · tap timeline note to switch
                   </Text>
                   <TextInput
                     testID="lead-note-input"

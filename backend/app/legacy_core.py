@@ -1761,9 +1761,26 @@ def _can_reactivate_negative_lead(cu: User) -> bool:
 
 
 def ensure_lead_note_access(cu: User, lead: Dict[str, Any]) -> None:
-    """Call / visit notes — any logged-in user may add or edit on an existing lead."""
+    """Call / visit notes and lead remarks — any logged-in user may add or edit."""
     if not lead:
         raise HTTPException(status_code=404, detail="Lead not found.")
+
+
+LEAD_REMARKS_DETAIL_FIELDS = frozenset({
+    "notes", "budget", "location", "property_type", "phone", "email",
+})
+
+
+def ensure_lead_update_access(cu: User, lead: Dict[str, Any], p: "LeadUpdate") -> None:
+    """Customer remarks/detail fields: any role. Stage, status, assignee: assignee or manager only."""
+    keys = set(p.model_dump(exclude_unset=True).keys())
+    if not keys:
+        ensure_lead_note_access(cu, lead)
+        return
+    if keys - LEAD_REMARKS_DETAIL_FIELDS:
+        ensure_lead_edit_access(cu, lead)
+    else:
+        ensure_lead_note_access(cu, lead)
 
 
 def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
@@ -5405,7 +5422,7 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
         _notify_assignment_summary(assigned_to, 1, cu)
     return updated
 
-LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "booking", "follow_up", "ringing"]
+LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "visited", "booking", "follow_up", "ringing"]
 DASHBOARD_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
 
 
@@ -5454,6 +5471,12 @@ def apply_dashboard_assignee_filter(
 def lead_dashboard_sort_date(lead: Dict[str, Any], bucket_key: str) -> Optional[datetime]:
     if bucket_key == "follow_up":
         return parse_lead_ts(lead.get("follow_up_at")) or parse_lead_ts(lead.get("created_at"))
+    if bucket_key == "visited":
+        return (
+            parse_lead_ts(lead.get("last_employee_action_at"))
+            or parse_lead_ts(lead.get("updated_at"))
+            or parse_lead_ts(lead.get("created_at"))
+        )
     return parse_lead_ts(lead.get("created_at"))
 
 
@@ -5525,6 +5548,11 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
         filtered = [l for l in all_leads if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration", "closed"] and l.get("status") != "negative"]
     elif bucket_key == "registration":
         filtered = [l for l in all_leads if l.get("stage") == "registration"]
+    elif bucket_key == "visited":
+        filtered = [
+            l for l in all_leads
+            if l.get("stage") == "site_visit" and l.get("status") != "negative"
+        ]
     elif bucket_key == "booking":
         filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"] and l.get("status") != "negative"]
     elif bucket_key == "follow_up":
@@ -6106,7 +6134,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             old_lead = cache_match[0]
             
     if not old_lead: raise HTTPException(404, "Lead not found")
-    ensure_lead_edit_access(cu, old_lead)
+    ensure_lead_update_access(cu, old_lead, p)
     if p.assigned_to is not None:
         ensure_roles(cu, ["admin", "manager"])
     
@@ -6306,7 +6334,11 @@ async def update_lead_note(lead_id: str, activity_id: str, p: NoteUpdate, cu: Us
         raise HTTPException(404, detail="Note not found.")
     if not is_editable_lead_note_activity(activity):
         raise HTTPException(400, detail="Only call / visit notes can be edited.")
-    updated = sb_update("activities", "activity_id", activity_id, {"text": body})
+    editor_id = cu.acting_as_employee_id or cu.employee_id or cu.user_id
+    updated = sb_update("activities", "activity_id", activity_id, {
+        "text": body,
+        "user_id": editor_id,
+    })
     if not updated:
         refetched = sb_select("activities", {
             "activity_id": f"eq.{activity_id}",
@@ -7791,6 +7823,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
         "housing_leads": housing_count,
         "meta_leads": meta_count,
         "positive_leads": lead_buckets.get("positive", 0),
+        "visited_leads": lead_buckets.get("visited", 0),
         "registration_leads": lead_buckets.get("registration", 0),
         "negative_leads": lead_buckets.get("not_interested", 0),
         "new_leads": sum(1 for l in pipeline_leads if is_new_lead_stage(l)),

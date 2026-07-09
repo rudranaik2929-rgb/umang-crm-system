@@ -88,3 +88,14 @@ def test_dashboard_ringing_bucket():
     today = "2026-06-28"
     filtered = main.filter_lead_bucket(rows, "ringing", today)
     assert {l["lead_id"] for l in filtered} == {"r1"}
+
+
+def test_dashboard_visited_bucket():
+    rows = [
+        _lead(lead_id="v1", stage="site_visit", status="active"),
+        _lead(lead_id="v2", stage="positive", status="active"),
+        _lead(lead_id="v3", stage="site_visit", status="negative"),
+        _lead(lead_id="v4", stage="assigned", status="active"),
+    ]
+    filtered = main.filter_lead_bucket(rows, "visited", "2026-06-28")
+    assert {l["lead_id"] for l in filtered} == {"v1"}

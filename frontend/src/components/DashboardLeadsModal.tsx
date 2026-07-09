@@ -19,6 +19,7 @@ const BUCKET_TITLES: Record<string, string> = {
   positive: 'Positive Leads',
   not_interested: 'Not Interested',
   registration: 'Registration',
+  visited: 'Visited Leads',
   booking: 'Bookings & Loans',
   follow_up: 'Follow Ups Scheduled',
   ringing: 'Ringing Leads',

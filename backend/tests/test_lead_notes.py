@@ -37,6 +37,32 @@ def test_ensure_lead_note_access_allows_any_role():
     main.ensure_lead_note_access(Telecaller(), lead)
 
 
+def test_ensure_lead_update_access_allows_remarks_on_any_lead():
+    class Booking:
+        role = "booking"
+        employee_id = "emp_booking"
+
+    lead = {"lead_id": "lead_1", "assigned_to": "emp_other"}
+    main.ensure_lead_update_access(Booking(), lead, main.LeadUpdate(notes="Walk-in prefers 2BHK"))
+
+
+def test_ensure_lead_update_access_blocks_workflow_for_non_assignee():
+    import pytest
+    from fastapi import HTTPException
+
+    class Telecaller:
+        role = "telecaller"
+        employee_id = "emp_tc"
+        acting_as_employee_id = None
+        user_id = None
+        email = None
+
+    lead = {"lead_id": "lead_1", "assigned_to": "emp_other"}
+    with pytest.raises(HTTPException) as exc:
+        main.ensure_lead_update_access(Telecaller(), lead, main.LeadUpdate(stage="positive"))
+    assert exc.value.status_code == 403
+
+
 def test_ensure_lead_edit_access_uses_partial_name_match():
     class Telecaller:
         role = "telecaller"
