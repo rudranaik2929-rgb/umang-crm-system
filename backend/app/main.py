@@ -643,7 +643,7 @@ def invalidate_leads_cache() -> None:
 
 def invalidate_employees_cache() -> None:
     _employees_cache["ts"] = 0.0
-    _EMP_LOOKUP_CACHE.clear()
+    _invalidate_employee_cache()
 
 
 def _project_lead_fields(row: Dict[str, Any], select: str) -> Dict[str, Any]:
@@ -1404,12 +1404,16 @@ def actor_activity_keys(cu: User) -> set:
 # dozens of identical employees?email=/user_id= queries (one per resolve call),
 # making the app extremely slow. Employees rarely change, so 60s caching is safe.
 _EMP_LOOKUP_CACHE: Dict[str, Tuple[float, Optional[Dict[str, Any]]]] = {}
-_EMP_LOOKUP_TTL_SEC = int(os.environ.get("EMP_LOOKUP_TTL_SEC", "60"))
+_EMP_LOOKUP_TTL_SEC = int(os.environ.get("EMP_LOOKUP_TTL_SEC", "120"))
 _EMP_LOOKUP_SELECT = "employee_id,name,email,user_id,active,role,allowed_pages"
+_RESOLVED_EMP_ID_CACHE: Dict[str, Tuple[float, Optional[str]]] = {}
+_RESOLVED_EMP_ID_TTL_SEC = int(os.environ.get("RESOLVED_EMP_ID_TTL_SEC", "120"))
+_LEGACY_NOTIFICATION_MIGRATED: set = set()
 
 
 def _invalidate_employee_cache() -> None:
     _EMP_LOOKUP_CACHE.clear()
+    _RESOLVED_EMP_ID_CACHE.clear()
 
 
 def _lookup_employee(field: str, value: Optional[str]) -> Optional[Dict[str, Any]]:
@@ -1437,6 +1441,18 @@ def _employee_id_exists(employee_id: Optional[str]) -> bool:
 
 
 def resolve_employee_id(cu: User) -> Optional[str]:
+    uid = clean_text(cu.user_id)
+    if uid:
+        hit = _RESOLVED_EMP_ID_CACHE.get(uid)
+        if hit and hit[0] > time.time():
+            return hit[1]
+    result = _resolve_employee_id_uncached(cu)
+    if uid:
+        _RESOLVED_EMP_ID_CACHE[uid] = (time.time() + _RESOLVED_EMP_ID_TTL_SEC, result)
+    return result
+
+
+def _resolve_employee_id_uncached(cu: User) -> Optional[str]:
     for candidate in (cu.acting_as_employee_id, cu.employee_id):
         if candidate and _employee_id_exists(candidate):
             return candidate
@@ -1737,18 +1753,13 @@ def normalize_notification_receiver(ref: Optional[str]) -> Optional[str]:
     clean = clean_text(ref)
     if not clean:
         return None
-    rows = sb_select("employees", {"employee_id": f"eq.{clean}", "select": "employee_id", "limit": "1"})
-    if rows and rows[0].get("employee_id"):
-        return rows[0]["employee_id"]
+    emp = _lookup_employee("employee_id", clean)
+    if emp and emp.get("employee_id"):
+        return emp["employee_id"]
     for field in ("user_id", "name"):
-        rows = sb_select("employees", {
-            field: f"eq.{clean}",
-            "select": "employee_id",
-            "limit": "1",
-            "active": "eq.true",
-        })
-        if rows and rows[0].get("employee_id"):
-            return rows[0]["employee_id"]
+        emp = _lookup_employee(field, clean)
+        if emp and emp.get("employee_id"):
+            return emp["employee_id"]
     return clean
 
 
@@ -1814,21 +1825,13 @@ def _repair_user_employee_link(u: Dict[str, Any]) -> Dict[str, Any]:
             true_emp = candidate
             break
     if not true_emp and u.get("email"):
-        rows = sb_select("employees", {
-            "email": f"eq.{normalize_email(u['email'])}",
-            "select": "employee_id",
-            "limit": "1",
-        })
-        if rows:
-            true_emp = rows[0].get("employee_id")
+        emp = _lookup_employee("email", normalize_email(u["email"]))
+        if emp:
+            true_emp = emp.get("employee_id")
     if not true_emp:
-        rows = sb_select("employees", {
-            "user_id": f"eq.{uid}",
-            "select": "employee_id",
-            "limit": "1",
-        })
-        if rows:
-            true_emp = rows[0].get("employee_id")
+        emp = _lookup_employee("user_id", uid)
+        if emp:
+            true_emp = emp.get("employee_id")
 
     if not true_emp:
         return u
@@ -1849,7 +1852,8 @@ def _repair_user_employee_link(u: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def public_user_payload(user: Dict[str, Any]) -> Dict[str, Any]:
-    return User(**_finalize_user_session(dict(user))).model_dump(mode="json")
+    clean = {k: v for k, v in user.items() if k != "_session_ready"}
+    return User(**_finalize_user_session(dict(clean))).model_dump(mode="json")
 
 def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize role, sidebar pages, dashboard landing, and fix wrong employee_id links."""
@@ -1882,6 +1886,7 @@ def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
 
 def issue_session(user: Dict[str, Any], response: Response):
     user = _finalize_user_session(dict(user))
+    user["_session_ready"] = True
     token, expires = create_jwt({
         "sub": user["user_id"],
         "email": user.get("email"),
@@ -2102,19 +2107,23 @@ async def get_current_user(request: Request) -> User:
         if datetime.fromisoformat(sess["expires_at"].replace("Z","+00:00")) <= now_utc():
             del LOCAL_SESSIONS[token]
             raise HTTPException(401, "Session expired")
-        u = _finalize_user_session(dict(sess["user"]))
-        u = _hydrate_allowed_pages_from_employee(u)
+        u = dict(sess["user"])
+        if not u.get("_session_ready"):
+            u = _hydrate_allowed_pages_from_employee(_finalize_user_session(u))
+            u["_session_ready"] = True
+            sess["user"] = u
         act_as = request.headers.get("X-Acting-As")
         if act_as:
-            u["acting_as_employee_id"] = act_as
-        return User(**u)
+            u = {**u, "acting_as_employee_id": act_as}
+        payload = {k: v for k, v in u.items() if k != "_session_ready"}
+        return User(**payload)
 
     # 2. Valid JWT — use token claims directly (fast path, no DB)
     if jwt_payload and jwt_payload.get("sub"):
         exp = datetime.fromtimestamp(int(jwt_payload["exp"]), tz=timezone.utc).isoformat()
         u = user_from_jwt_payload(jwt_payload)
         if u:
-            u = _hydrate_allowed_pages_from_employee(u)
+            u["_session_ready"] = True
             LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
             act_as = request.headers.get("X-Acting-As")
             if act_as:
@@ -7028,20 +7037,16 @@ def _notification_recipient_id(cu: User) -> str:
 
 
 def _notification_user_ids(cu: User) -> List[str]:
-    """All IDs that may appear in notifications.user_id for this login."""
+    """Stable IDs for notifications.user_id — never employee display names (avoids slow/broken queries)."""
     ids: List[str] = []
-    employee = _employee_record_for_user(cu)
-    if employee:
-        for candidate in (
-            employee.get("employee_id"),
-            employee.get("user_id"),
-            clean_text(employee.get("name")),
-        ):
-            if candidate and str(candidate) not in ids:
-                ids.append(str(candidate))
     canonical = resolve_employee_id(cu)
-    if canonical and canonical not in ids:
-        ids.insert(0, canonical)
+    if canonical:
+        ids.append(canonical)
+    emp = _lookup_employee("employee_id", canonical) if canonical else _employee_record_for_user(cu)
+    if emp:
+        uid = clean_text(emp.get("user_id"))
+        if uid and uid not in ids:
+            ids.append(uid)
     if cu.user_id and cu.user_id not in ids:
         ids.append(cu.user_id)
     return ids or [cu.user_id]
@@ -7124,10 +7129,14 @@ def _notification_matches_type_filter(note: Dict[str, Any], type_filter: Optiona
 
 
 def _migrate_legacy_notification_user_ids(cu: User) -> None:
-    """Move notifications stored under login user_id → canonical employee_id."""
+    """Move notifications stored under login user_id → canonical employee_id (once per user per process)."""
+    mig_key = cu.user_id or ""
+    if not mig_key or mig_key in _LEGACY_NOTIFICATION_MIGRATED:
+        return
     emp_id = resolve_employee_id(cu)
     uid = cu.user_id
     if not emp_id or not uid or emp_id == uid:
+        _LEGACY_NOTIFICATION_MIGRATED.add(mig_key)
         return
     legacy = sb_select("notifications", {
         "user_id": f"eq.{uid}",
@@ -7138,38 +7147,20 @@ def _migrate_legacy_notification_user_ids(cu: User) -> None:
         nid = row.get("notification_id")
         if nid:
             sb_update("notifications", "notification_id", nid, {"user_id": emp_id})
+    _LEGACY_NOTIFICATION_MIGRATED.add(mig_key)
 
 
 def _fetch_notifications_for_user(cu: User, *, select: str = "*", extra_params: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
-    """Load notifications — one eq query per user id (avoids broken PostgREST in.() filters)."""
+    """Load notifications — one PostgREST query using stable user ids only."""
     _migrate_legacy_notification_user_ids(cu)
     base: Dict[str, Any] = {"select": select, "limit": "500"}
     if extra_params:
         base.update(extra_params)
 
-    match_values = _notification_user_ids(cu)
-    rows: List[Dict[str, Any]] = []
-    seen: set = set()
-
-    def _absorb(batch: Optional[List[Dict[str, Any]]]) -> None:
-        for row in batch or []:
-            nid = row.get("notification_id")
-            if not nid or nid in seen:
-                continue
-            rows.append(row)
-            seen.add(nid)
-
-    canonical = resolve_employee_id(cu)
-    if canonical:
-        _absorb(sb_select("notifications", {**base, "user_id": f"eq.{canonical}"}))
-
-    for value in match_values:
-        text = str(value or "").strip()
-        if not text or text == canonical:
-            continue
-        filt = f"eq.{_postgrest_filter_value(text)}"
-        _absorb(sb_select("notifications", {**base, "user_id": filt}))
-
+    ids = _notification_query_ids(cu)
+    if not ids:
+        return []
+    rows = sb_select("notifications", {**base, "user_id": _postgrest_user_id_filter(ids)})
     rows.sort(key=lambda n: n.get("created_at") or "", reverse=True)
     return rows
 
@@ -7372,15 +7363,14 @@ async def register_fcm_token(body: FcmTokenRegister, cu: User = Depends(get_curr
     if not token:
         raise HTTPException(400, detail="FCM token is required.")
 
-    def _upsert_for_user(uid: str) -> Dict[str, Any]:
+    def _upsert_token(preferred_user_id: str) -> Dict[str, Any]:
         existing = sb_select("fcm_device_tokens", {
             "fcm_token": f"eq.{token}",
-            "user_id": f"eq.{uid}",
-            "select": "token_id",
+            "select": "token_id,user_id",
             "limit": "1",
         })
         row = {
-            "user_id": uid,
+            "user_id": preferred_user_id,
             "fcm_token": token,
             "platform": body.platform or "web",
             "user_agent": (body.user_agent or "")[:500] or None,
@@ -7396,9 +7386,9 @@ async def register_fcm_token(body: FcmTokenRegister, cu: User = Depends(get_curr
         saved = sb_insert("fcm_device_tokens", row)
         return saved or row
 
-    saved = _upsert_for_user(canonical)
+    saved = _upsert_token(canonical)
     if cu.user_id and cu.user_id != canonical:
-        _upsert_for_user(cu.user_id)
+        _upsert_token(cu.user_id)
     return saved
 
 

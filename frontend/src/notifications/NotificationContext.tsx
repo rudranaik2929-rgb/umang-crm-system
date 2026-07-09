@@ -58,7 +58,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   const refreshUnread = useCallback(async () => {
     if (!user || authLoading) return;
     try {
-      const r = await api.get('/notifications/unread-count', { bypassCache: true } as any);
+      const r = await api.get('/notifications/unread-count');
       setUnreadCount(r.data?.unread_count ?? 0);
     } catch {
       /* ignore */
@@ -98,8 +98,7 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
 
         const r = await api.get<NotificationListResponse>('/notifications', {
           params,
-          bypassCache: true,
-        } as any);
+        });
         const data = r.data;
         const batch = Array.isArray(data?.items) ? data.items : [];
         setItems((prev) => mergeNotificationLists(batch, prev));
@@ -121,11 +120,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
   );
 
   const refresh = useCallback(async () => {
-    await Promise.all([
-      fetchList({ reset: true, limit: listOpts.current.limit ?? DEFAULT_LIST_LIMIT }),
-      refreshUnread(),
-    ]);
-  }, [fetchList, refreshUnread]);
+    await fetchList({ reset: true, limit: listOpts.current.limit ?? DEFAULT_LIST_LIMIT });
+  }, [fetchList]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || loading) return;
@@ -172,8 +168,8 @@ export function NotificationProvider({ children }: { children: React.ReactNode }
       // Lead assign triggers live sync — only bump unread count; full list merge handles the rest.
       refreshUnread();
     });
-    const pollUnread = setInterval(refreshUnread, 15000);
-    const pollFull = setInterval(refresh, 60000);
+    const pollUnread = setInterval(refreshUnread, 60000);
+    const pollFull = setInterval(refresh, 180000);
     return () => {
       unsubLive();
       clearInterval(pollUnread);
