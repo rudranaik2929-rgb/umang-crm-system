@@ -4,7 +4,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot, broadcastDataChanged } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { roleLabel, isAdmin } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
@@ -82,6 +82,13 @@ export default function AssignLeads() {
 
   const selectedRef = React.useRef(selected);
   selectedRef.current = selected;
+  const filtersRef = React.useRef(filters);
+  filtersRef.current = filters;
+  const bulkEmployeeIdRef = React.useRef(bulkEmployeeId);
+  bulkEmployeeIdRef.current = bulkEmployeeId;
+  const bulkStatusActionRef = React.useRef(bulkStatusAction);
+  bulkStatusActionRef.current = bulkStatusAction;
+  const operationBusyRef = React.useRef(false);
 
   const canDeleteLeads = isAdmin(user?.role);
 
@@ -92,7 +99,7 @@ export default function AssignLeads() {
   const loadRequestRef = React.useRef(0);
 
   const load = useCallback(async (
-    activeFilters = filters,
+    activeFilters: AssignWorkspaceFilters,
     options?: { preserveSelection?: boolean; clearBulk?: boolean },
   ) => {
     const preserveSelection = options?.preserveSelection === true;
@@ -101,9 +108,16 @@ export default function AssignLeads() {
     const reqId = ++loadRequestRef.current;
     setLoading(true);
     try {
+      const params = {
+        inquiry_status: activeFilters.inquiry_status || 'all',
+        source: activeFilters.source || 'all',
+        assigned_to: activeFilters.assigned_to || 'all',
+        q: activeFilters.q?.trim() || '',
+        location: activeFilters.location?.trim() || '',
+      };
       const [ws, s] = await Promise.all([
-        api.get('/leads/assign-workspace', { params: activeFilters }),
-        api.get('/stats/assignment'),
+        api.get('/leads/assign-workspace', { params, bypassCache: true }),
+        api.get('/stats/assignment', { bypassCache: true }),
       ]);
       if (reqId !== loadRequestRef.current) return;
       const nextLeads = ws.data?.leads || [];
@@ -119,27 +133,37 @@ export default function AssignLeads() {
       if (preserveSelection && keptSelection) {
         const visible = new Set(nextLeads.map((l: any) => l.lead_id));
         setSelected(new Set([...keptSelection].filter((id) => visible.has(id))));
-      } else {
+      } else if (!preserveSelection) {
         setSelected(new Set());
         if (clearBulk) {
           setBulkEmployeeId(null);
           setBulkStatusAction(null);
         }
       }
-      const isDefault = activeFilters.inquiry_status === 'all' && activeFilters.source === 'all'
-        && activeFilters.assigned_to === 'all' && !activeFilters.q && !activeFilters.location;
+      const isDefault = params.inquiry_status === 'all' && params.source === 'all'
+        && params.assigned_to === 'all' && !params.q && !params.location;
       if (isDefault) {
         setSnapshot('assign-leads-page', {
           leads: nextLeads, employees: nextEmployees, total: nextTotal, facets: nextFacets, assignmentStats: nextStats,
         });
       }
+    } catch (e: any) {
+      if (reqId === loadRequestRef.current) {
+        setMessage(e?.response?.data?.detail || 'Could not load leads. Check connection and retry.');
+      }
     } finally {
       if (reqId === loadRequestRef.current) setLoading(false);
     }
-  }, [filters]);
+  }, []);
 
-  useEffect(() => { load(); }, [load]);
-  useLiveRefresh(() => load(filters, { preserveSelection: true, clearBulk: false }));
+  useEffect(() => {
+    load(filters);
+  }, [filters, load]);
+
+  useLiveRefresh(() => {
+    if (operationBusyRef.current) return;
+    load(filtersRef.current, { preserveSelection: true, clearBulk: false });
+  });
 
   const employeeOptions = useMemo(
     () => employees.map((e) => ({
@@ -214,9 +238,15 @@ export default function AssignLeads() {
   };
 
   const applyFilters = (next: AssignWorkspaceFilters) => {
-    setFilters(next);
+    setMessage(null);
     setShowAdvanced(false);
-    load(next, { preserveSelection: false });
+    setFilters({
+      inquiry_status: next.inquiry_status || 'all',
+      source: next.source || 'all',
+      assigned_to: next.assigned_to || 'all',
+      q: next.q?.trim() || '',
+      location: next.location?.trim() || '',
+    });
   };
 
   const showUnassignedLeads = () => {
@@ -230,22 +260,23 @@ export default function AssignLeads() {
   const assignLead = async (leadId: string, employeeId: string) => {
     setBusyId(leadId);
     setMessage(null);
+    operationBusyRef.current = true;
     try {
       await api.post('/leads/bulk-manage', {
         lead_ids: [leadId],
         assigned_to: employeeId,
         reactivate: true,
-      });
-      await load(filters, { preserveSelection: true, clearBulk: false });
+      }, { timeout: 120000 });
+      await load(filtersRef.current, { preserveSelection: true, clearBulk: false });
       setSelected((prev) => {
         const next = new Set(prev);
         next.delete(leadId);
         return next;
       });
-      broadcastDataChanged();
     } catch (e: any) {
       setMessage(e?.response?.data?.detail || 'Assign failed.');
     } finally {
+      operationBusyRef.current = false;
       setBusyId(null);
     }
   };
@@ -255,53 +286,42 @@ export default function AssignLeads() {
     assigned_to?: string;
     inquiry_action?: string;
   }) => {
-    const r = await api.post('/leads/bulk-manage', { ...payload, reactivate: true });
+    const r = await api.post('/leads/bulk-manage', { ...payload, reactivate: true }, { timeout: 120000 });
     const n = Number(r.data?.updated_count ?? 0);
-    setMessage(`Updated ${n} lead(s).`);
-    await load(filters, { preserveSelection: false });
-    broadcastDataChanged();
+    const skipped = (r.data?.skipped || []).length;
+    if (skipped > 0 && n < 1) {
+      throw new Error(`No leads updated. ${skipped} skipped.`);
+    }
+    setMessage(skipped > 0 ? `Updated ${n} lead(s). ${skipped} skipped.` : `Updated ${n} lead(s).`);
+    await load(filtersRef.current, { preserveSelection: false });
     return n;
   };
 
-  const handleBulkEmployeePick = async (employeeId: string) => {
-    const id = employeeId || null;
-    setBulkEmployeeId(id);
-    if (!id || selectedRef.current.size < 1) return;
-    setBulkBusy(true);
-    setMessage(null);
-    try {
-      await runBulkManage({
-        lead_ids: Array.from(selectedRef.current),
-        assigned_to: id,
-        inquiry_action: bulkStatusAction || undefined,
-      });
-    } catch (e: any) {
-      setMessage(e?.response?.data?.detail || 'Bulk assign failed.');
-    } finally {
-      setBulkBusy(false);
-    }
-  };
-
   const bulkApply = async () => {
-    if (selectedIds.length < 1) {
+    const leadIds = Array.from(selectedRef.current);
+    const employeeId = bulkEmployeeIdRef.current;
+    const statusAction = bulkStatusActionRef.current;
+    if (leadIds.length < 1) {
       setMessage('Select at least one lead.');
       return;
     }
-    if (!bulkEmployeeId && !bulkStatusAction) {
-      setMessage('Choose an employee and/or status action.');
+    if (!employeeId && !statusAction) {
+      setMessage('Choose an employee and/or status action, then tap Apply.');
       return;
     }
     setBulkBusy(true);
     setMessage(null);
+    operationBusyRef.current = true;
     try {
       await runBulkManage({
-        lead_ids: selectedIds,
-        assigned_to: bulkEmployeeId || undefined,
-        inquiry_action: bulkStatusAction || undefined,
+        lead_ids: leadIds,
+        assigned_to: employeeId || undefined,
+        inquiry_action: statusAction || undefined,
       });
     } catch (e: any) {
-      setMessage(e?.response?.data?.detail || 'Bulk update failed.');
+      setMessage(e?.response?.data?.detail || e?.message || 'Bulk update failed.');
     } finally {
+      operationBusyRef.current = false;
       setBulkBusy(false);
     }
   };
@@ -320,17 +340,18 @@ export default function AssignLeads() {
     if (!confirmDelete(leadIds.length, nameHint)) return;
     setDeleteBusy(true);
     setMessage(null);
+    operationBusyRef.current = true;
     try {
       const r = await api.post('/leads/bulk-delete', { lead_ids: leadIds });
       const n = Number(r.data?.deleted_count ?? 0);
       const skipped = (r.data?.skipped || []).length;
       setMessage(skipped > 0 ? `Deleted ${n} lead(s). ${skipped} skipped (not found).` : `Deleted ${n} lead(s).`);
       setSelected(new Set());
-      broadcastDataChanged();
-      await load();
+      await load(filtersRef.current, { preserveSelection: false });
     } catch (e: any) {
       setMessage(e?.response?.data?.detail || 'Delete failed.');
     } finally {
+      operationBusyRef.current = false;
       setDeleteBusy(false);
     }
   };
@@ -344,7 +365,7 @@ export default function AssignLeads() {
         subtitle="Advanced search · all leads · reassign not-interested · bulk status change"
         rightAction={
           <Pressable
-            onPress={() => { setLoading(true); load(filters, { preserveSelection: true, clearBulk: false }); }}
+            onPress={() => { setLoading(true); load(filtersRef.current, { preserveSelection: true, clearBulk: false }); }}
             disabled={loading}
             style={[styles.iconBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1 }]}
           >
@@ -617,7 +638,7 @@ export default function AssignLeads() {
                     label="ASSIGN TO"
                     value={bulkEmployeeId || ''}
                     options={employeeOptions}
-                    onChange={handleBulkEmployeePick}
+                    onChange={(id) => setBulkEmployeeId(id || null)}
                     placeholder="Choose employee…"
                     testID="bulk-assign-employee"
                   />
@@ -639,7 +660,7 @@ export default function AssignLeads() {
                     key={emp.key}
                     testID={`bulk-assign-chip-${emp.key}`}
                     disabled={bulkBusy || deleteBusy}
-                    onPress={() => handleBulkEmployeePick(emp.key)}
+                    onPress={() => setBulkEmployeeId(emp.key)}
                     style={[styles.bulkEmpChip, {
                       borderColor: bulkEmployeeId === emp.key ? colors.primary : colors.border,
                       backgroundColor: bulkEmployeeId === emp.key ? colors.primary + '14' : colors.surfaceAlt,
@@ -657,12 +678,12 @@ export default function AssignLeads() {
                 ))}
               </View>
               <Text style={{ color: colors.textMuted, fontSize: 10 }}>
-                Tap an employee above to assign all {selectedIds.length} selected lead(s). Use Apply for status-only changes.
+                Pick employee and/or status, then tap Apply to update {selectedIds.length} selected lead(s).
               </Text>
               <View style={styles.bulkActionsRow}>
                 <Pressable
                   onPress={bulkApply}
-                  disabled={bulkBusy || deleteBusy || (!bulkEmployeeId && !bulkStatusAction)}
+                  disabled={bulkBusy || deleteBusy}
                   style={[styles.bulkGoBtn, {
                     backgroundColor: (bulkEmployeeId || bulkStatusAction) ? colors.primary : colors.textMuted,
                     opacity: bulkBusy || deleteBusy ? 0.7 : 1,
@@ -710,7 +731,7 @@ export default function AssignLeads() {
         leadId={openLead}
         visible={openLead !== null}
         onClose={() => setOpenLead(null)}
-        onChanged={() => load(filters, { preserveSelection: true, clearBulk: false })}
+        onChanged={() => load(filtersRef.current, { preserveSelection: true, clearBulk: false })}
         userRole={user?.role}
       />
     </View>
@@ -790,6 +811,8 @@ const styles = StyleSheet.create({
   bulkBar: {
     position: 'absolute', left: 0, right: 0, bottom: 0,
     borderTopWidth: 1, paddingHorizontal: 12, paddingVertical: 10, gap: 8,
+    zIndex: 50,
+    elevation: 12,
   },
   bulkFilters: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
   bulkActionsRow: { flexDirection: 'row', justifyContent: 'flex-end', alignItems: 'center', gap: 10 },
