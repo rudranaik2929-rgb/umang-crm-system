@@ -1707,12 +1707,12 @@ class LoanUpdate(BaseModel):
     amount: Optional[float]=None; starred: Optional[bool]=None
 class EmployeeCreate(BaseModel):
     name: str; email: str; phone: Optional[str]=None; role: str; department: Optional[str]=None
-    locality: Optional[str]=None
+    location: Optional[str]=None
     password: str
     allowed_pages: Optional[List[str]]=None
 class EmployeeUpdate(BaseModel):
     name: Optional[str]=None; email: Optional[str]=None; phone: Optional[str]=None; role: Optional[str]=None; active: Optional[bool]=None
-    locality: Optional[str]=None
+    location: Optional[str]=None
     allowed_pages: Optional[List[str]]=None; password: Optional[str]=None
 class TemplateCreate(BaseModel): name: str; body: str
 class CampaignCreate(BaseModel):
@@ -7597,9 +7597,9 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
     if not p.password or len(p.password.strip()) < 4:
         raise HTTPException(status_code=400, detail="Password is required (minimum 4 characters).")
 
-    locality = clean_text(p.locality)
-    if not locality:
-        raise HTTPException(status_code=400, detail="Employee locality is required.")
+    location = clean_text(p.location)
+    if not location:
+        raise HTTPException(status_code=400, detail="Employee location is required.")
 
     email = normalize_email(p.email)
     if not email:
@@ -7626,7 +7626,7 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
 
     e = {
         "employee_id": eid, "name": p.name, "email": email, "phone": p.phone,
-        "role": p.role, "department": department, "locality": locality,
+        "role": p.role, "department": department, "location": location,
         "active": True,
         "user_id": user_id, "allowed_pages": allowed_pages,
         "leads_assigned": 0, "leads_closed": 0, "last_login": None,
@@ -7649,7 +7649,7 @@ async def list_employees(cu: User=Depends(get_current_user)):
     else:
         rows = sb_select("employees", {
             "select": (
-                "employee_id,name,email,phone,role,department,locality,active,user_id,allowed_pages,created_at,"
+                "employee_id,name,email,phone,role,department,location,active,user_id,allowed_pages,created_at,"
                 "last_lat,last_lng,last_seen_at"
             ),
             "order": "name.asc",
@@ -7677,10 +7677,10 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
 
     if data.get("role") and data["role"] not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
-    if "locality" in data:
-        data["locality"] = clean_text(data.get("locality")) or None
-        if not data["locality"]:
-            raise HTTPException(status_code=400, detail="Employee locality is required.")
+    if "location" in data:
+        data["location"] = clean_text(data.get("location")) or None
+        if not data["location"]:
+            raise HTTPException(status_code=400, detail="Employee location is required.")
     if "email" in data:
         data["email"] = normalize_email(data["email"])
         if not data["email"]:

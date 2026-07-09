@@ -77,8 +77,8 @@ alter table leads add column if not exists updated_at timestamptz default now();
 -- 2. EMPLOYEES — round-robin + dashboard counters
 -- ---------------------------------------------------------------------
 alter table employees add column if not exists last_assigned_at timestamptz;
-alter table employees add column if not exists locality text;
-create index if not exists idx_employees_locality on employees(locality) where locality is not null;
+alter table employees add column if not exists location text;
+create index if not exists idx_employees_location on employees(location) where location is not null;
 alter table employees add column if not exists leads_assigned integer not null default 0;
 alter table employees add column if not exists leads_closed integer not null default 0;
 alter table employees add column if not exists performance integer not null default 0;

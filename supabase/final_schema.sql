@@ -72,7 +72,7 @@ create table if not exists employees (
   phone text,
   role text not null,
   department text not null,
-  locality text,
+  location text,
   user_id text,
   allowed_pages jsonb not null default '[]'::jsonb,
   active boolean not null default true,
