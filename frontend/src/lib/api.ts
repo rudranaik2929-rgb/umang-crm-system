@@ -8,6 +8,7 @@ const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-s
 
 const REQUEST_TIMEOUT_MS = 15000;
 const DASHBOARD_TIMEOUT_MS = 90000;
+export const ASSIGN_WORKSPACE_TIMEOUT_MS = 120000;
 const AUTH_TIMEOUT_MS = 90000;
 export const IMPORT_TIMEOUT_MS = 300000;
 /** Short TTL for non-live endpoints only (auth, static config). */
@@ -160,10 +161,12 @@ api.interceptors.response.use(
     const authPath = String(config.url || '').includes('/auth/');
     const longRunning = isImportUpload
         || String(config.url || '').includes('/integrations/')
-        || String(config.url || '').includes('/bookings');
+        || String(config.url || '').includes('/bookings')
+        || String(config.url || '').includes('/leads/assign-workspace')
+        || String(config.url || '').includes('/stats/assignment');
     config.timeout = Math.max(
         Number(config.timeout) || 0,
-        authPath ? AUTH_TIMEOUT_MS : (longRunning ? IMPORT_TIMEOUT_MS : 30000),
+        authPath ? AUTH_TIMEOUT_MS : (longRunning ? ASSIGN_WORKSPACE_TIMEOUT_MS : 30000),
     );
     await new Promise((r) => setTimeout(r, 600));
     return api(config);
@@ -299,6 +302,14 @@ api.interceptors.request.use(async (config) => {
     }
     if (url.includes('/stats/dashboard-bundle') || url.includes('/stats/me-bundle') || url.includes('/stats/dashboard')) {
         config.timeout = Math.max(Number(config.timeout) || 0, DASHBOARD_TIMEOUT_MS);
+    }
+    if (
+        url.includes('/leads/assign-workspace')
+        || url.includes('/stats/assignment')
+        || (url.includes('/leads/bulk-manage') && config.method === 'post')
+        || (url.includes('/leads/bulk-assign') && config.method === 'post')
+    ) {
+        config.timeout = Math.max(Number(config.timeout) || 0, ASSIGN_WORKSPACE_TIMEOUT_MS);
     }
     // Let the browser set multipart boundary for file uploads (Excel/CSV import).
     if (typeof FormData !== 'undefined' && config.data instanceof FormData) {

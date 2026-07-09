@@ -4,7 +4,7 @@ import { useLocalSearchParams } from 'expo-router';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot, warmUpBackend, isTransientApiError } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { roleLabel, isAdmin } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
@@ -38,6 +38,27 @@ const UNASSIGNED_FILTERS: AssignWorkspaceFilters = {
 
 const ASSIGN_PAGE_SIZE = 1000;
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatLoadError(e: any): string {
+  const status = e?.response?.status;
+  const detail = e?.response?.data?.detail;
+  if (status === 403) {
+    return typeof detail === 'string'
+      ? detail
+      : 'You do not have permission for Assign Leads. Log in as manager or admin.';
+  }
+  if (status === 401) {
+    return 'Session expired. Please sign out and log in again.';
+  }
+  if (isTransientApiError(e)) {
+    return 'Server is waking up or connection is slow. Tap refresh — your list will load in a moment.';
+  }
+  return typeof detail === 'string' ? detail : 'Could not load leads. Check connection and retry.';
+}
+
 function formatDt(iso?: string | null) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -61,7 +82,7 @@ const INQUIRY_COLORS: Record<string, string> = {
 
 export default function AssignLeads() {
   const { colors } = useTheme();
-  const { user } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const params = useLocalSearchParams<{ openLead?: string }>();
   const cachedAssign = getSnapshot<any>('assign-leads-page');
   const [leads, setLeads] = useState<any[]>(cachedAssign?.leads ?? []);
@@ -93,6 +114,13 @@ export default function AssignLeads() {
   const bulkStatusActionRef = React.useRef(bulkStatusAction);
   bulkStatusActionRef.current = bulkStatusAction;
   const operationBusyRef = React.useRef(false);
+  const leadsCountRef = React.useRef(leads.length);
+  leadsCountRef.current = leads.length;
+
+  const canAccessAssign = isAdmin(user?.role)
+    || user?.email === 'htshpatil13@gmail.com'
+    || user?.email === 'umang@admin'
+    || user?.email === 'rohitsingh241993@gmail.com';
 
   const canDeleteLeads = isAdmin(user?.role);
 
@@ -104,34 +132,56 @@ export default function AssignLeads() {
 
   const load = useCallback(async (
     activeFilters: AssignWorkspaceFilters,
-    options?: { preserveSelection?: boolean; clearBulk?: boolean; append?: boolean; offset?: number },
+    options?: { preserveSelection?: boolean; clearBulk?: boolean; append?: boolean; offset?: number; silent?: boolean },
   ) => {
     const preserveSelection = options?.preserveSelection === true;
     const clearBulk = options?.clearBulk !== false;
     const append = options?.append === true;
+    const silent = options?.silent === true;
     const reqOffset = append ? (options?.offset ?? 0) : 0;
     const keptSelection = preserveSelection ? new Set(selectedRef.current) : null;
     const reqId = ++loadRequestRef.current;
     if (append) setLoadingMore(true);
-    else setLoading(true);
-    if (!append && !preserveSelection) {
+    else if (!silent) setLoading(true);
+    if (!append && !preserveSelection && !silent) {
       setLeads([]);
       setHasMore(false);
     }
+    const params = {
+      inquiry_status: activeFilters.inquiry_status || 'all',
+      source: activeFilters.source || 'all',
+      assigned_to: activeFilters.assigned_to || 'all',
+      q: activeFilters.q?.trim() || '',
+      location: activeFilters.location?.trim() || '',
+      limit: ASSIGN_PAGE_SIZE,
+      offset: reqOffset,
+    };
+
+    const fetchWorkspace = async () => {
+      let lastErr: any;
+      for (let attempt = 0; attempt < 4; attempt++) {
+        try {
+          if (attempt > 0) await warmUpBackend(attempt > 1);
+          return await api.get('/leads/assign-workspace', { params, bypassCache: true });
+        } catch (e: any) {
+          lastErr = e;
+          if (!isTransientApiError(e) || attempt >= 3) throw e;
+          await sleep(900 + attempt * 1500);
+        }
+      }
+      throw lastErr;
+    };
+
     try {
-      const params = {
-        inquiry_status: activeFilters.inquiry_status || 'all',
-        source: activeFilters.source || 'all',
-        assigned_to: activeFilters.assigned_to || 'all',
-        q: activeFilters.q?.trim() || '',
-        location: activeFilters.location?.trim() || '',
-        limit: ASSIGN_PAGE_SIZE,
-        offset: reqOffset,
-      };
-      const [ws, s] = await Promise.all([
-        api.get('/leads/assign-workspace', { params, bypassCache: true }),
-        append ? Promise.resolve(null) : api.get('/stats/assignment', { bypassCache: true }),
-      ]);
+      const ws = await fetchWorkspace();
+      let statsRes: any = null;
+      if (!append) {
+        try {
+          statsRes = await api.get('/stats/assignment', { bypassCache: true });
+        } catch {
+          // Team snapshot is optional — keep leads even if stats fail on slow reload.
+        }
+      }
       if (reqId !== loadRequestRef.current) return;
       const nextLeads = ws.data?.leads || [];
       const nextEmployees = ws.data?.employees || [];
@@ -147,10 +197,11 @@ export default function AssignLeads() {
         setLeads(nextLeads);
         setEmployees(nextEmployees);
         setFacets(nextFacets);
-        if (s) setAssignmentStats(s.data?.employees || []);
+        if (statsRes) setAssignmentStats(statsRes.data?.employees || []);
       }
       setTotal(nextTotal);
       setHasMore(nextHasMore);
+      if (!silent) setMessage(null);
       if (!append && preserveSelection && keptSelection) {
         const visible = new Set(nextLeads.map((l: any) => l.lead_id));
         setSelected(new Set([...keptSelection].filter((id) => visible.has(id))));
@@ -169,28 +220,35 @@ export default function AssignLeads() {
           employees: nextEmployees.length ? nextEmployees : employees,
           total: nextTotal,
           facets: nextFacets,
-          assignmentStats: s ? (s.data?.employees || []) : assignmentStats,
+          assignmentStats: statsRes ? (statsRes.data?.employees || []) : assignmentStats,
         });
       }
     } catch (e: any) {
-      if (reqId === loadRequestRef.current) {
-        setMessage(e?.response?.data?.detail || 'Could not load leads. Check connection and retry.');
-      }
+      if (reqId !== loadRequestRef.current) return;
+      if (silent && leadsCountRef.current > 0) return;
+      setMessage(formatLoadError(e));
     } finally {
       if (reqId === loadRequestRef.current) {
         if (append) setLoadingMore(false);
-        else setLoading(false);
+        else if (!silent) setLoading(false);
       }
     }
   }, [assignmentStats, employees]);
 
   useEffect(() => {
-    load(filters);
-  }, [filters, load]);
+    if (authLoading) return;
+    if (!user) return;
+    if (!canAccessAssign) {
+      setLoading(false);
+      setMessage('Assign Leads is for managers and admins only. Switch role or log in with a manager account.');
+      return;
+    }
+    void warmUpBackend().finally(() => load(filters));
+  }, [filters, load, authLoading, user, canAccessAssign]);
 
   useLiveRefresh(() => {
-    if (operationBusyRef.current) return;
-    load(filtersRef.current, { preserveSelection: true, clearBulk: false });
+    if (operationBusyRef.current || authLoading || !canAccessAssign) return;
+    load(filtersRef.current, { preserveSelection: true, clearBulk: false, silent: true });
   });
 
   const employeeOptions = useMemo(
@@ -416,14 +474,24 @@ export default function AssignLeads() {
           </Pressable>
         }
       />
-      {loading && leads.length === 0 ? (
-        <View style={{ padding: 48 }}><ActivityIndicator color={colors.primary} /></View>
+      {loading && leads.length === 0 && !message ? (
+        <View style={{ padding: 48, alignItems: 'center', gap: 12 }}>
+          <ActivityIndicator color={colors.primary} />
+          <Text style={{ color: colors.textMuted, fontSize: 12 }}>Loading leads… first open may take up to 2 minutes if server was sleeping.</Text>
+        </View>
       ) : (
         <View style={{ flex: 1 }}>
           <ScrollView contentContainerStyle={[styles.content, selectedIds.length > 0 ? { paddingBottom: 140 } : null]}>
             {message ? (
               <View style={[styles.msgBanner, { backgroundColor: colors.primary + '12', borderColor: colors.primary + '40' }]}>
-                <Text style={{ color: colors.text, fontSize: 12 }}>{message}</Text>
+                <Text style={{ color: colors.text, fontSize: 12, flex: 1 }}>{message}</Text>
+                <Pressable
+                  onPress={() => load(filtersRef.current, { preserveSelection: true, clearBulk: false })}
+                  style={[styles.retryInline, { borderColor: colors.primary }]}
+                >
+                  <Ionicons name="refresh" size={14} color={colors.primary} />
+                  <Text style={{ color: colors.primary, fontSize: 11, fontWeight: '700' }}>Retry</Text>
+                </Pressable>
               </View>
             ) : null}
 
@@ -835,7 +903,8 @@ function SummaryBox({ label, value, accent, icon, colors, onPress, active }: any
 
 const styles = StyleSheet.create({
   content: { padding: 20, gap: 16 },
-  msgBanner: { padding: 12, borderRadius: 8, borderWidth: 1 },
+  msgBanner: { padding: 12, borderRadius: 8, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+  retryInline: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 6, borderWidth: 1 },
   toolbar: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, alignItems: 'center' },
   advancedBtn: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 10, borderWidth: 1 },
   filterRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },

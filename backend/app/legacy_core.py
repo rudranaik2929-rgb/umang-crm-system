@@ -1748,8 +1748,11 @@ def issue_session(user: Dict[str, Any], response: Response):
     }
 
 def ensure_roles(cu: User, allowed: Iterable[str]):
-    if cu.role not in set(allowed) and cu.email != "htshpatil13@gmail.com":
-        raise HTTPException(status_code=403, detail="You do not have permission for this action.")
+    if cu.role in set(allowed):
+        return
+    if cu.email in ("htshpatil13@gmail.com", "umang@admin", "rohitsingh241993@gmail.com"):
+        return
+    raise HTTPException(status_code=403, detail="You do not have permission for this action.")
 
 
 def _can_manage_all_leads(cu: User) -> bool:
