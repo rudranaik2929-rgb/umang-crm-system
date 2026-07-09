@@ -36,6 +36,8 @@ const UNASSIGNED_FILTERS: AssignWorkspaceFilters = {
   location: '',
 };
 
+const ASSIGN_PAGE_SIZE = 1000;
+
 function formatDt(iso?: string | null) {
   if (!iso) return '—';
   const d = new Date(iso);
@@ -66,6 +68,8 @@ export default function AssignLeads() {
   const [employees, setEmployees] = useState<any[]>(cachedAssign?.employees ?? []);
   const [assignmentStats, setAssignmentStats] = useState<any[]>(cachedAssign?.assignmentStats ?? []);
   const [total, setTotal] = useState(cachedAssign?.total ?? 0);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [facets, setFacets] = useState<any>(cachedAssign?.facets ?? null);
   const [filters, setFilters] = useState<AssignWorkspaceFilters>(DEFAULT_FILTERS);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -100,13 +104,20 @@ export default function AssignLeads() {
 
   const load = useCallback(async (
     activeFilters: AssignWorkspaceFilters,
-    options?: { preserveSelection?: boolean; clearBulk?: boolean },
+    options?: { preserveSelection?: boolean; clearBulk?: boolean; append?: boolean; offset?: number },
   ) => {
     const preserveSelection = options?.preserveSelection === true;
     const clearBulk = options?.clearBulk !== false;
+    const append = options?.append === true;
+    const reqOffset = append ? (options?.offset ?? 0) : 0;
     const keptSelection = preserveSelection ? new Set(selectedRef.current) : null;
     const reqId = ++loadRequestRef.current;
-    setLoading(true);
+    if (append) setLoadingMore(true);
+    else setLoading(true);
+    if (!append && !preserveSelection) {
+      setLeads([]);
+      setHasMore(false);
+    }
     try {
       const params = {
         inquiry_status: activeFilters.inquiry_status || 'all',
@@ -114,26 +125,36 @@ export default function AssignLeads() {
         assigned_to: activeFilters.assigned_to || 'all',
         q: activeFilters.q?.trim() || '',
         location: activeFilters.location?.trim() || '',
+        limit: ASSIGN_PAGE_SIZE,
+        offset: reqOffset,
       };
       const [ws, s] = await Promise.all([
         api.get('/leads/assign-workspace', { params, bypassCache: true }),
-        api.get('/stats/assignment', { bypassCache: true }),
+        append ? Promise.resolve(null) : api.get('/stats/assignment', { bypassCache: true }),
       ]);
       if (reqId !== loadRequestRef.current) return;
       const nextLeads = ws.data?.leads || [];
       const nextEmployees = ws.data?.employees || [];
       const nextTotal = Number(ws.data?.total ?? 0);
       const nextFacets = ws.data?.facets || null;
-      const nextStats = s.data?.employees || [];
-      setLeads(nextLeads);
-      setEmployees(nextEmployees);
+      const nextHasMore = Boolean(ws.data?.has_more);
+      if (append) {
+        setLeads((prev) => {
+          const ids = new Set(prev.map((l) => l.lead_id));
+          return [...prev, ...nextLeads.filter((l: any) => !ids.has(l.lead_id))];
+        });
+      } else {
+        setLeads(nextLeads);
+        setEmployees(nextEmployees);
+        setFacets(nextFacets);
+        if (s) setAssignmentStats(s.data?.employees || []);
+      }
       setTotal(nextTotal);
-      setFacets(nextFacets);
-      setAssignmentStats(nextStats);
-      if (preserveSelection && keptSelection) {
+      setHasMore(nextHasMore);
+      if (!append && preserveSelection && keptSelection) {
         const visible = new Set(nextLeads.map((l: any) => l.lead_id));
         setSelected(new Set([...keptSelection].filter((id) => visible.has(id))));
-      } else if (!preserveSelection) {
+      } else if (!append && !preserveSelection) {
         setSelected(new Set());
         if (clearBulk) {
           setBulkEmployeeId(null);
@@ -142,9 +163,13 @@ export default function AssignLeads() {
       }
       const isDefault = params.inquiry_status === 'all' && params.source === 'all'
         && params.assigned_to === 'all' && !params.q && !params.location;
-      if (isDefault) {
+      if (isDefault && !append) {
         setSnapshot('assign-leads-page', {
-          leads: nextLeads, employees: nextEmployees, total: nextTotal, facets: nextFacets, assignmentStats: nextStats,
+          leads: nextLeads,
+          employees: nextEmployees.length ? nextEmployees : employees,
+          total: nextTotal,
+          facets: nextFacets,
+          assignmentStats: s ? (s.data?.employees || []) : assignmentStats,
         });
       }
     } catch (e: any) {
@@ -152,9 +177,12 @@ export default function AssignLeads() {
         setMessage(e?.response?.data?.detail || 'Could not load leads. Check connection and retry.');
       }
     } finally {
-      if (reqId === loadRequestRef.current) setLoading(false);
+      if (reqId === loadRequestRef.current) {
+        if (append) setLoadingMore(false);
+        else setLoading(false);
+      }
     }
-  }, []);
+  }, [assignmentStats, employees]);
 
   useEffect(() => {
     load(filters);
@@ -297,10 +325,10 @@ export default function AssignLeads() {
     return n;
   };
 
-  const bulkApply = async () => {
+  const bulkApply = async (overrides?: { employeeId?: string | null; statusAction?: string | null }) => {
     const leadIds = Array.from(selectedRef.current);
-    const employeeId = bulkEmployeeIdRef.current;
-    const statusAction = bulkStatusActionRef.current;
+    const employeeId = overrides?.employeeId !== undefined ? overrides.employeeId : bulkEmployeeIdRef.current;
+    const statusAction = overrides?.statusAction !== undefined ? overrides.statusAction : bulkStatusActionRef.current;
     if (leadIds.length < 1) {
       setMessage('Select at least one lead.');
       return;
@@ -324,6 +352,21 @@ export default function AssignLeads() {
       operationBusyRef.current = false;
       setBulkBusy(false);
     }
+  };
+
+  const quickAssignTo = async (employeeId: string) => {
+    setBulkEmployeeId(employeeId);
+    if (selectedRef.current.size < 1) return;
+    if (bulkStatusActionRef.current) {
+      setMessage('Status action selected — use Apply to update employee + status together.');
+      return;
+    }
+    await bulkApply({ employeeId });
+  };
+
+  const loadMore = () => {
+    if (!hasMore || loadingMore || loading) return;
+    load(filtersRef.current, { append: true, offset: leads.length, preserveSelection: true, clearBulk: false });
   };
 
   const confirmDelete = (count: number, nameHint?: string) => {
@@ -449,12 +492,16 @@ export default function AssignLeads() {
 
             <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Text style={[styles.panelTitle, { color: colors.text }]}>
-                {isUnassignedView ? 'Unassigned leads' : 'All leads'}
+                {isUnassignedView ? 'Unassigned leads' : 'Filtered leads'}
               </Text>
               <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                {isUnassignedView
-                  ? 'Leads with no employee assigned — pick telecaller from dropdown or use bulk assign below.'
-                  : 'Filter not-interested → select → assign to another telecaller. Manager can change status in bulk.'}
+                {loading && leads.length === 0
+                  ? 'Loading leads from server…'
+                  : total > 0
+                    ? `Showing ${leads.length} of ${total} matching lead${total === 1 ? '' : 's'}`
+                    : isUnassignedView
+                      ? 'Leads with no employee assigned — pick telecaller from dropdown or use bulk assign below.'
+                      : 'No leads match these filters — try Advanced Search or Clear filters.'}
               </Text>
 
               {leads.length > 0 ? (
@@ -605,6 +652,22 @@ export default function AssignLeads() {
                   })}
                 </View>
               )}
+              {hasMore ? (
+                <Pressable
+                  testID="assign-load-more"
+                  onPress={loadMore}
+                  disabled={loadingMore}
+                  style={[styles.loadMoreBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '10', opacity: loadingMore ? 0.7 : 1 }]}
+                >
+                  {loadingMore ? (
+                    <ActivityIndicator color={colors.primary} size="small" />
+                  ) : (
+                    <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13 }}>
+                      Load more ({total - leads.length} remaining)
+                    </Text>
+                  )}
+                </Pressable>
+              ) : null}
             </View>
 
             {assignmentStats.length > 0 ? (
@@ -660,7 +723,7 @@ export default function AssignLeads() {
                     key={emp.key}
                     testID={`bulk-assign-chip-${emp.key}`}
                     disabled={bulkBusy || deleteBusy}
-                    onPress={() => setBulkEmployeeId(emp.key)}
+                    onPress={() => quickAssignTo(emp.key)}
                     style={[styles.bulkEmpChip, {
                       borderColor: bulkEmployeeId === emp.key ? colors.primary : colors.border,
                       backgroundColor: bulkEmployeeId === emp.key ? colors.primary + '14' : colors.surfaceAlt,
@@ -678,11 +741,11 @@ export default function AssignLeads() {
                 ))}
               </View>
               <Text style={{ color: colors.textMuted, fontSize: 10 }}>
-                Pick employee and/or status, then tap Apply to update {selectedIds.length} selected lead(s).
+                Tap an employee chip to assign selected leads instantly, or pick employee/status and tap Apply.
               </Text>
               <View style={styles.bulkActionsRow}>
                 <Pressable
-                  onPress={bulkApply}
+                  onPress={() => bulkApply()}
                   disabled={bulkBusy || deleteBusy}
                   style={[styles.bulkGoBtn, {
                     backgroundColor: (bulkEmployeeId || bulkStatusAction) ? colors.primary : colors.textMuted,
@@ -821,6 +884,7 @@ const styles = StyleSheet.create({
   bulkEmpRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
   bulkEmpChip: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1 },
   bulkGoBtn: { paddingHorizontal: 20, paddingVertical: 10, borderRadius: 8, alignItems: 'center' },
+  loadMoreBtn: { marginTop: 12, paddingVertical: 12, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
   bulkDeleteBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 6,
     paddingHorizontal: 16, paddingVertical: 10, borderRadius: 8, borderWidth: 1,

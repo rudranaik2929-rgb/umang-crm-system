@@ -69,6 +69,16 @@ def test_unassigned_filter_sorts_newest_created_first():
     assert [row["lead_id"] for row in filtered] == ["new", "old"]
 
 
+def test_location_filter_matches_location_field():
+    leads = [
+        _lead(lead_id="l1", location="Nalasopara West", name="A"),
+        _lead(lead_id="l2", location="Virar East", name="B"),
+        _lead(lead_id="l3", location="", notes="Interested in Umang Skylark Nalasopara"),
+    ]
+    filtered = main.filter_assign_workspace_leads(leads, location="nalasopara")
+    assert {row["lead_id"] for row in filtered} == {"l1", "l3"}
+
+
 def test_dashboard_ringing_bucket():
     rows = [
         _lead(lead_id="r1", call_status="ringing", status="active"),

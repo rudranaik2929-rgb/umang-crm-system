@@ -299,6 +299,7 @@ def classify_lead_platform(source: Optional[str]) -> str:
         "database", "db", "bulkimport", "bulk", "import", "excel", "excelimport",
         "csv", "csvimport", "spreadsheet", "offline", "website", "websiteenquiry",
         "webenquiry", "enquiry", "inquiry", "contactform",
+        "bookingmanual", "bookingmanualentry",
     }
     if (
         normalized in MANUAL_SOURCES
@@ -307,6 +308,7 @@ def classify_lead_platform(source: Optional[str]) -> str:
         or normalized.startswith("import")
         or normalized.startswith("excel")
         or normalized.startswith("csv")
+        or normalized.startswith("bookingmanual")
     ):
         return "manual"
     return "other"
@@ -1067,9 +1069,21 @@ def lead_matches_search_query(lead: Dict[str, Any], q: str) -> bool:
         return True
     hay = " ".join(
         str(lead.get(k) or "")
-        for k in ("name", "phone", "email", "source", "location", "budget", "property_type", "notes")
+        for k in ("name", "phone", "email", "source", "budget", "property_type", "notes")
     ).lower()
     return needle in hay
+
+
+def lead_matches_location_filter(lead: Dict[str, Any], location: str) -> bool:
+    needle = (location or "").strip().lower()
+    if not needle:
+        return True
+    loc = str(lead.get("location") or "").lower()
+    if needle in loc:
+        return True
+    # Also match project name in notes when location field is empty.
+    notes = str(lead.get("notes") or "").lower()
+    return needle in notes
 
 
 def resolve_lead_assignee_employee(
@@ -1109,7 +1123,7 @@ def filter_assign_workspace_leads(
         and lead_matches_inquiry_filter(l, inquiry_status, employees)
         and lead_matches_assign_source(l, source)
         and lead_matches_search_query(l, q)
-        and lead_matches_search_query(l, location)
+        and lead_matches_location_filter(l, location)
     ]
     assignee = (assigned_to or "all").strip().lower()
     if assignee == "unassigned":
@@ -1483,6 +1497,8 @@ ASSIGN_INQUIRY_STATUSES = [
     "not_interested", "low_budget", "other_location", "already_purchased", "not_searching", "unassigned",
 ]
 ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
+ASSIGN_WORKSPACE_PAGE_SIZE = 1000
+ASSIGN_WORKSPACE_MAX_LIMIT = 2000
 INQUIRY_ACTION_PRESETS: Dict[str, Dict[str, Any]] = {
     "active": {"status": "active", "stage": "assigned"},
     "new": {"status": "active", "stage": "new"},
@@ -5685,7 +5701,7 @@ async def list_assign_workspace(
     if source_key not in ASSIGN_SOURCE_FILTERS:
         raise HTTPException(400, detail=f"source must be one of: {', '.join(ASSIGN_SOURCE_FILTERS)}")
 
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), ASSIGN_WORKSPACE_MAX_LIMIT)
     offset = max(offset, 0)
     select = (
         "lead_id,name,phone,email,source,stage,status,priority,call_status,"
@@ -5703,12 +5719,16 @@ async def list_assign_workspace(
     filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location, assignable)
     page = enrich_leads_with_employee_names(filtered[offset:offset + limit], assignable)
     facets = compute_assign_workspace_facets(all_leads, assignable)
+    total_filtered = len(filtered)
 
     return {
-        "total": len(filtered),
+        "total": total_filtered,
         "leads": page,
         "employees": assignable,
         "facets": facets,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + len(page)) < total_filtered,
         "filters": {
             "inquiry_status": inquiry_key,
             "source": source_key,
@@ -5778,6 +5798,7 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
         sb_update("employees", "employee_id", assign_employee, {"last_assigned_at": now_utc().isoformat()})
         _notify_assignment_summary(assign_employee, assigned_count, cu)
 
+    invalidate_leads_cache()
     return {"status": "success", "updated_count": len(updated), "updated": updated, "skipped": skipped}
 
 
