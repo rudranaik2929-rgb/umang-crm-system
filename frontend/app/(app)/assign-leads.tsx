@@ -5,7 +5,6 @@ import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot, warmUpBackend, isTransientApiError } from '../../src/lib/api';
-import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { roleLabel, isAdmin } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { formatBudgetStringLakhs, workflowStatusColor, workflowStatusLabel } from '../../src/lib/leadFormat';
@@ -116,6 +115,10 @@ export default function AssignLeads() {
   const operationBusyRef = React.useRef(false);
   const leadsCountRef = React.useRef(leads.length);
   leadsCountRef.current = leads.length;
+  const employeesRef = React.useRef(employees);
+  employeesRef.current = employees;
+  const assignmentStatsRef = React.useRef(assignmentStats);
+  assignmentStatsRef.current = assignmentStats;
 
   const canAccessAssign = isAdmin(user?.role)
     || user?.email === 'htshpatil13@gmail.com'
@@ -217,10 +220,10 @@ export default function AssignLeads() {
       if (isDefault && !append) {
         setSnapshot('assign-leads-page', {
           leads: nextLeads,
-          employees: nextEmployees.length ? nextEmployees : employees,
+          employees: nextEmployees.length ? nextEmployees : employeesRef.current,
           total: nextTotal,
           facets: nextFacets,
-          assignmentStats: statsRes ? (statsRes.data?.employees || []) : assignmentStats,
+          assignmentStats: statsRes ? (statsRes.data?.employees || []) : assignmentStatsRef.current,
         });
       }
     } catch (e: any) {
@@ -233,7 +236,10 @@ export default function AssignLeads() {
         else if (!silent) setLoading(false);
       }
     }
-  }, [assignmentStats, employees]);
+  }, []);
+
+  const loadRef = React.useRef(load);
+  loadRef.current = load;
 
   useEffect(() => {
     if (authLoading) return;
@@ -243,13 +249,8 @@ export default function AssignLeads() {
       setMessage('Assign Leads is for managers and admins only. Switch role or log in with a manager account.');
       return;
     }
-    void warmUpBackend().finally(() => load(filters));
-  }, [filters, load, authLoading, user, canAccessAssign]);
-
-  useLiveRefresh(() => {
-    if (operationBusyRef.current || authLoading || !canAccessAssign) return;
-    load(filtersRef.current, { preserveSelection: true, clearBulk: false, silent: true });
-  });
+    void warmUpBackend().finally(() => loadRef.current(filters));
+  }, [filters, authLoading, user, canAccessAssign]);
 
   const employeeOptions = useMemo(
     () => employees.map((e) => ({

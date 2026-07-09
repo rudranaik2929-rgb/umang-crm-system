@@ -4,7 +4,6 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api, getSnapshot, setSnapshot } from '../lib/api';
-import { useLiveRefresh } from '../hooks/useLiveRefresh';
 import { roleLabel } from '../lib/constants';
 
 type Props = { compact?: boolean };
@@ -19,16 +18,15 @@ export function AssignLeadsPanel({ compact = false }: Props) {
   const load = useCallback(async (silent = false) => {
     if (!silent && !stats) setLoading(true);
     try {
-      const res = await api.get('/stats/assignment');
+      const res = await api.get('/stats/assignment', { bypassCache: true });
       setStats(res.data);
       setSnapshot('assign-leads-panel', res.data);
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [stats]);
+  }, []);
 
   useEffect(() => { load(); }, [load]);
-  useLiveRefresh(() => load(true));
 
   if (loading && !stats) return <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />;
 
