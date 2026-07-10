@@ -7,7 +7,7 @@ import httpx
 
 from app.config.settings import SUPABASE_KEY, SUPABASE_URL
 
-_http = httpx.Client(timeout=20, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
+_http = httpx.Client(timeout=60, limits=httpx.Limits(max_connections=20, max_keepalive_connections=10))
 _read_pool = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sb-read")
 
 
@@ -118,6 +118,39 @@ def sb_delete_filter(table: str, params: Optional[dict] = None) -> bool:
     return r.status_code < 400
 
 
+def sb_patch_filter(table: str, match_params: str, data: Dict[str, Any]) -> Optional[str]:
+    """PATCH rows matching PostgREST filter. Returns error text or None."""
+    h = {**sb_headers(), "Prefer": "return=minimal"}
+    r = _http.patch(f"{sb_url(table)}?{match_params}", headers=h, json=data)
+    if r.status_code >= 400:
+        logging.error(f"Supabase PATCH {table}: {r.status_code} {r.text[:300]}")
+        return f"{table}: {r.status_code} {r.text[:200]}"
+    return None
+
+
+def sb_select_in(
+    table: str,
+    col: str,
+    values: List[Any],
+    extra_params: Optional[dict] = None,
+    chunk_size: int = 120,
+) -> List[Dict[str, Any]]:
+    """Fetch rows where col is in values — chunked to stay within URL limits."""
+    clean = [v for v in values if v is not None and str(v).strip()]
+    if not clean:
+        return []
+    rows: List[Dict[str, Any]] = []
+    for i in range(0, len(clean), chunk_size):
+        chunk = clean[i : i + chunk_size]
+        if len(chunk) == 1:
+            filt = f"eq.{chunk[0]}"
+        else:
+            filt = f"in.({','.join(str(v) for v in chunk)})"
+        params = {**(extra_params or {}), col: filt}
+        rows.extend(sb_select(table, params))
+    return rows
+
+
 __all__ = [
     "_http",
     "_read_pool",
@@ -130,4 +163,6 @@ __all__ = [
     "sb_update",
     "sb_delete",
     "sb_delete_filter",
+    "sb_patch_filter",
+    "sb_select_in",
 ]

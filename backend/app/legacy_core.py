@@ -12,6 +12,7 @@ from io import BytesIO
 from passlib.context import CryptContext
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any, Iterable, Tuple
+from collections import defaultdict
 from datetime import datetime, timezone, timedelta, date
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -2253,10 +2254,13 @@ def assign_lead_to_employee(
     actor: Optional[User],
     reactivate: bool = True,
     skip_removed_notify: bool = False,
+    emp_name: Optional[str] = None,
+    skip_activity: bool = False,
 ) -> Dict[str, Any]:
     """Single lead assignment — shared by PATCH and bulk assign. No per-lead notification (use summary)."""
-    emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "name", "limit": "1"})
-    emp_name = emps[0]["name"] if emps else employee_id
+    if not emp_name:
+        emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "name", "limit": "1"})
+        emp_name = emps[0]["name"] if emps else employee_id
     actor_id = None
     if actor:
         actor_id = actor.acting_as_employee_id or actor.user_id
@@ -2265,7 +2269,8 @@ def assign_lead_to_employee(
         data.update(fresh_lead_reset_fields("assigned"))
     updated = sb_update("leads", "lead_id", lead_id, data) or {**old_lead, **data}
     update_cached_lead(lead_id, data)
-    log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
+    if not skip_activity:
+        log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
     old_assignee = clean_text(old_lead.get("assigned_to"))
     if not skip_removed_notify and old_assignee and old_assignee != employee_id:
         # One short removed notice max — skip during bulk (caller sets skip_removed_notify=True).
@@ -2275,6 +2280,141 @@ def assign_lead_to_employee(
             sender_id=actor.acting_as_employee_id or actor.user_id if actor else None,
         )
     return updated
+
+
+def _chunk_list(items: List[Any], size: int) -> Iterable[List[Any]]:
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
+
+
+def _postgrest_id_in_filter(col: str, ids: List[str]) -> str:
+    clean = [i for i in ids if i]
+    if not clean:
+        return f"{col}=eq.__none__"
+    if len(clean) == 1:
+        return f"{col}=eq.{_postgrest_filter_value(clean[0])}"
+    joined = ",".join(_postgrest_filter_value(i) for i in clean)
+    return f"{col}=in.({joined})"
+
+
+def fetch_leads_map_by_ids(lead_ids: List[str], select: str = "*") -> Dict[str, Dict[str, Any]]:
+    """Load many leads in a few HTTP calls (cache + batched in.(...) queries)."""
+    wanted = {lid for lid in lead_ids if lid}
+    found: Dict[str, Dict[str, Any]] = {}
+    for row in SESSION_CACHE.get("leads", []):
+        lid = row.get("lead_id")
+        if lid in wanted:
+            found[lid] = row
+    missing = [lid for lid in lead_ids if lid and lid not in found]
+    for chunk in _chunk_list(missing, 120):
+        rows = sb_select(
+            "leads",
+            {
+                "lead_id": f"in.({','.join(_postgrest_filter_value(i) for i in chunk)})",
+                "select": select,
+            },
+        )
+        for row in rows:
+            lid = row.get("lead_id")
+            if lid:
+                found[lid] = row
+    return found
+
+
+def _patch_fingerprint(patch: Dict[str, Any]) -> str:
+    return json.dumps(patch, sort_keys=True, default=str)
+
+
+def _bulk_patch_leads_grouped(id_to_patch: Dict[str, Dict[str, Any]], chunk_size: int = 100) -> List[str]:
+    """Apply many lead patches using grouped PostgREST bulk PATCH (same fields per group)."""
+    if not id_to_patch:
+        return []
+    groups: Dict[str, List[str]] = defaultdict(list)
+    patch_by_fp: Dict[str, Dict[str, Any]] = {}
+    for lead_id, patch in id_to_patch.items():
+        fp = _patch_fingerprint(patch)
+        groups[fp].append(lead_id)
+        patch_by_fp[fp] = patch
+    errors: List[str] = []
+    for fp, lead_ids in groups.items():
+        patch = patch_by_fp[fp]
+        for chunk in _chunk_list(lead_ids, chunk_size):
+            filt = _postgrest_id_in_filter("lead_id", chunk)
+            err = sb_patch_filter("leads", filt, patch)
+            if err:
+                errors.append(err)
+    return errors
+
+
+def _patch_session_cache_leads_bulk(updates: Dict[str, Dict[str, Any]]) -> None:
+    if not updates:
+        return
+    SESSION_CACHE["leads"] = [
+        enrich_lead_display_fields({**row, **updates[row["lead_id"]]})
+        if row.get("lead_id") in updates
+        else row
+        for row in SESSION_CACHE.get("leads", [])
+    ]
+
+
+def _actor_employee_id(actor: Optional[User]) -> Optional[str]:
+    if not actor:
+        return None
+    return actor.acting_as_employee_id or actor.user_id
+
+
+def compute_bulk_manage_patch(
+    old_lead: Dict[str, Any],
+    body: "BulkLeadManageRequest",
+    preset: Dict[str, Any],
+    assign_employee: Optional[str],
+    actor_id: Optional[str],
+) -> Dict[str, Any]:
+    """Mirror per-lead bulk-manage field order in one patch dict."""
+    patch: Dict[str, Any] = {}
+    if assign_employee:
+        patch.update(
+            stamp_lead_assignment(
+                assign_employee,
+                assigned_by=actor_id,
+                current_stage=old_lead.get("stage"),
+            )
+        )
+        if body.reactivate and old_lead.get("status") == "negative":
+            patch.update(fresh_lead_reset_fields("assigned"))
+
+    inquiry_patch: Dict[str, Any] = {}
+    if preset or body.inquiry_action:
+        inquiry_patch = inquiry_preset_to_patch(preset, body.inquiry_action)
+    patch.update(inquiry_patch)
+
+    for key in ("stage", "status", "priority", "call_status"):
+        val = getattr(body, key, None)
+        if val is not None:
+            patch[key] = val
+
+    if body.reactivate and old_lead.get("status") == "negative" and "status" not in patch:
+        patch.update(fresh_lead_reset_fields("assigned"))
+
+    if patch:
+        patch["updated_at"] = now_utc().isoformat()
+    return patch
+
+
+def compute_assignment_only_patch(
+    old_lead: Dict[str, Any],
+    employee_id: str,
+    actor_id: Optional[str],
+    reactivate: bool = True,
+) -> Dict[str, Any]:
+    patch = stamp_lead_assignment(
+        employee_id,
+        assigned_by=actor_id,
+        current_stage=old_lead.get("stage"),
+    )
+    if reactivate and old_lead.get("status") == "negative":
+        patch.update(fresh_lead_reset_fields("assigned"))
+    return patch
 
 
 def _notify_assignment_summary(employee_id: str, count: int, actor: Optional[User]) -> None:
@@ -5076,11 +5216,7 @@ def _admin_can_reset(cu: User) -> bool:
 
 def _sb_bulk_patch(table: str, match_params: str, data: Dict[str, Any]) -> Optional[str]:
     """PATCH rows matching PostgREST filter. Returns error text or None."""
-    h = {**sb_headers(), "Prefer": "return=minimal"}
-    r = _http.patch(f"{sb_url(table)}?{match_params}", headers=h, json=data)
-    if r.status_code >= 400:
-        return f"{table}: {r.status_code} {r.text[:200]}"
-    return None
+    return sb_patch_filter(table, match_params, data)
 
 
 @api_router.post("/leads/reset-assignments")
@@ -5779,58 +5915,49 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
     if len(lead_ids) < 1:
         raise HTTPException(status_code=400, detail="Select at least one lead.")
 
-    preset = INQUIRY_ACTION_PRESETS.get((body.inquiry_action or "").strip().lower(), {})
-    updated: List[str] = []
-    skipped: List[Dict[str, str]] = []
-    assigned_count = 0
-    assign_employee = (body.assigned_to or "").strip() or None
+    def _run_bulk() -> Dict[str, Any]:
+        preset = INQUIRY_ACTION_PRESETS.get((body.inquiry_action or "").strip().lower(), {})
+        assign_employee = (body.assigned_to or "").strip() or None
+        actor_id = _actor_employee_id(cu)
+        lead_map = fetch_leads_map_by_ids(lead_ids)
+        updated: List[str] = []
+        skipped: List[Dict[str, str]] = []
+        id_to_patch: Dict[str, Dict[str, Any]] = {}
 
-    for lead_id in lead_ids:
-        leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
-        old_lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
-        if not old_lead:
-            skipped.append({"lead_id": lead_id, "reason": "not_found"})
-            continue
+        for lead_id in lead_ids:
+            old_lead = lead_map.get(lead_id)
+            if not old_lead:
+                skipped.append({"lead_id": lead_id, "reason": "not_found"})
+                continue
+            patch = compute_bulk_manage_patch(old_lead, body, preset, assign_employee, actor_id)
+            if not patch:
+                updated.append(lead_id)
+                continue
+            id_to_patch[lead_id] = patch
+            updated.append(lead_id)
 
-        if assign_employee:
-            assign_lead_to_employee(
-                lead_id,
-                old_lead,
-                assign_employee,
-                cu,
-                reactivate=body.reactivate,
-                skip_removed_notify=True,
-            )
-            assigned_count += 1
-            old_lead = {**old_lead, "assigned_to": assign_employee, "status": "active"}
+        errors = _bulk_patch_leads_grouped(id_to_patch)
+        if errors:
+            logging.error("bulk_manage_leads: %s", errors[:5])
+        _patch_session_cache_leads_bulk(id_to_patch)
 
-        patch: Dict[str, Any] = {"updated_at": now_utc().isoformat()}
-        if preset or body.inquiry_action:
-            patch.update(inquiry_preset_to_patch(preset, body.inquiry_action))
-        for key in ("stage", "status", "priority", "call_status"):
-            val = getattr(body, key, None)
-            if val is not None:
-                patch[key] = val
-        if body.reactivate and old_lead.get("status") == "negative" and "status" not in patch:
-            patch.update(fresh_lead_reset_fields("assigned"))
-        if patch.keys() - {"updated_at"}:
-            sb_update("leads", "lead_id", lead_id, patch)
-            update_cached_lead(lead_id, patch)
+        assigned_count = sum(1 for lid in updated if assign_employee and lid in id_to_patch)
+        if assign_employee and assigned_count:
+            sb_update("employees", "employee_id", assign_employee, {"last_assigned_at": now_utc().isoformat()})
+            _notify_assignment_summary(assign_employee, assigned_count, cu)
+
+        if updated:
+            action = body.inquiry_action or ("assign" if assign_employee else "bulk_update")
             log_activity(
                 cu,
                 "manager_bulk_update",
-                f"Manager updated lead ({body.inquiry_action or 'custom'})"
+                f"Manager bulk updated {len(updated)} leads ({action})"
                 + (f" → assigned {assign_employee}" if assign_employee else ""),
-                lead_id=lead_id,
             )
-        updated.append(lead_id)
+        invalidate_leads_cache()
+        return {"status": "success", "updated_count": len(updated), "updated": updated, "skipped": skipped}
 
-    if assign_employee:
-        sb_update("employees", "employee_id", assign_employee, {"last_assigned_at": now_utc().isoformat()})
-        _notify_assignment_summary(assign_employee, assigned_count, cu)
-
-    invalidate_leads_cache()
-    return {"status": "success", "updated_count": len(updated), "updated": updated, "skipped": skipped}
+    return await asyncio.to_thread(_run_bulk)
 
 
 @api_router.post("/leads/bulk-assign")
@@ -5847,32 +5974,46 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
     emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,active", "limit": "1"})
     if not emps or not emps[0].get("active", True):
         raise HTTPException(status_code=400, detail="Employee not found or inactive.")
+    emp_name = emps[0].get("name") or employee_id
 
-    assigned: List[str] = []
-    skipped: List[Dict[str, str]] = []
-    for lead_id in lead_ids:
-        leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
-        old_lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
-        if not old_lead:
-            skipped.append({"lead_id": lead_id, "reason": "not_found"})
-            continue
-        if old_lead.get("assigned_to") == employee_id:
-            skipped.append({"lead_id": lead_id, "reason": "already_assigned"})
-            continue
-        assign_lead_to_employee(lead_id, old_lead, employee_id, cu, skip_removed_notify=True)
-        assigned.append(lead_id)
+    def _run_bulk() -> Dict[str, Any]:
+        lead_map = fetch_leads_map_by_ids(lead_ids)
+        actor_id = _actor_employee_id(cu)
+        id_to_patch: Dict[str, Dict[str, Any]] = {}
+        assigned: List[str] = []
+        skipped: List[Dict[str, str]] = []
 
-    sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
-    if assigned:
-        _notify_assignment_summary(employee_id, len(assigned), cu)
-    return {
-        "status": "success",
-        "assigned": assigned,
-        "assigned_count": len(assigned),
-        "skipped": skipped,
-        "employee_id": employee_id,
-        "employee_name": emps[0].get("name"),
-    }
+        for lead_id in lead_ids:
+            old_lead = lead_map.get(lead_id)
+            if not old_lead:
+                skipped.append({"lead_id": lead_id, "reason": "not_found"})
+                continue
+            if old_lead.get("assigned_to") == employee_id:
+                skipped.append({"lead_id": lead_id, "reason": "already_assigned"})
+                continue
+            id_to_patch[lead_id] = compute_assignment_only_patch(old_lead, employee_id, actor_id)
+            assigned.append(lead_id)
+
+        errors = _bulk_patch_leads_grouped(id_to_patch)
+        if errors:
+            logging.error("bulk_assign_leads: %s", errors[:5])
+        _patch_session_cache_leads_bulk(id_to_patch)
+
+        sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
+        if assigned:
+            log_activity(cu, "bulk_assign", f"Assigned {len(assigned)} leads to {emp_name}")
+            _notify_assignment_summary(employee_id, len(assigned), cu)
+        invalidate_leads_cache()
+        return {
+            "status": "success",
+            "assigned": assigned,
+            "assigned_count": len(assigned),
+            "skipped": skipped,
+            "employee_id": employee_id,
+            "employee_name": emp_name,
+        }
+
+    return await asyncio.to_thread(_run_bulk)
 
 
 @api_router.post("/leads/assign-queue/auto")
