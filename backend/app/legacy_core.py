@@ -411,8 +411,14 @@ def _prefer_newer_lead_row(cache_row: Dict[str, Any], db_row: Dict[str, Any]) ->
 
 
 def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    cache_by_id = {l.get("lead_id"): l for l in SESSION_CACHE["leads"] if l.get("lead_id")}
+    """Merge DB leads with session cache — DB is source of truth after SQL wipes."""
     db_ids = {l.get("lead_id") for l in db_leads if l.get("lead_id")}
+    # Drop phantom rows left after external SQL truncate/delete (keep only very fresh inserts).
+    SESSION_CACHE["leads"] = [
+        l for l in SESSION_CACHE.get("leads", [])
+        if l.get("lead_id") in db_ids or _is_fresh_session_row(l)
+    ]
+    cache_by_id = {l.get("lead_id"): l for l in SESSION_CACHE["leads"] if l.get("lead_id")}
     merged: List[Dict[str, Any]] = []
     for db_row in db_leads:
         lid = db_row.get("lead_id")
@@ -424,6 +430,31 @@ def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any
         if cache_row.get("lead_id") and cache_row.get("lead_id") not in db_ids:
             merged.append(enrich_lead_display_fields(cache_row))
     return merged
+
+
+def _is_fresh_session_row(row: Dict[str, Any], max_age_sec: float = 45.0) -> bool:
+    """Allow brief cache-only visibility right after insert before PostgREST catches up."""
+    ts = _lead_updated_ts(row)
+    if not ts:
+        return False
+    return (time.time() - ts) < max_age_sec
+
+
+def prune_session_list_against_db(
+    cache_key: str,
+    db_rows: List[Dict[str, Any]],
+    id_field: str,
+) -> List[Dict[str, Any]]:
+    """Drop SESSION_CACHE ghosts after SQL wipe; return pruned cache + db merge."""
+    db_ids = {r.get(id_field) for r in db_rows if r.get(id_field)}
+    cached = SESSION_CACHE.get(cache_key) or []
+    SESSION_CACHE[cache_key] = [
+        r for r in cached
+        if r.get(id_field) in db_ids or _is_fresh_session_row(r)
+    ]
+    cache_ids = {r.get(id_field) for r in SESSION_CACHE[cache_key]}
+    return SESSION_CACHE[cache_key] + [r for r in db_rows if r.get(id_field) not in cache_ids]
+
 
 PLATFORM_LABELS = {
     "manual": "Database",
@@ -453,11 +484,32 @@ def sb_select_all(table: str, params: Optional[dict] = None, page_size: int = 10
 def invalidate_leads_cache() -> None:
     with _leads_cache_lock:
         _leads_cache["ts"] = 0.0
+        _leads_cache["data"] = None
     _assignment_stats_cache["ts"] = 0.0
+    _assignment_stats_cache["data"] = None
     _employee_stats_cache["ts"] = 0.0
+    _employee_stats_cache["data"] = None
     _dashboard_stats_cache["ts"] = 0.0
+    _dashboard_stats_cache["data"] = None
     _graph_cache["ts"] = 0.0
+    _graph_cache["data"] = None
     _trim_session_cache()
+
+
+def flush_all_runtime_caches() -> Dict[str, int]:
+    """Hard reset in-memory caches — use after SQL handoff clean / external wipe."""
+    cleared = {k: len(v) if isinstance(v, list) else 0 for k, v in SESSION_CACHE.items()}
+    for key in list(SESSION_CACHE.keys()):
+        SESSION_CACHE[key] = []
+    with _leads_cache_lock:
+        _leads_cache.update({"ts": 0.0, "data": None, "select": None})
+        _leads_cache.pop("_loading", None)
+    _leads_cache_loading.set()
+    for cache in (_assignment_stats_cache, _employee_stats_cache, _dashboard_stats_cache, _graph_cache):
+        cache["ts"] = 0.0
+        cache["data"] = None
+    invalidate_employees_cache()
+    return cleared
 
 
 def _trim_session_cache() -> None:
@@ -506,7 +558,15 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
 
     hit = _from_cache()
     if hit is not None:
-        return hit
+        # Detect external SQL wipe: RAM still has leads but Supabase is empty.
+        if hit:
+            probe = sb_select("leads", {"select": "lead_id", "limit": "1"})
+            if not probe:
+                logging.warning("leads cache wiped: DB empty but RAM had %s rows — flushing", len(hit))
+                flush_all_runtime_caches()
+                hit = None
+        if hit is not None:
+            return hit
 
     is_loader = False
     with _leads_cache_lock:
@@ -8004,25 +8064,17 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     customers = fetched["customers"]
     activities = fetched["activities"]
 
-    cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
-    bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
+    bookings = prune_session_list_against_db("bookings", fetched["bookings"], "booking_id")
     bookings = [b for b in bookings if not is_legacy_skeleton_booking(b)]
 
-    cache_vis_ids = {v.get("visit_id") for v in SESSION_CACHE["visits"]}
-    visits = SESSION_CACHE["visits"] + [v for v in visits if v.get("visit_id") not in cache_vis_ids]
+    visits = prune_session_list_against_db("visits", fetched["visits"], "visit_id")
 
     followups = sb_select("visit_followups", {"select": "followup_id,status", "limit": "2000", "order": "follow_up_at.desc"})
-    cache_followup_ids = {f.get("followup_id") for f in SESSION_CACHE["followups"]}
-    followups = SESSION_CACHE["followups"] + [f for f in followups if f.get("followup_id") not in cache_followup_ids]
+    followups = prune_session_list_against_db("followups", followups, "followup_id")
 
-    cache_activity_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
-    activities = SESSION_CACHE["activities"] + [a for a in activities if a.get("activity_id") not in cache_activity_ids]
-
-    cache_lon_ids = {ln.get("loan_id") for ln in SESSION_CACHE["loans"]}
-    loans = SESSION_CACHE["loans"] + [ln for ln in loans if ln.get("loan_id") not in cache_lon_ids]
-
-    cache_customer_ids = {c.get("customer_id") for c in SESSION_CACHE["customers"]}
-    customers = SESSION_CACHE["customers"] + [c for c in customers if c.get("customer_id") not in cache_customer_ids]
+    activities = prune_session_list_against_db("activities", fetched["activities"], "activity_id")
+    loans = prune_session_list_against_db("loans", fetched["loans"], "loan_id")
+    customers = prune_session_list_against_db("customers", fetched["customers"], "customer_id")
 
     pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
     broker_pool = [l for l in leads if is_broker_pool_lead(l)]
@@ -8098,8 +8150,7 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
         "bookings": ("bookings", {"select": "booking_id,brokerage_amount,agreement_status,created_at"}),
         "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
     })
-    cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
-    leads = SESSION_CACHE["leads"] + [l for l in graph_data["leads"] if l.get("lead_id") not in cache_lead_ids]
+    leads = prune_session_list_against_db("leads", graph_data["leads"], "lead_id")
     pipeline_leads = clean_leads_for_platform_stats(leads)
 
     days_map = {(now - timedelta(days=29 - i)).strftime("%Y-%m-%d"): 0 for i in range(30)}
@@ -8218,6 +8269,19 @@ async def stats_dashboard(cu: User=Depends(get_current_user)):
 async def api_health():
     """Lightweight health check — used by frontend keep-alive to prevent Render cold starts."""
     return {"status": "ok", "ts": now_utc().isoformat()}
+
+
+@api_router.post("/admin/flush-caches")
+async def admin_flush_caches(cu: User = Depends(get_current_user)):
+    """Clear RAM caches after SQL wipe so dashboard counts match the database."""
+    ensure_roles(cu, ["admin", "manager"])
+    cleared = flush_all_runtime_caches()
+    return {
+        "status": "ok",
+        "message": "Runtime caches cleared. Dashboard will reload from Supabase.",
+        "cleared_session_rows": cleared,
+        "ts": now_utc().isoformat(),
+    }
 
 
 @api_router.get("/stats/dashboard-bundle")

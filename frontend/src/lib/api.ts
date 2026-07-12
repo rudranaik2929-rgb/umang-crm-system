@@ -92,7 +92,7 @@ const LIVE_GET_PREFIXES = ['/stats', '/leads', '/employees', '/activities', '/bo
 function isLiveGetUrl(url: string) {
     const path = String(url || '').split('?')[0];
     if (path === '/notifications/unread-count') return false;
-    if (path === '/stats/dashboard-bundle' || path === '/stats/me-bundle') return false;
+    if (path === '/stats/dashboard-bundle' || path === '/stats/me-bundle') return true;
     return LIVE_GET_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
 

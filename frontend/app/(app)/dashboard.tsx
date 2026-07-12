@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Platf
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, getSnapshot, setSnapshot, clearGetCache } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
@@ -62,7 +62,8 @@ export default function Dashboard() {
   const load = useCallback(async () => {
     setLoadError(null);
     try {
-      const res = await api.get('/stats/dashboard-bundle');
+      clearGetCache();
+      const res = await api.get('/stats/dashboard-bundle', { bypassCache: true, timeout: 90000 });
       const bundle = res.data || {};
       const nextStats = bundle.stats || {};
       const nextGraph = bundle.graph || {};
@@ -106,6 +107,18 @@ export default function Dashboard() {
     if (!canLoadDashboard) return;
     load();
   }, [load, canLoadDashboard]);
+
+  const refreshDashboard = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    clearGetCache();
+    try {
+      await api.post('/admin/flush-caches', {}, { timeout: 20000 });
+    } catch {
+      // Safe if route not deployed yet.
+    }
+    await load();
+  }, [load]);
 
   useLiveRefresh(() => {
     if (canLoadDashboard) load();
@@ -170,7 +183,7 @@ export default function Dashboard() {
         <View style={[styles.loadingWrap, { backgroundColor: colors.background }]}>
           <Ionicons name="cloud-offline-outline" size={48} color={colors.muted} />
           <Text style={[styles.errorText, { color: colors.text }]}>{loadError}</Text>
-          <Pressable onPress={() => { setLoading(true); load(); }} style={[styles.retryBtn, { backgroundColor: colors.primary }]}>
+          <Pressable onPress={() => { setLoading(true); refreshDashboard(); }} style={[styles.retryBtn, { backgroundColor: colors.primary }]}>
             <Text style={styles.retryBtnText}>Retry</Text>
           </Pressable>
         </View>
@@ -211,7 +224,7 @@ export default function Dashboard() {
         subtitle={isManager ? 'Team pipeline, assignments and performance' : 'Pipeline, revenue and team performance snapshot'}
         rightAction={
           <Pressable
-            onPress={load}
+            onPress={refreshDashboard}
             disabled={loading}
             style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1 }]}
           >
