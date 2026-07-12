@@ -1523,6 +1523,7 @@ class BulkLeadManageRequest(BaseModel):
     priority: Optional[str] = None
     call_status: Optional[str] = None
     reactivate: bool = True
+    unassign: bool = False
 
 
 class BulkLeadDeleteRequest(BaseModel):
@@ -2402,6 +2403,18 @@ def _actor_employee_id(actor: Optional[User]) -> Optional[str]:
     return actor.acting_as_employee_id or actor.user_id
 
 
+def compute_unassign_patch() -> Dict[str, Any]:
+    """Clear employee assignment — lead returns to unassigned pool."""
+    now = now_utc().isoformat()
+    return {
+        "assigned_to": None,
+        "assigned_at": None,
+        "assigned_by": None,
+        "last_employee_action_at": None,
+        "updated_at": now,
+    }
+
+
 def compute_bulk_manage_patch(
     old_lead: Dict[str, Any],
     body: "BulkLeadManageRequest",
@@ -2411,7 +2424,9 @@ def compute_bulk_manage_patch(
 ) -> Dict[str, Any]:
     """Mirror per-lead bulk-manage field order in one patch dict."""
     patch: Dict[str, Any] = {}
-    if assign_employee:
+    if body.unassign:
+        patch.update(compute_unassign_patch())
+    elif assign_employee:
         patch.update(
             stamp_lead_assignment(
                 assign_employee,
@@ -5977,7 +5992,8 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
 
     def _run_bulk() -> Dict[str, Any]:
         preset = INQUIRY_ACTION_PRESETS.get((body.inquiry_action or "").strip().lower(), {})
-        assign_employee = (body.assigned_to or "").strip() or None
+        unassign = bool(body.unassign)
+        assign_employee = None if unassign else ((body.assigned_to or "").strip() or None)
         actor_id = _actor_employee_id(cu)
         lead_map = fetch_leads_map_by_ids(lead_ids)
         updated: List[str] = []
@@ -6007,7 +6023,7 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
             _notify_assignment_summary(assign_employee, assigned_count, cu)
 
         if updated:
-            action = body.inquiry_action or ("assign" if assign_employee else "bulk_update")
+            action = body.inquiry_action or ("unassign" if unassign else ("assign" if assign_employee else "bulk_update"))
             log_activity(
                 cu,
                 "manager_bulk_update",

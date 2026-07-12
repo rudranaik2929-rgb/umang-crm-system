@@ -25,6 +25,15 @@ def test_compute_assignment_reactivates_negative():
   assert patch["status"] == "active"
 
 
+def test_bulk_unassign_clears_assignment_fields():
+  body = main.BulkLeadManageRequest(lead_ids=["l1"], unassign=True)
+  old = {"lead_id": "l1", "stage": "assigned", "status": "active", "assigned_to": "emp1"}
+  patch = main.compute_bulk_manage_patch(old, body, {}, None, "mgr1")
+  assert patch.get("assigned_to") is None
+  assert patch.get("assigned_at") is None
+  assert patch.get("assigned_by") is None
+
+
 def test_bulk_manage_patch_merges_assign_and_inquiry():
   body = main.BulkLeadManageRequest(
     lead_ids=["l1"],

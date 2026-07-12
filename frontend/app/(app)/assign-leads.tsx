@@ -37,6 +37,9 @@ const UNASSIGNED_FILTERS: AssignWorkspaceFilters = {
 
 const ASSIGN_PAGE_SIZE = 1000;
 
+/** Bulk bar only — means “do not assign to any employee”. */
+export const BULK_ASSIGN_NA = '__na__';
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -261,6 +264,20 @@ export default function AssignLeads() {
     [employees],
   );
 
+  const bulkEmployeeOptions = useMemo(
+    () => [
+      { key: BULK_ASSIGN_NA, label: 'N/A', sublabel: 'Do not assign to anyone' },
+      ...employeeOptions,
+    ],
+    [employeeOptions],
+  );
+
+  const bulkCanApply = Boolean(
+    bulkStatusAction
+    || (bulkEmployeeId && bulkEmployeeId !== BULK_ASSIGN_NA)
+    || bulkEmployeeId === BULK_ASSIGN_NA,
+  );
+
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const allSelected = leads.length > 0 && selected.size === leads.length;
   const unassignedCount = facets?.inquiry_status?.unassigned ?? 0;
@@ -372,6 +389,7 @@ export default function AssignLeads() {
     lead_ids: string[];
     assigned_to?: string;
     inquiry_action?: string;
+    unassign?: boolean;
   }) => {
     const r = await api.post('/leads/bulk-manage', { ...payload, reactivate: true }, { timeout: 120000 });
     const n = Number(r.data?.updated_count ?? 0);
@@ -392,19 +410,24 @@ export default function AssignLeads() {
       setMessage('Select at least one lead.');
       return;
     }
+    const isNa = employeeId === BULK_ASSIGN_NA;
     if (!employeeId && !statusAction) {
-      setMessage('Choose an employee and/or status action, then tap Apply.');
+      setMessage('Choose an employee, N/A, and/or status action, then tap Apply.');
       return;
     }
     setBulkBusy(true);
     setMessage(null);
     operationBusyRef.current = true;
     try {
-      await runBulkManage({
-        lead_ids: leadIds,
-        assigned_to: employeeId || undefined,
-        inquiry_action: statusAction || undefined,
-      });
+      if (isNa && !statusAction) {
+        await runBulkManage({ lead_ids: leadIds, unassign: true });
+      } else {
+        await runBulkManage({
+          lead_ids: leadIds,
+          assigned_to: isNa ? undefined : (employeeId || undefined),
+          inquiry_action: statusAction || undefined,
+        });
+      }
     } catch (e: any) {
       setMessage(e?.response?.data?.detail || e?.message || 'Bulk update failed.');
     } finally {
@@ -769,9 +792,9 @@ export default function AssignLeads() {
                   <SearchableSelect
                     label="ASSIGN TO"
                     value={bulkEmployeeId || ''}
-                    options={employeeOptions}
+                    options={bulkEmployeeOptions}
                     onChange={(id) => setBulkEmployeeId(id || null)}
-                    placeholder="Choose employee…"
+                    placeholder="Choose employee or N/A…"
                     testID="bulk-assign-employee"
                   />
                 </View>
@@ -810,14 +833,14 @@ export default function AssignLeads() {
                 ))}
               </View>
               <Text style={{ color: colors.textMuted, fontSize: 10 }}>
-                Tap an employee chip to assign selected leads instantly, or pick employee/status and tap Apply.
+                Pick N/A to change status only or clear assignment. Tap a chip to assign instantly, or pick options and Apply.
               </Text>
               <View style={styles.bulkActionsRow}>
                 <Pressable
                   onPress={() => bulkApply()}
-                  disabled={bulkBusy || deleteBusy}
+                  disabled={bulkBusy || deleteBusy || !bulkCanApply}
                   style={[styles.bulkGoBtn, {
-                    backgroundColor: (bulkEmployeeId || bulkStatusAction) ? colors.primary : colors.textMuted,
+                    backgroundColor: bulkCanApply ? colors.primary : colors.textMuted,
                     opacity: bulkBusy || deleteBusy ? 0.7 : 1,
                   }]}
                 >
