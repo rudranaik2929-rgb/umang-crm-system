@@ -143,7 +143,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     const timedOut = e?.code === 'ECONNABORTED' || msg.toLowerCase().includes('timeout');
     if (!e?.response && (msg.includes('Network Error') || e?.code === 'ERR_NETWORK' || timedOut)) {
       throw new Error(
-        'Server is still waking up on Render. Wait about a minute, then tap Log in again — the app will retry automatically.',
+        'Cannot reach the CRM server. Check your internet connection and try again.',
       );
     }
     if (e?.response?.status === 401) return null;

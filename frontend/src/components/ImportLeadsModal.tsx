@@ -33,14 +33,14 @@ function importErrorMessage(error: any): string {
   if (status === 413) return 'File is too large for the server. Try a smaller file.';
   if (status && status >= 500) return `Server error (${status}). Wait a minute and try again.`;
   if (error?.code === 'ECONNABORTED') {
-    return 'Upload timed out. If the server was sleeping, wait 30 seconds and try again.';
+    return 'Upload timed out. Try a smaller file or retry in a moment.';
   }
   if (!error?.response) {
     const hint = error?.message || 'network error';
     if (hint === 'Network Error' || error?.code === 'ERR_NETWORK') {
-      return 'Cannot reach CRM server. The API may be waking up (Render) — wait 30 seconds and try again. If this keeps happening, ask admin to verify EXPO_PUBLIC_BACKEND_URL on Vercel points to the live Render API URL.';
+      return 'Cannot reach CRM server. Check your connection and try again.';
     }
-    return `Cannot reach server (${hint}). Wait 30 seconds and retry — large Excel files can take 1–2 minutes on first upload.`;
+    return `Cannot reach server (${hint}). Retry in a moment — large Excel files can take longer to upload.`;
   }
   return 'Upload failed. Check Excel headers and try again.';
 }

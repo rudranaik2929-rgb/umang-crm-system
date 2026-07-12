@@ -23,9 +23,9 @@ export default function Index() {
   const [loginStatus, setLoginStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    setLoginStatus('Connecting to server…');
+    setLoginStatus('Connecting…');
     warmUpBackend().then((ok) => {
-      setLoginStatus(ok ? null : 'Server is waking up — login may take up to a minute the first time.');
+      setLoginStatus(ok ? null : 'Cannot reach server. Check your connection and try again.');
     });
   }, []);
 

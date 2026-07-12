@@ -40,6 +40,65 @@ const ASSIGN_PAGE_SIZE = 1000;
 /** Bulk bar only — means “do not assign to any employee”. */
 export const BULK_ASSIGN_NA = '__na__';
 
+/** Mirror backend inquiry_preset_to_patch for instant UI updates. */
+function statusActionPatch(action: string | null | undefined): Record<string, any> {
+  const key = (action || '').trim().toLowerCase();
+  if (!key) return {};
+  if (key === 'new') {
+    return { status: 'active', stage: 'new', priority: null, call_status: null, follow_up_at: null };
+  }
+  if (key === 'active') {
+    return { status: 'active', stage: 'assigned', call_status: null, follow_up_at: null };
+  }
+  if (key === 'visited') {
+    return { status: 'active', stage: 'site_visit' };
+  }
+  if (key === 'booked') {
+    return { status: 'active', stage: 'booking' };
+  }
+  if (key === 'ringing') {
+    return { status: 'active', stage: 'assigned', call_status: 'ringing' };
+  }
+  if (key === 'hot') {
+    return { status: 'active', stage: 'positive', priority: 'hot' };
+  }
+  if (key === 'not_interested') {
+    return { status: 'negative', call_status: null, follow_up_at: null };
+  }
+  if (['low_budget', 'other_location', 'already_purchased', 'not_searching'].includes(key)) {
+    return { status: 'negative', priority: key, call_status: null, follow_up_at: null };
+  }
+  return {};
+}
+
+function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilters): boolean {
+  const assignee = (filters.assigned_to || 'all').trim().toLowerCase();
+  if (assignee === 'unassigned') {
+    const stage = lead?.stage;
+    const pr = String(lead?.priority || '').toLowerCase();
+    if (['booking', 'loan', 'registration'].includes(stage) || ['handoff_booking', 'handoff_loan'].includes(pr)) {
+      return false;
+    }
+    return !String(lead?.assigned_to || '').trim();
+  }
+  if (assignee && assignee !== 'all') {
+    return String(lead?.assigned_to || '') === assignee;
+  }
+  const inquiry = (filters.inquiry_status || 'all').trim().toLowerCase();
+  if (!inquiry || inquiry === 'all') return true;
+  if (inquiry === 'unassigned') return !String(lead?.assigned_to || '').trim();
+  if (inquiry === 'not_interested') {
+    return lead?.status === 'negative'
+      && !['low_budget', 'other_location', 'already_purchased', 'not_searching'].includes(String(lead?.priority || ''));
+  }
+  if (inquiry === 'ringing') return Boolean(String(lead?.call_status || '').trim());
+  if (inquiry === 'visited') return lead?.stage === 'site_visit';
+  if (inquiry === 'booked') return ['booking', 'loan', 'registration'].includes(lead?.stage);
+  if (inquiry === 'hot') return String(lead?.priority || '') === 'hot';
+  if (inquiry === 'new') return !String(lead?.assigned_to || '').trim() && lead?.stage === 'new';
+  return true;
+}
+
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -56,7 +115,7 @@ function formatLoadError(e: any): string {
     return 'Session expired. Please sign out and log in again.';
   }
   if (isTransientApiError(e)) {
-    return 'Server is waking up or connection is slow. Tap refresh — your list will load in a moment.';
+    return 'Could not reach the server. Tap refresh and try again.';
   }
   return typeof detail === 'string' ? detail : 'Could not load leads. Check connection and retry.';
 }
@@ -118,6 +177,8 @@ export default function AssignLeads() {
   const operationBusyRef = React.useRef(false);
   const leadsCountRef = React.useRef(leads.length);
   leadsCountRef.current = leads.length;
+  const leadsRef = React.useRef(leads);
+  leadsRef.current = leads;
   const employeesRef = React.useRef(employees);
   employeesRef.current = employees;
   const assignmentStatsRef = React.useRef(assignmentStats);
@@ -361,45 +422,71 @@ export default function AssignLeads() {
     applyFilters(DEFAULT_FILTERS);
   };
 
+  const applyOptimisticLeadPatch = (
+    leadIds: string[],
+    patchForLead: (lead: any) => Record<string, any>,
+  ) => {
+    const idSet = new Set(leadIds);
+    const filtersNow = filtersRef.current;
+    let removed = 0;
+    const next: any[] = [];
+    for (const lead of leadsRef.current) {
+      if (!idSet.has(lead.lead_id)) {
+        next.push(lead);
+        continue;
+      }
+      const patched = { ...lead, ...patchForLead(lead) };
+      if (leadStillMatchesAssignFilters(patched, filtersNow)) {
+        next.push(patched);
+      } else {
+        removed += 1;
+      }
+    }
+    leadsRef.current = next;
+    setLeads(next);
+    if (removed > 0) {
+      setTotal((t) => Math.max(0, Number(t) - removed));
+    }
+  };
+
   const assignLead = async (leadId: string, employeeId: string) => {
+    const emp = employeesRef.current.find((e) => e.employee_id === employeeId);
+    const snapshot = leadsRef.current.filter((l) => l.lead_id === leadId);
     setBusyId(leadId);
     setMessage(null);
     operationBusyRef.current = true;
+    applyOptimisticLeadPatch([leadId], (lead) => ({
+      assigned_to: employeeId,
+      assigned_at: new Date().toISOString(),
+      employee_name: emp?.name || lead.employee_name,
+      stage: lead.stage === 'new' ? 'assigned' : lead.stage,
+      status: lead.status === 'negative' ? 'active' : lead.status,
+    }));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(leadId);
+      return next;
+    });
     try {
       await api.post('/leads/bulk-manage', {
         lead_ids: [leadId],
         assigned_to: employeeId,
         reactivate: true,
       }, { timeout: 120000 });
-      await load(filtersRef.current, { preserveSelection: true, clearBulk: false });
-      setSelected((prev) => {
-        const next = new Set(prev);
-        next.delete(leadId);
-        return next;
-      });
+      void load(filtersRef.current, { preserveSelection: true, clearBulk: false, silent: true });
     } catch (e: any) {
+      if (snapshot.length) {
+        setLeads((prev) => {
+          const others = prev.filter((l) => l.lead_id !== leadId);
+          return [...snapshot, ...others];
+        });
+        setTotal((t) => Math.max(Number(t), snapshot.length));
+      }
       setMessage(e?.response?.data?.detail || 'Assign failed.');
     } finally {
       operationBusyRef.current = false;
       setBusyId(null);
     }
-  };
-
-  const runBulkManage = async (payload: {
-    lead_ids: string[];
-    assigned_to?: string;
-    inquiry_action?: string;
-    unassign?: boolean;
-  }) => {
-    const r = await api.post('/leads/bulk-manage', { ...payload, reactivate: true }, { timeout: 120000 });
-    const n = Number(r.data?.updated_count ?? 0);
-    const skipped = (r.data?.skipped || []).length;
-    if (skipped > 0 && n < 1) {
-      throw new Error(`No leads updated. ${skipped} skipped.`);
-    }
-    setMessage(skipped > 0 ? `Updated ${n} lead(s). ${skipped} skipped.` : `Updated ${n} lead(s).`);
-    await load(filtersRef.current, { preserveSelection: false });
-    return n;
   };
 
   const bulkApply = async (overrides?: { employeeId?: string | null; statusAction?: string | null }) => {
@@ -415,25 +502,79 @@ export default function AssignLeads() {
       setMessage('Choose an employee, N/A, and/or status action, then tap Apply.');
       return;
     }
-    setBulkBusy(true);
-    setMessage(null);
+
+    const unassignOnly = isNa && !statusAction;
+    const assignTo = !isNa && employeeId ? employeeId : undefined;
+    const emp = assignTo ? employeesRef.current.find((e) => e.employee_id === assignTo) : null;
+    const statusPatch = statusActionPatch(statusAction);
+    const snapshot = leadsRef.current.filter((l) => leadIds.includes(l.lead_id));
+    const count = leadIds.length;
+
+    // Instant UI: update list + clear selection before waiting on network.
     operationBusyRef.current = true;
-    try {
-      if (isNa && !statusAction) {
-        await runBulkManage({ lead_ids: leadIds, unassign: true });
-      } else {
-        await runBulkManage({
-          lead_ids: leadIds,
-          assigned_to: isNa ? undefined : (employeeId || undefined),
-          inquiry_action: statusAction || undefined,
-        });
+    applyOptimisticLeadPatch(leadIds, (lead) => {
+      const next: Record<string, any> = { ...statusPatch };
+      if (unassignOnly) {
+        next.assigned_to = null;
+        next.assigned_at = null;
+        next.assigned_by = null;
+        next.employee_name = null;
+      } else if (assignTo) {
+        next.assigned_to = assignTo;
+        next.assigned_at = new Date().toISOString();
+        next.employee_name = emp?.name || lead.employee_name;
+        if ((lead.stage === 'new' || !lead.stage) && !statusPatch.stage) {
+          next.stage = 'assigned';
+        }
+        if (lead.status === 'negative' && !statusPatch.status) {
+          next.status = 'active';
+        }
       }
-    } catch (e: any) {
-      setMessage(e?.response?.data?.detail || e?.message || 'Bulk update failed.');
-    } finally {
-      operationBusyRef.current = false;
-      setBulkBusy(false);
-    }
+      return next;
+    });
+    setSelected(new Set());
+    setBulkEmployeeId(null);
+    setBulkStatusAction(null);
+    setBulkBusy(false);
+    setMessage(
+      unassignOnly
+        ? `Cleared assignment for ${count} lead(s).`
+        : assignTo
+          ? `Assigned ${count} lead(s)${statusAction ? ' · status updated' : ''}.`
+          : `Updated status for ${count} lead(s).`,
+    );
+
+    const payload = unassignOnly
+      ? { lead_ids: leadIds, unassign: true, reactivate: true }
+      : {
+          lead_ids: leadIds,
+          assigned_to: assignTo,
+          inquiry_action: statusAction || undefined,
+          reactivate: true,
+        };
+
+    void (async () => {
+      try {
+        const r = await api.post('/leads/bulk-manage', payload, { timeout: 120000 });
+        const n = Number(r.data?.updated_count ?? count);
+        const skipped = (r.data?.skipped || []).length;
+        if (skipped > 0) {
+          setMessage(n > 0 ? `Updated ${n} lead(s). ${skipped} skipped.` : `No leads updated. ${skipped} skipped.`);
+        }
+        void load(filtersRef.current, { preserveSelection: false, clearBulk: true, silent: true });
+      } catch (e: any) {
+        setLeads((prev) => {
+          const ids = new Set(snapshot.map((l) => l.lead_id));
+          const others = prev.filter((l) => !ids.has(l.lead_id));
+          return [...snapshot, ...others];
+        });
+        leadsRef.current = [...snapshot, ...leadsRef.current.filter((l) => !leadIds.includes(l.lead_id))];
+        setTotal((t) => Math.max(Number(t), snapshot.length));
+        setMessage(e?.response?.data?.detail || e?.message || 'Bulk update failed — list restored.');
+      } finally {
+        operationBusyRef.current = false;
+      }
+    })();
   };
 
   const quickAssignTo = async (employeeId: string) => {
@@ -501,7 +642,7 @@ export default function AssignLeads() {
       {loading && leads.length === 0 && !message ? (
         <View style={{ padding: 48, alignItems: 'center', gap: 12 }}>
           <ActivityIndicator color={colors.primary} />
-          <Text style={{ color: colors.textMuted, fontSize: 12 }}>Loading leads… first open may take up to 2 minutes if server was sleeping.</Text>
+          <Text style={{ color: colors.textMuted, fontSize: 12 }}>Loading leads…</Text>
         </View>
       ) : (
         <View style={{ flex: 1 }}>
