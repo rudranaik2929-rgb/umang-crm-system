@@ -395,9 +395,35 @@ def dedupe_leads_by_external_id(leads: List[Dict[str, Any]]) -> List[Dict[str, A
         out.append(lead)
     return out
 
+def _lead_updated_ts(lead: Dict[str, Any]) -> float:
+    raw = lead.get("updated_at") or lead.get("created_at") or ""
+    try:
+        return parse_lead_ts(raw).timestamp() if parse_lead_ts(raw) else 0.0
+    except Exception:
+        return 0.0
+
+
+def _prefer_newer_lead_row(cache_row: Dict[str, Any], db_row: Dict[str, Any]) -> Dict[str, Any]:
+    """DB wins ties — cache is only for rows not yet visible in PostgREST."""
+    if _lead_updated_ts(db_row) >= _lead_updated_ts(cache_row):
+        return enrich_lead_display_fields({**cache_row, **db_row})
+    return enrich_lead_display_fields(cache_row)
+
+
 def merge_leads_with_cache(db_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
-    return SESSION_CACHE["leads"] + [l for l in db_leads if l.get("lead_id") not in cache_ids]
+    cache_by_id = {l.get("lead_id"): l for l in SESSION_CACHE["leads"] if l.get("lead_id")}
+    db_ids = {l.get("lead_id") for l in db_leads if l.get("lead_id")}
+    merged: List[Dict[str, Any]] = []
+    for db_row in db_leads:
+        lid = db_row.get("lead_id")
+        if lid and lid in cache_by_id:
+            merged.append(_prefer_newer_lead_row(cache_by_id[lid], db_row))
+        else:
+            merged.append(enrich_lead_display_fields(db_row))
+    for cache_row in SESSION_CACHE["leads"]:
+        if cache_row.get("lead_id") and cache_row.get("lead_id") not in db_ids:
+            merged.append(enrich_lead_display_fields(cache_row))
+    return merged
 
 PLATFORM_LABELS = {
     "manual": "Database",
@@ -1100,8 +1126,18 @@ def resolve_lead_assignee_employee(
     return None
 
 
+def is_dept_queue_lead(lead: Dict[str, Any]) -> bool:
+    """Lead routed to booking/loan dept — not manager assign-unassigned bucket."""
+    if lead.get("stage") in ("booking", "loan", "registration"):
+        return True
+    pr = _lead_priority(lead)
+    return pr in (HANDOFF_BOOKING, HANDOFF_LOAN)
+
+
 def is_lead_unassigned(lead: Dict[str, Any], employees: Optional[List[Dict[str, Any]]] = None) -> bool:
     """True when no real employee owns this lead (null/blank assigned_to or unknown legacy value)."""
+    if is_dept_queue_lead(lead):
+        return False
     if not clean_text(lead.get("assigned_to")):
         return True
     if not employees:
@@ -1185,7 +1221,7 @@ def enrich_leads_with_employee_names(
 
 def compute_unassigned_queue(all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     queue = [l for l in all_leads if is_unassigned_new_lead(l)]
-    return dedupe_leads(queue)
+    return dedupe_leads_by_external_id(queue)
 
 
 def is_unassigned_new_lead(lead: Dict[str, Any]) -> bool:
@@ -2267,7 +2303,10 @@ def assign_lead_to_employee(
     data = stamp_lead_assignment(employee_id, assigned_by=actor_id, current_stage=old_lead.get("stage"))
     if reactivate and old_lead.get("status") == "negative":
         data.update(fresh_lead_reset_fields("assigned"))
-    updated = sb_update("leads", "lead_id", lead_id, data) or {**old_lead, **data}
+    updated = sb_update("leads", "lead_id", lead_id, data)
+    if updated is None:
+        logging.error("assign_lead_to_employee: update failed lead_id=%s employee=%s", lead_id, employee_id)
+        return None
     update_cached_lead(lead_id, data)
     if not skip_activity:
         log_activity(actor, "lead_assigned", f"Assigned lead to {emp_name}", lead_id=lead_id)
@@ -3281,7 +3320,18 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
     result = sb_insert("leads", {k: v for k, v in optional_lead.items() if v is not None})
     if not result:
         result = sb_insert("leads", {k: v for k, v in base_lead.items() if v is not None})
-    lead_record = result or base_lead
+    if not result:
+        logging.error("create_integrated_lead: insert failed source=%s external_id=%s", source, normalized.get("external_lead_id"))
+        if not quiet:
+            record_integration_event(
+                source,
+                payload,
+                "error",
+                external_id=normalized.get("external_lead_id"),
+                error="insert_failed",
+            )
+        return {"status": "error", "reason": "insert_failed", "payload": normalized}
+    lead_record = result
     SESSION_CACHE["leads"].insert(0, lead_record)
     invalidate_leads_cache()
     if not quiet:
@@ -3919,12 +3969,17 @@ async def create_lead_public(p: LeadCreatePublic):
     }
     if p.starred is not None: lead["starred"] = p.starred
     result = sb_insert("leads", lead)
+    if not result:
+        logging.error("create_lead_public: insert failed lead_id=%s", lid)
+        raise HTTPException(status_code=503, detail="Could not save enquiry. Please try again.")
+    SESSION_CACHE["leads"].insert(0, result)
+    invalidate_leads_cache()
     log_activity(None, "website_enquiry", f"New website enquiry received from {p.name} (awaiting manager assignment).", lead_id=lid)
     
     # Auto-responder (Real Interakt API if key exists)
     WhatsAppService.send_template(phone, "welcome_enquiry", [p.name])
     
-    return result or lead
+    return result
 
 # ---- Webhooks & Portal Integrations ----
 @api_router.get("/facebook/webhook")
@@ -5090,7 +5145,7 @@ def _commit_lead_import(
                 cu,
                 skip_removed_notify=True,
             )
-            if clean_text(updated.get("assigned_to")) == emp_id:
+            if updated and clean_text(updated.get("assigned_to")) == emp_id:
                 activities_batch.append({
                     "activity_id": gen_id("act"),
                     "lead_id": lid,
@@ -5333,11 +5388,13 @@ async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
     }
     if p.starred is not None: lead["starred"] = p.starred
     result = sb_insert("leads", lead)
-    # Always add to session cache for immediate responsiveness
-    SESSION_CACHE["leads"].insert(0, result or lead)
+    if not result:
+        logging.error("create_lead: insert failed lead_id=%s", lid)
+        raise HTTPException(status_code=503, detail="Could not save lead. Please try again.")
+    SESSION_CACHE["leads"].insert(0, result)
     invalidate_leads_cache()
     log_activity(cu, "manual_enquiry", f"Manual lead entry created for {p.name}.", lead_id=lid)
-    return result or lead
+    return result
 
 
 @api_router.post("/leads/booking-manual")
@@ -5381,7 +5438,10 @@ async def create_booking_manual_lead(p: LeadCreatePublic, cu: User = Depends(get
         lead["starred"] = p.starred
 
     result = sb_insert("leads", lead)
-    record = result or lead
+    if not result:
+        logging.error("create_booking_manual_lead: insert failed lead_id=%s", lid)
+        raise HTTPException(status_code=503, detail="Could not save booking lead. Please try again.")
+    record = result
     SESSION_CACHE["leads"].insert(0, record)
     invalidate_leads_cache()
     log_activity(
@@ -6028,7 +6088,10 @@ async def auto_assign_queue(cu: User = Depends(get_current_user)):
         eid = assign_lead_round_robin()
         if not eid:
             break
-        assign_lead_to_employee(lead["lead_id"], lead, eid, cu, skip_removed_notify=True)
+        updated = assign_lead_to_employee(lead["lead_id"], lead, eid, cu, skip_removed_notify=True)
+        if not updated or clean_text(updated.get("assigned_to")) != eid:
+            logging.warning("auto_assign_queue: skipped lead_id=%s", lead.get("lead_id"))
+            continue
         assigned.append(lead["lead_id"])
         per_employee[eid] = per_employee.get(eid, 0) + 1
     for eid, count in per_employee.items():
@@ -6895,8 +6958,18 @@ async def list_bookings(cu: User=Depends(get_current_user)):
     cache_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
     db_only = [b for b in bookings if b.get("booking_id") not in cache_ids]
     merged = SESSION_CACHE["bookings"] + db_only
-    # Hide legacy auto-created skeleton rows; only explicit New Booking entries show.
-    return [b for b in merged if not is_legacy_skeleton_booking(b)]
+    lead_rows = fetch_all_leads_merged("lead_id,name")
+    lead_names = {l.get("lead_id"): l.get("name") for l in lead_rows if l.get("lead_id")}
+    out: List[Dict[str, Any]] = []
+    for b in merged:
+        if is_legacy_skeleton_booking(b):
+            continue
+        row = dict(b)
+        lid = row.get("lead_id")
+        if lid and lead_names.get(lid):
+            row["lead_name"] = lead_names[lid]
+        out.append(row)
+    return out
 
 @api_router.patch("/bookings/{booking_id}")
 async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get_current_user)):
@@ -8011,7 +8084,7 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
     })
     cache_lead_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
     leads = SESSION_CACHE["leads"] + [l for l in graph_data["leads"] if l.get("lead_id") not in cache_lead_ids]
-    pipeline_leads = [l for l in dedupe_leads(leads) if is_pipeline_lead(l)]
+    pipeline_leads = clean_leads_for_platform_stats(leads)
 
     days_map = {(now - timedelta(days=29 - i)).strftime("%Y-%m-%d"): 0 for i in range(30)}
     for l in pipeline_leads:
