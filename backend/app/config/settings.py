@@ -69,7 +69,6 @@ FACEBOOK_PAGE_ID = os.environ.get("FACEBOOK_PAGE_ID", "")
 FACEBOOK_FORM_ID = os.environ.get("FACEBOOK_FORM_ID", "")
 META_FAKE_LEADGEN_IDS = {"444444444444", "0", "test"}
 META_FAKE_PAGE_IDS = {"0", "test"}
-_FACEBOOK_PAGE_TOKEN_CACHE: Dict[str, Any] = {"tokens": {}, "fetched_at": 0.0}
 FACEBOOK_AUTO_SYNC_ENABLED = os.environ.get("FACEBOOK_AUTO_SYNC_ENABLED", "true").lower() in ("1", "true", "yes")
 FACEBOOK_AUTO_SYNC_INTERVAL_SEC = int(os.environ.get("FACEBOOK_AUTO_SYNC_INTERVAL_SEC", "900"))
 FACEBOOK_AUTO_SYNC_WINDOW_SEC = int(os.environ.get("FACEBOOK_AUTO_SYNC_WINDOW_SEC", "7200"))

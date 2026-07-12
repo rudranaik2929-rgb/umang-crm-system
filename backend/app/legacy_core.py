@@ -1666,6 +1666,8 @@ class FacebookImportRequest(BaseModel):
 # ---- Auth Helpers ----
 LOCAL_SESSIONS = {}
 SESSION_CACHE = {"leads": [], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []}
+# Runtime cache for Meta page tokens (must live here — star-import skips _names from settings).
+_FACEBOOK_PAGE_TOKEN_CACHE: Dict[str, Any] = {"tokens": {}, "fetched_at": 0.0}
 
 def normalize_notification_receiver(ref: Optional[str]) -> Optional[str]:
     """Map employee name, user_id, or employee_id → canonical employee_id for notifications."""
