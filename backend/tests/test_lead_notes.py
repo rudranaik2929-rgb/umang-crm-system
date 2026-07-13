@@ -46,6 +46,31 @@ def test_ensure_lead_update_access_allows_remarks_on_any_lead():
     main.ensure_lead_update_access(Booking(), lead, main.LeadUpdate(notes="Walk-in prefers 2BHK"))
 
 
+def test_apply_lead_remarks_update_allows_any_actor(monkeypatch):
+    lead = {"lead_id": "lead_1", "assigned_to": "emp_other", "name": "A", "notes": "old"}
+    calls = {}
+
+    def fake_update(table, pk, pk_val, data):
+        calls["patch"] = data
+        return {**lead, **data}
+
+    monkeypatch.setattr(main, "sb_update", fake_update)
+    monkeypatch.setattr(main, "update_cached_lead", lambda *a, **k: None)
+    monkeypatch.setattr(main, "invalidate_leads_cache", lambda: None)
+    monkeypatch.setattr(main, "log_activity", lambda *a, **k: None)
+
+    class Actor:
+        role = "telecaller"
+        name = "Ravi"
+        acting_as_employee_id = None
+        employee_id = "emp_tc"
+        user_id = "u1"
+
+    out = main.apply_lead_remarks_update("lead_1", lead, "New remark text", Actor())
+    assert calls["patch"]["notes"] == "New remark text"
+    assert out.get("notes") == "New remark text"
+
+
 def test_ensure_lead_update_access_blocks_workflow_for_non_assignee():
     import pytest
     from fastapi import HTTPException

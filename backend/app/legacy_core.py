@@ -1876,7 +1876,7 @@ LEAD_REMARKS_DETAIL_FIELDS = frozenset({
 
 def ensure_lead_update_access(cu: User, lead: Dict[str, Any], p: "LeadUpdate") -> None:
     """Customer remarks/detail fields: any role. Stage, status, assignee: assignee or manager only."""
-    keys = set(p.model_dump(exclude_unset=True).keys())
+    keys = set(getattr(p, "model_fields_set", None) or p.model_dump(exclude_unset=True).keys())
     if not keys:
         ensure_lead_note_access(cu, lead)
         return
@@ -1884,6 +1884,43 @@ def ensure_lead_update_access(cu: User, lead: Dict[str, Any], p: "LeadUpdate") -
         ensure_lead_edit_access(cu, lead)
     else:
         ensure_lead_note_access(cu, lead)
+
+
+def apply_lead_remarks_update(
+    lead_id: str,
+    old_lead: Dict[str, Any],
+    notes: Optional[str],
+    actor: Optional[User],
+) -> Dict[str, Any]:
+    """Anyone may update lead.notes — persists even when clearing to empty."""
+    clean_notes = clean_text(notes)
+    patch = {
+        "notes": clean_notes,
+        "updated_at": now_utc().isoformat(),
+    }
+    updated = sb_update("leads", "lead_id", lead_id, patch)
+    if updated is None:
+        # Prefer=representation can return empty; verify with a read.
+        verify = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "lead_id,notes,updated_at", "limit": "1"})
+        if not verify:
+            raise HTTPException(status_code=503, detail="Could not save remarks. Please try again.")
+        updated = {**old_lead, **patch, **verify[0]}
+    else:
+        updated = {**old_lead, **patch, **(updated if isinstance(updated, dict) else {})}
+    new_lead = enrich_lead_display_fields(updated)
+    update_cached_lead(lead_id, {"notes": clean_notes, "updated_at": patch["updated_at"]})
+    invalidate_leads_cache()
+    log_activity(
+        actor,
+        "lead_remarks_updated",
+        "Updated lead remarks / notes",
+        lead_id=lead_id,
+    )
+    return new_lead
+
+
+class LeadRemarksUpdate(BaseModel):
+    notes: Optional[str] = None
 
 
 def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
@@ -6420,10 +6457,19 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             
     if not old_lead: raise HTTPException(404, "Lead not found")
     ensure_lead_update_access(cu, old_lead, p)
+
+    # Remarks-only PATCH — any role; allow clearing notes to empty.
+    fields_set = set(getattr(p, "model_fields_set", None) or p.model_dump(exclude_unset=True).keys())
+    if fields_set and fields_set <= {"notes"}:
+        return apply_lead_remarks_update(lead_id, old_lead, p.notes, cu)
+
     if p.assigned_to is not None:
         ensure_roles(cu, ["admin", "manager"])
     
     data = model_payload(p)
+    for key in LEAD_REMARKS_DETAIL_FIELDS:
+        if key in fields_set:
+            data[key] = clean_text(getattr(p, key, None))
     data["updated_at"] = now_utc().isoformat()
     valid_call_statuses = {"ringing", "out_of_service", "call_back", "disconnect"}
     if data.get("call_status") and data["call_status"] not in valid_call_statuses:
@@ -6481,9 +6527,14 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         sb_update("employees", "employee_id", p.assigned_to, {"last_assigned_at": now_utc().isoformat()})
     
     updated = sb_update("leads", "lead_id", lead_id, data)
+    if updated is None and data:
+        verify = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
+        if not verify:
+            raise HTTPException(status_code=503, detail="Could not save lead update. Please try again.")
+        updated = verify[0]
     
     # Always update cache for immediate UI feedback (with workflow display fields)
-    new_lead = enrich_lead_display_fields({**old_lead, **data})
+    new_lead = enrich_lead_display_fields({**old_lead, **data, **(updated if isinstance(updated, dict) else {})})
     if leads:
         SESSION_CACHE["leads"] = [l if l.get("lead_id") != lead_id else new_lead for l in SESSION_CACHE["leads"]]
         if not any(l.get("lead_id") == lead_id for l in SESSION_CACHE["leads"]):
@@ -6504,6 +6555,9 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         act_type = f"status_change_{p.status}"
         if p.status == "negative": act_type = "negative_response"
         log_activity(cu, act_type, f"Changed lead status from {old_lead.get('status')} to {p.status}", lead_id=lead_id)
+
+    if "notes" in fields_set:
+        log_activity(cu, "lead_remarks_updated", "Updated lead remarks / notes", lead_id=lead_id)
 
     if data.get("call_status") and data.get("call_status") != old_lead.get("call_status"):
         log_activity(
@@ -6556,6 +6610,17 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
             )
 
     return updated
+
+
+@api_router.patch("/leads/{lead_id}/remarks")
+async def update_lead_remarks(lead_id: str, p: LeadRemarksUpdate, cu: User = Depends(get_current_user)):
+    """Any logged-in employee/manager/admin can edit lead remarks — no assignee required."""
+    old_lead = get_lead_record(lead_id)
+    if not old_lead:
+        raise HTTPException(status_code=404, detail="Lead not found")
+    ensure_lead_note_access(cu, old_lead)
+    return apply_lead_remarks_update(lead_id, old_lead, p.notes, cu)
+
 
 @api_router.post("/leads/{lead_id}/notes")
 async def add_lead_note(lead_id: str, p: NoteCreate, cu: User=Depends(get_current_user)):

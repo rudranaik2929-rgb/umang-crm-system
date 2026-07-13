@@ -120,6 +120,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [detailForm, setDetailForm] = useState({ budget: '', location: '', property_type: '', notes: '' });
   const [savingDetails, setSavingDetails] = useState(false);
   const [savingRemarks, setSavingRemarks] = useState(false);
+  const remarksDirtyRef = React.useRef(false);
   const [brokerageAmount, setBrokerageAmount] = useState('');
   const subAnim = React.useRef(new Animated.Value(0)).current;
   const confettiAnims = React.useRef([...Array(50)].map(() => new Animated.Value(0))).current;
@@ -196,6 +197,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setActionMessage(null);
       setActionError(null);
       setEditingDetails(false);
+      remarksDirtyRef.current = false;
       setBrokerageAmount('');
       api.get('/employees').then(r => setEmployees((r.data || []).filter((e: any) => e.active))).catch(() => {});
     }
@@ -207,6 +209,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setNote('');
       setEditingNoteId(null);
       setEditingDetails(false);
+      remarksDirtyRef.current = false;
       setNoteError(null);
       setNoteSaved(null);
       noteDirtyRef.current = false;
@@ -220,7 +223,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   }, [data?.lead?.brokerage_amount]);
 
   useEffect(() => {
-    if (!data?.lead || editingDetails) return;
+    if (!data?.lead || editingDetails || savingRemarks || remarksDirtyRef.current) return;
     let notesValue = data.lead.notes || '';
     if (notesValue.startsWith('Preferred Property:')) {
       const lines = notesValue.split('\n');
@@ -232,7 +235,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       property_type: data.lead.property_type || '',
       notes: notesValue,
     });
-  }, [data?.lead, editingDetails]);
+  }, [data?.lead, editingDetails, savingRemarks]);
 
   const fetchSummary = async () => {
     if (!leadId) return;
@@ -476,25 +479,47 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     }
   };
 
+  const buildRemarksPayload = (notesText: string, pref: string) => {
+    const trimmed = (notesText || '').trim();
+    if (pref) {
+      return trimmed ? `Preferred Property: ${pref}\n${trimmed}` : `Preferred Property: ${pref}`;
+    }
+    return trimmed || null;
+  };
+
   const saveRemarks = async () => {
     if (!leadId) return;
     setSavingRemarks(true);
     setActionError(null);
     setActionMessage(null);
+    const notesPayload = buildRemarksPayload(detailForm.notes, preferredProperty);
     try {
-      let notesPayload = detailForm.notes.trim();
-      if (preferredProperty) {
-        notesPayload = notesPayload
-          ? `Preferred Property: ${preferredProperty}\n${notesPayload}`
-          : `Preferred Property: ${preferredProperty}`;
-      }
-      await api.patch(`/leads/${leadId}`, { notes: notesPayload || null });
+      // Dedicated remarks route — any employee/manager/admin, no assignee required.
+      await api.patch(`/leads/${leadId}/remarks`, { notes: notesPayload });
+      remarksDirtyRef.current = false;
       setActionMessage('Remarks saved.');
       onChanged?.();
       broadcastDataChanged();
       await load(true);
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
+      const status = e?.response?.status;
+      if (status === 404) {
+        // Older backend without /remarks — fall back to notes-only PATCH.
+        try {
+          await api.patch(`/leads/${leadId}`, { notes: notesPayload });
+          remarksDirtyRef.current = false;
+          setActionMessage('Remarks saved.');
+          onChanged?.();
+          broadcastDataChanged();
+          await load(true);
+          return;
+        } catch (e2: any) {
+          const d2 = e2?.response?.data?.detail;
+          setActionError(typeof d2 === 'string' ? d2 : e2?.message || 'Could not save remarks.');
+          return;
+        }
+      }
       setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not save remarks.');
     } finally {
       setSavingRemarks(false);
@@ -859,7 +884,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   <TextInput
                     testID="lead-remarks-input"
                     value={detailForm.notes}
-                    onChangeText={(v) => setDetailForm((f) => ({ ...f, notes: v }))}
+                    onChangeText={(v) => {
+                      remarksDirtyRef.current = true;
+                      setDetailForm((f) => ({ ...f, notes: v }));
+                      setActionError(null);
+                      setActionMessage(null);
+                    }}
                     editable={!savingRemarks}
                     multiline
                     placeholder="Customer requirements, visit feedback, payment plan..."
