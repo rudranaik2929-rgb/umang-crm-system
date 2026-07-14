@@ -428,6 +428,10 @@ export default function MyDashboard() {
         onClose={() => setActivityMetric(null)}
         userRole={role}
         onChanged={load}
+        onOpenLead={(leadId) => {
+          setActivityMetric(null);
+          setOpenLead(leadId);
+        }}
       />
       <LeadSourceModal
         visible={sourceModalVisible}
@@ -442,6 +446,7 @@ export default function MyDashboard() {
         onClose={() => setOpenLead(null)}
         onChanged={load}
         userRole={role}
+        overlayZIndex={12000}
         onGoFollowUps={() => router.push((role === 'telecaller' ? '/(app)/telecaller?tab=followups' : '/(app)/sales-executive?tab=followups') as any)}
       />
     </View>

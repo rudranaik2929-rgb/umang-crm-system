@@ -20,6 +20,7 @@ import {
 } from '../lib/leadFormat';
 import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
+import { EditableMultiline } from './EditableMultiline';
 import { useSidebarLayout } from '../layout/SidebarLayoutContext';
 
 interface Props {
@@ -881,7 +882,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
                     Any team member can edit — telecaller, sales, booking, manager
                   </Text>
-                  <TextInput
+                  <EditableMultiline
                     testID="lead-remarks-input"
                     value={detailForm.notes}
                     onChangeText={(v) => {
@@ -891,15 +892,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       setActionMessage(null);
                     }}
                     editable={!savingRemarks}
-                    multiline
                     placeholder="Customer requirements, visit feedback, payment plan..."
                     placeholderTextColor={colors.textMuted}
-                    {...(Platform.OS === 'web' ? { autoComplete: 'off' } as any : {})}
                     style={{
-                      minHeight: 88, padding: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
-                      color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 14, marginTop: 10,
-                      textAlignVertical: 'top',
-                      ...(Platform.OS === 'web' ? ({ outlineStyle: 'auto', userSelect: 'text', WebkitUserSelect: 'text' } as any) : null),
+                      borderColor: colors.border,
+                      color: colors.text,
+                      backgroundColor: colors.surfaceAlt,
                     }}
                   />
                   <Pressable
@@ -922,7 +920,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
                     Type or edit anytime · any employee or manager · tap timeline note to switch
                   </Text>
-                  <TextInput
+                  <EditableMultiline
                     testID="lead-note-input"
                     value={note}
                     onChangeText={(text) => {
@@ -932,15 +930,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                       setNoteSaved(null);
                     }}
                     editable={!savingNote}
-                    multiline
                     placeholder="e.g. Customer wants to revisit on Saturday..."
                     placeholderTextColor={colors.textMuted}
-                    {...(Platform.OS === 'web' ? { autoComplete: 'off' } as any : {})}
                     style={{
-                      minHeight: 88, padding: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
-                      color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 14, marginTop: 10,
-                      textAlignVertical: 'top',
-                      ...(Platform.OS === 'web' ? ({ outlineStyle: 'auto', userSelect: 'text', WebkitUserSelect: 'text' } as any) : null),
+                      borderColor: colors.border,
+                      color: colors.text,
+                      backgroundColor: colors.surfaceAlt,
                     }}
                   />
                   {noteError ? (
@@ -1237,12 +1232,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     );
   }
 
-  // Backdrop Pressable must NOT wrap the sheet — nesting TextInput inside Pressable
-  // breaks typing on web (focus/keyboard never reach the note fields).
+  // Keep dismiss overlay behind the sheet so note fields always receive clicks/keyboard.
   const sheet = (
     <View style={styles.backdrop} pointerEvents="box-none">
       <Pressable
-        style={StyleSheet.absoluteFillObject}
+        style={[StyleSheet.absoluteFillObject, { zIndex: 0 }]}
         onPress={onClose}
         accessibilityRole="button"
         accessibilityLabel="Close lead details"
@@ -1251,7 +1245,13 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
         style={[
           styles.sheet,
           sheetDimensions,
-          { backgroundColor: colors.surface, zIndex: 1 },
+          {
+            backgroundColor: colors.surface,
+            position: 'relative',
+            zIndex: 2,
+            elevation: 8,
+            ...(Platform.OS === 'web' ? ({ pointerEvents: 'auto' } as any) : null),
+          },
         ]}
         {...(Platform.OS === 'web'
           ? { onClick: (e: any) => e?.stopPropagation?.() } as any

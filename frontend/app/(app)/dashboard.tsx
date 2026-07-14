@@ -464,6 +464,7 @@ export default function Dashboard() {
         onClose={() => setOpenLead(null)}
         onChanged={load}
         userRole={user?.role}
+        overlayZIndex={12000}
       />
       <EmployeeMetricModal
         visible={empMetric !== null}
@@ -473,6 +474,10 @@ export default function Dashboard() {
         onClose={() => setEmpMetric(null)}
         userRole={user?.role}
         onChanged={load}
+        onOpenLead={(leadId) => {
+          setEmpMetric(null);
+          setOpenLead(leadId);
+        }}
       />
     </View>
   );
