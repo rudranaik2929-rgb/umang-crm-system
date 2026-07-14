@@ -28,7 +28,7 @@ const WORKFLOW_METRICS = [
   { key: 'emp_booking_done', apiKey: 'booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },
   { key: 'emp_low_budget', apiKey: 'low_budget', label: 'Low Budget', icon: 'wallet' as const, colorKey: 'accent' },
   { key: 'emp_follow_ups', apiKey: 'follow_ups', label: 'Follow Up', icon: 'calendar' as const, colorKey: 'warning' },
-  { key: 'emp_today_follow_ups', apiKey: 'today_follow_ups', label: 'Today Follow Up', icon: 'alarm' as const, colorKey: 'accent' },
+  { key: 'emp_today_follow_ups', apiKey: 'today_follow_ups', label: 'Due Today', icon: 'alarm' as const, colorKey: 'accent' },
   { key: 'emp_ringing', apiKey: 'ringing', label: 'Ringing', icon: 'call' as const, colorKey: 'warning' },
   { key: 'emp_today_activity', apiKey: 'today_activity', label: 'Today Activity', icon: 'today' as const, colorKey: 'positive' },
 ];
@@ -153,7 +153,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                     </Text>
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.assigned_total ?? employee.leads_total ?? 0}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>
-                      {isBookingRole ? 'Active pipeline' : 'Updated by employee'}
+                      {isBookingRole ? 'Active pipeline' : 'Each lead in one status box (Due Today is part of Follow Up)'}
                     </Text>
                   </Pressable>
                 </View>

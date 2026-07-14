@@ -857,12 +857,10 @@ def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[
 
 
 def filter_employee_follow_up_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Exact filter used by Follow Ups tab + employee follow-up KPI."""
-    rows = normalize_employee_leads(emp_leads)
-    return [
-        l for l in rows
-        if l.get("follow_up_at") and l.get("status") != "negative"
-    ]
+    """Follow-up list filter — exclusive primary bucket (never overlaps Ringing/Hot/Visited)."""
+    rows = filter_employee_metric_leads(emp_leads, "follow_ups")
+    rows.sort(key=lambda l: l.get("follow_up_at") or "", reverse=True)
+    return rows
 
 
 def filter_employee_today_follow_up_leads(
@@ -870,17 +868,14 @@ def filter_employee_today_follow_up_leads(
     *,
     on_date: Optional[date] = None,
 ) -> List[Dict[str, Any]]:
-    """Leads with follow-up scheduled for today (IST) — not tomorrow or later."""
+    """Leads whose primary box is Follow Up and due on the given day (IST)."""
     target = on_date or app_today()
-    rows = normalize_employee_leads(emp_leads)
-    due = [
-        l for l in rows
-        if l.get("follow_up_at")
-        and l.get("status") != "negative"
-        and follow_up_calendar_date(l.get("follow_up_at")) == target
+    rows = [
+        l for l in filter_employee_metric_leads(emp_leads, "follow_ups")
+        if follow_up_calendar_date(l.get("follow_up_at")) == target
     ]
-    due.sort(key=lambda l: l.get("follow_up_at") or "")
-    return due
+    rows.sort(key=lambda l: l.get("follow_up_at") or "")
+    return rows
 
 
 def _lead_priority(lead: Dict[str, Any]) -> str:
@@ -918,19 +913,25 @@ def normalize_employee_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, 
 
 
 def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
-    """One bucket per lead — same priority as assign-workspace inquiry filters."""
+    """One primary bucket per lead — boxes are mutually exclusive (sum ≤ Total Leads).
+
+    Priority: negative → booking → hot → visited → ringing → follow_up.
+    Progressive pipeline stages beat leftover call_status / follow_up_at.
+    """
     if lead.get("status") == "negative":
         if _lead_priority(lead) == "low_budget":
             return "low_budget"
         return "not_interested"
-    if clean_text(lead.get("call_status")):
-        return "ringing"
     if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
         return "booking_done"
     if _lead_priority(lead) == "hot":
         return "hot"
     if lead.get("stage") == "site_visit":
         return "visited"
+    if clean_text(lead.get("call_status")):
+        return "ringing"
+    if lead.get("follow_up_at"):
+        return "follow_up"
     return None
 
 
@@ -941,28 +942,28 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
     if key == "active":
         return [l for l in rows if l.get("status") != "negative" and l.get("stage") != "closed"]
     if key in ("follow_ups", "follow_up", "assigned_follow_ups"):
-        return filter_employee_follow_up_leads(emp_leads)
+        # Exclusive: only leads whose primary box is Follow Up (not ringing + follow-up).
+        return [l for l in rows if classify_employee_performance_metric(l) == "follow_up"]
     if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):
-        return filter_employee_today_follow_up_leads(emp_leads)
-    if key == "ringing":
+        target = app_today()
         return [
             l for l in rows
-            if l.get("status") != "negative" and clean_text(l.get("call_status"))
+            if classify_employee_performance_metric(l) == "follow_up"
+            and follow_up_calendar_date(l.get("follow_up_at")) == target
         ]
+    if key == "ringing":
+        return [l for l in rows if classify_employee_performance_metric(l) == "ringing"]
     if key in ("missed_leads", "missed"):
         return filter_employee_missed_leads(emp_leads)
     if key in ("new_leads", "new", "assigned_new"):
         return filter_employee_new_leads(emp_leads)
     if key == "visited":
-        return [
-            l for l in rows
-            if l.get("stage") == "site_visit" and l.get("status") != "negative"
-        ]
+        return [l for l in rows if classify_employee_performance_metric(l) == "visited"]
     return [l for l in rows if classify_employee_performance_metric(l) == key]
 
 
 def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str, int]:
-    """Dashboard employee performance boxes — counts match filter_employee_metric_leads."""
+    """Dashboard employee performance boxes — mutually exclusive status counts."""
     return {
         "emp_active": len(filter_employee_metric_leads(emp_leads, "active")),
         "emp_hot": len(filter_employee_metric_leads(emp_leads, "hot")),
@@ -971,8 +972,8 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
         "emp_booking_done": len(filter_employee_metric_leads(emp_leads, "booking_done")),
         "emp_low_budget": len(filter_employee_metric_leads(emp_leads, "low_budget")),
         "emp_ringing": len(filter_employee_metric_leads(emp_leads, "ringing")),
-        "emp_follow_ups": len(filter_employee_follow_up_leads(emp_leads)),
-        "emp_today_follow_ups": len(filter_employee_today_follow_up_leads(emp_leads)),
+        "emp_follow_ups": len(filter_employee_metric_leads(emp_leads, "follow_ups")),
+        "emp_today_follow_ups": len(filter_employee_metric_leads(emp_leads, "today_follow_ups")),
         "emp_missed_leads": len(filter_employee_missed_leads(emp_leads)),
     }
 
@@ -983,7 +984,7 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
     new_rows = filter_employee_new_leads(rows)
     backlog_rows = filter_employee_backlog_leads(rows)
     queue_rows = filter_employee_queue_leads(rows, role)
-    follow_rows = filter_employee_follow_up_leads(backlog_rows)
+    follow_rows = filter_employee_metric_leads(backlog_rows, "follow_ups")
     in_progress = sum(
         1 for l in backlog_rows
         if l.get("status") == "active"
@@ -1032,23 +1033,26 @@ def workflow_status_label(lead: Dict[str, Any]) -> str:
     """Human-readable status for lists — matches performance box buckets."""
     if is_missed_lead(lead):
         return "Missed Lead"
-    if lead.get("status") == "negative":
+    metric = classify_employee_performance_metric(lead)
+    if metric == "not_interested":
         return NEGATIVE_PRIORITY_LABELS.get(_lead_priority(lead), "Not Interested")
+    if metric == "low_budget":
+        return "Low Budget"
+    if metric == "ringing":
+        cs = clean_text(lead.get("call_status"))
+        return CALL_STATUS_LABELS.get(cs, (cs or "ringing").replace("_", " ").title())
+    if metric == "booking_done":
+        return "Booking Done"
+    if metric == "hot":
+        return "Hot"
+    if metric == "visited":
+        return "Visited"
+    if metric == "follow_up":
+        return "Follow Up"
     if _lead_priority(lead) == "low_budget":
         return "Low Budget"
-    cs = clean_text(lead.get("call_status"))
-    if cs:
-        return CALL_STATUS_LABELS.get(cs, cs.replace("_", " ").title())
-    if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
-        return "Booking Done"
-    if _lead_priority(lead) == "hot":
-        return "Hot"
-    if lead.get("stage") == "site_visit":
-        return "Visited"
     if lead.get("stage") == "positive":
         return "Interested"
-    if lead.get("follow_up_at") and lead.get("status") != "negative":
-        return "Follow Up"
     if lead.get("stage") == "closed":
         return "Closed"
     if lead.get("stage") == "new":
@@ -1074,20 +1078,19 @@ def enrich_leads_display_fields(leads: List[Dict[str, Any]]) -> List[Dict[str, A
 
 
 def classify_inquiry_status(lead: Dict[str, Any]) -> str:
-    """Primary inquiry bucket for manager assign workspace filters."""
+    """Primary inquiry bucket for manager assign workspace filters — aligned with KPI boxes."""
     if lead.get("status") == "negative":
         pr = _lead_priority(lead)
         if pr in NEGATIVE_PRIORITY_LABELS:
             return pr
         return "not_interested"
-    if clean_text(lead.get("call_status")):
-        return "ringing"
-    if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
+    metric = classify_employee_performance_metric(lead)
+    if metric == "booking_done":
         return "booked"
-    if _lead_priority(lead) == "hot":
-        return "hot"
-    if lead.get("stage") == "site_visit":
-        return "visited"
+    if metric == "follow_up":
+        return "follow_up"
+    if metric in ("ringing", "hot", "visited"):
+        return metric
     if lead.get("stage") == "positive":
         return "active"
     if not lead.get("assigned_to") and lead.get("stage") in ["new", "assigned"]:
@@ -1967,8 +1970,15 @@ def inquiry_preset_to_patch(preset: Dict[str, Any], inquiry_action: Optional[str
     elif action == "ringing":
         patch.setdefault("status", "active")
         patch.setdefault("call_status", "ringing")
+        # Primary box is Ringing — drop stale follow-up so lists stay exclusive.
+        patch["follow_up_at"] = None
         if patch.get("stage") is None:
             patch["stage"] = "assigned"
+    elif action == "hot":
+        patch.setdefault("status", "active")
+        patch.setdefault("stage", "positive")
+        patch.setdefault("priority", "hot")
+        patch["call_status"] = None
     elif action == "not_interested":
         patch.setdefault("status", "negative")
         patch["call_status"] = None
@@ -1986,6 +1996,8 @@ def apply_call_status_workflow(old_lead: Dict[str, Any], call_status: str) -> Di
     data: Dict[str, Any] = {
         "call_status": call_status,
         "status": "active",
+        # Clear follow_up_at so the lead is not also listed under Follow Up.
+        "follow_up_at": None,
         "updated_at": now_utc().isoformat(),
     }
     if old_lead.get("stage") in (None, "new"):
@@ -5849,7 +5861,11 @@ def sort_dashboard_leads(
 
 def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: str) -> List[Dict[str, Any]]:
     """Single source of truth for dashboard bucket lists + counts.
-    Always deduped so the metric box number == the opened list length."""
+    Always deduped so the metric box number == the opened list length.
+
+    Ringing and Follow Up are mutually exclusive (same classifier as employee KPI boxes).
+    Positive / Visited / Booking / Registration are stage drill-downs (hierarchical, not a partition of Total).
+    """
     if bucket_key == "new_today":
         filtered = [
             l for l in all_leads
@@ -5869,11 +5885,15 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
     elif bucket_key == "booking":
         filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"] and l.get("status") != "negative"]
     elif bucket_key == "follow_up":
-        filtered = [l for l in all_leads if l.get("follow_up_at") and l.get("status") != "negative"]
+        # Exclusive primary bucket — never also counted as Ringing/Hot/Visited/Booking.
+        filtered = [
+            l for l in all_leads
+            if classify_employee_performance_metric(l) == "follow_up"
+        ]
     elif bucket_key == "ringing":
         filtered = [
             l for l in all_leads
-            if l.get("status") != "negative" and clean_text(l.get("call_status"))
+            if classify_employee_performance_metric(l) == "ringing"
         ]
     else:
         # Pipeline total — every lead row in Supabase (except broker pool / fake Meta tests).
@@ -6492,7 +6512,11 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         data["call_status"] = None
         data["follow_up_at"] = None
 
-    if p.stage in ("site_visit", "positive") and p.stage and p.stage != old_lead.get("stage"):
+    if p.stage in ("site_visit", "positive", "booking", "loan", "registration") and p.stage and p.stage != old_lead.get("stage"):
+        data["call_status"] = None
+
+    # Direct follow-up schedule via PATCH — leave Ringing so primary box is Follow Up.
+    if p.follow_up_at is not None and data.get("follow_up_at"):
         data["call_status"] = None
 
     if not _can_manage_all_leads(cu):
@@ -6924,6 +6948,8 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
 
     lead_update = {
         "follow_up_at": follow_up_at.isoformat(),
+        # Scheduling a follow-up is the primary status — leave Ringing.
+        "call_status": None,
         "updated_at": now_utc().isoformat(),
         "last_employee_action_at": now_utc().isoformat(),
     }
@@ -6986,6 +7012,7 @@ async def create_visit_followup(p: SiteVisitFollowUpCreate, cu: User=Depends(get
     if followup.get("lead_id"):
         lead_update = {
             "follow_up_at": follow_up_at.isoformat(),
+            "call_status": None,
             "updated_at": now_utc().isoformat(),
             "last_employee_action_at": now_utc().isoformat(),
         }
@@ -8676,9 +8703,9 @@ def personal_dashboard_metric_items(
     if key in ("queue", "assigned_queue"):
         return filter_employee_queue_leads(backlog, role)
     if key in ("follow_ups", "followups", "assigned_follow_ups"):
-        return filter_employee_follow_up_leads(backlog)
+        return filter_employee_metric_leads(backlog, "follow_ups")
     if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):
-        return filter_employee_today_follow_up_leads(backlog)
+        return filter_employee_metric_leads(backlog, "today_follow_ups")
     if key in ("missed_leads", "missed"):
         return filter_employee_missed_leads(rows)
     if key in ("completed", "assigned_completed", "closed_deals"):

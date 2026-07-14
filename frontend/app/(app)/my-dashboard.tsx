@@ -55,7 +55,7 @@ const MY_PERFORMANCE_KPIS: Array<{
   { label: 'Booking Done', metric: 'booking_done', icon: 'checkmark-done', colorKey: 'positive', valueKey: 'emp_booking_done' },
   { label: 'Low Budget', metric: 'low_budget', icon: 'wallet', colorKey: 'accent', valueKey: 'emp_low_budget' },
   { label: 'Follow Up', metric: 'follow_ups', icon: 'calendar', colorKey: 'warning', valueKey: 'emp_follow_ups' },
-  { label: 'Today Follow Up', metric: 'today_follow_ups', icon: 'alarm', colorKey: 'accent', valueKey: 'emp_today_follow_ups' },
+  { label: 'Due Today', metric: 'today_follow_ups', icon: 'alarm', colorKey: 'accent', valueKey: 'emp_today_follow_ups' },
   { label: 'Ringing', metric: 'ringing', icon: 'call', colorKey: 'warning', valueKey: 'emp_ringing' },
   { label: 'Today Activity', metric: 'today_activity', icon: 'today', colorKey: 'positive', valueKey: 'emp_today_activity' },
 ];

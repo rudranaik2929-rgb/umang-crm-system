@@ -56,10 +56,12 @@ def test_today_follow_ups_only_includes_due_today():
         _lead("due-tomorrow", 10, follow_up_at=f"{tomorrow.isoformat()}T09:00:00+00:00"),
         _lead("due-yesterday", 10, follow_up_at=f"{yesterday.isoformat()}T15:00:00+00:00"),
         _lead("negative-today", 10, status="negative", follow_up_at=f"{today.isoformat()}T12:00:00+00:00"),
+        _lead("ringing-today", 10, call_status="ringing", follow_up_at=f"{today.isoformat()}T13:00:00+00:00"),
     ]
     counts = main.build_personal_dashboard_counts(leads, "telecaller", [])
     assert counts["today_follow_ups"] == 1
     items = main.personal_dashboard_metric_items("today_follow_ups", leads, "telecaller", [])
     assert len(items) == 1
     assert items[0]["lead_id"] == "due-today"
-    assert counts["follow_ups"] == 3
+    assert counts["follow_ups"] == 3  # exclusive — ringing-today counted as ringing, not FU
+    assert counts["ringing"] == 1

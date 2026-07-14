@@ -84,10 +84,19 @@ def test_dashboard_ringing_bucket():
         _lead(lead_id="r1", call_status="ringing", status="active"),
         _lead(lead_id="r2", call_status="", status="active"),
         _lead(lead_id="r3", call_status="call_back", status="negative"),
+        _lead(lead_id="r4", call_status="ringing", status="active", priority="hot", stage="positive"),
     ]
     today = "2026-06-28"
     filtered = main.filter_lead_bucket(rows, "ringing", today)
+    # Hot beats stale ringing
     assert {l["lead_id"] for l in filtered} == {"r1"}
+
+
+def test_inquiry_follow_up_status_does_not_collide_with_ringing():
+    fu = _lead(follow_up_at="2026-06-28T10:00:00+00:00")
+    both = _lead(call_status="ringing", follow_up_at="2026-06-28T10:00:00+00:00")
+    assert main.classify_inquiry_status(fu) == "follow_up"
+    assert main.classify_inquiry_status(both) == "ringing"
 
 
 def test_dashboard_visited_bucket():
