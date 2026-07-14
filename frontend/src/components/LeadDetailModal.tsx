@@ -894,10 +894,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     multiline
                     placeholder="Customer requirements, visit feedback, payment plan..."
                     placeholderTextColor={colors.textMuted}
+                    {...(Platform.OS === 'web' ? { autoComplete: 'off' } as any : {})}
                     style={{
                       minHeight: 88, padding: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
                       color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 14, marginTop: 10,
                       textAlignVertical: 'top',
+                      ...(Platform.OS === 'web' ? ({ outlineStyle: 'auto', userSelect: 'text', WebkitUserSelect: 'text' } as any) : null),
                     }}
                   />
                   <Pressable
@@ -933,10 +935,12 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     multiline
                     placeholder="e.g. Customer wants to revisit on Saturday..."
                     placeholderTextColor={colors.textMuted}
+                    {...(Platform.OS === 'web' ? { autoComplete: 'off' } as any : {})}
                     style={{
                       minHeight: 88, padding: 12, borderWidth: 1, borderColor: colors.border, borderRadius: 8,
                       color: colors.text, backgroundColor: colors.surfaceAlt, fontSize: 14, marginTop: 10,
                       textAlignVertical: 'top',
+                      ...(Platform.OS === 'web' ? ({ outlineStyle: 'auto', userSelect: 'text', WebkitUserSelect: 'text' } as any) : null),
                     }}
                   />
                   {noteError ? (
@@ -1233,13 +1237,21 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     );
   }
 
+  // Backdrop Pressable must NOT wrap the sheet — nesting TextInput inside Pressable
+  // breaks typing on web (focus/keyboard never reach the note fields).
   const sheet = (
-    <Pressable style={styles.backdrop} onPress={onClose}>
+    <View style={styles.backdrop} pointerEvents="box-none">
+      <Pressable
+        style={StyleSheet.absoluteFillObject}
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="Close lead details"
+      />
       <View
         style={[
           styles.sheet,
           sheetDimensions,
-          { backgroundColor: colors.surface },
+          { backgroundColor: colors.surface, zIndex: 1 },
         ]}
         {...(Platform.OS === 'web'
           ? { onClick: (e: any) => e?.stopPropagation?.() } as any
@@ -1247,7 +1259,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       >
         {renderBody()}
       </View>
-    </Pressable>
+    </View>
   );
 
   const followUpZIndex = overlayZIndex + 2000;
@@ -1347,6 +1359,7 @@ function DetailField({ label, value, onChangeText, colors, placeholder, multilin
           backgroundColor: colors.surfaceAlt,
           fontSize: 13,
           textAlignVertical: multiline ? 'top' : 'center',
+          ...(Platform.OS === 'web' ? ({ userSelect: 'text', WebkitUserSelect: 'text' } as any) : null),
         }}
       />
     </View>

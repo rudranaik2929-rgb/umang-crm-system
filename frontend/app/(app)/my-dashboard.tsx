@@ -16,7 +16,6 @@ import { MyActivityModal } from '../../src/components/MyActivityModal';
 import { LeadSourceModal } from '../../src/components/LeadSourceModal';
 import { useNotifications } from '../../src/notifications/NotificationContext';
 import { NotificationCard } from '../../src/components/NotificationCard';
-import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
 import { useSidebarLayout } from '../../src/layout/SidebarLayoutContext';
 
 const ROLE_ACCENT: Record<string, string> = {
@@ -79,7 +78,7 @@ export default function MyDashboard() {
   const isCompact = isNarrow || contentWidth < 640;
   const kpiCardWidth = contentWidth < 360 ? '100%' : contentWidth < 520 ? '48%' : contentWidth < 720 ? '31%' : '23%';
   const kpiMaxWidth = isCompact ? undefined : 220;
-  const { items: notifications, unreadCount, refresh: refreshNotifications } = useNotifications();
+  const { items: notifications, unreadCount, refresh: refreshNotifications, markRead } = useNotifications();
   const cached = getSnapshot<any>('my-dashboard');
   const hasFreshCache = cached?.data?.missed_leads_total != null || cached?.data?.missed_leads != null;
   const [data, setData] = useState<any>(hasFreshCache ? cached.data : null);
@@ -104,7 +103,14 @@ export default function MyDashboard() {
     load();
   }, [load]);
 
-  useLiveRefresh(load);
+  useEffect(() => {
+    refreshNotifications();
+  }, [refreshNotifications]);
+
+  useLiveRefresh(() => {
+    load();
+    refreshNotifications();
+  });
 
   if (loading && !data) {
     return (
@@ -143,6 +149,10 @@ export default function MyDashboard() {
     setActivityMetric(metric);
   };
 
+  const previewNotifications = [...notifications]
+    .sort((a, b) => Number(!a.is_read) - Number(!b.is_read) || (b.created_at || '').localeCompare(a.created_at || ''))
+    .slice(0, 8);
+
   return (
     <View style={{ flex: 1, minWidth: 0 }}>
       <NewLeadPopup enabled={false} />
@@ -152,7 +162,7 @@ export default function MyDashboard() {
         rightAction={
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: isCompact ? 8 : 12 }}>
             <Pressable
-              onPress={load}
+              onPress={() => { load(); refreshNotifications(); }}
               disabled={loading}
               style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1, marginRight: 0 }]}
             >
@@ -163,6 +173,44 @@ export default function MyDashboard() {
         }
       />
       <ScrollView contentContainerStyle={[styles.content, isCompact && styles.contentCompact]}>
+        {/* Notifications first — visible without opening the bell */}
+        <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: unreadCount > 0 ? colors.primary + '55' : colors.border, padding: 16 }]}>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <Text style={[styles.section, { color: colors.textMuted, marginBottom: 0 }]}>
+              NOTIFICATIONS{unreadCount > 0 ? ` (${unreadCount} unread)` : ''}
+            </Text>
+            <Pressable
+              onPress={() => {
+                refreshNotifications();
+                router.push('/(app)/notifications' as any);
+              }}
+            >
+              <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>See all →</Text>
+            </Pressable>
+          </View>
+          {previewNotifications.length === 0 ? (
+            <Text style={{ color: colors.textMuted, fontSize: 13 }}>No notifications yet.</Text>
+          ) : (
+            previewNotifications.map((n) => (
+              <NotificationCard
+                key={n.notification_id}
+                item={n}
+                compact
+                onPress={() => {
+                  if (!n.is_read) {
+                    markRead(n.notification_id).catch(() => undefined);
+                  }
+                  if (n.lead_id) {
+                    setOpenLead(n.lead_id);
+                  } else {
+                    router.push('/(app)/notifications' as any);
+                  }
+                }}
+              />
+            ))
+          )}
+        </View>
+
         {/* Hero score card */}
         <View style={[
           styles.hero,
@@ -236,40 +284,6 @@ export default function MyDashboard() {
               </Text>
             </Pressable>
           </View>
-        </View>
-
-        <View style={[styles.activityCard, { backgroundColor: colors.surface, borderColor: colors.border, padding: 16 }]}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <Text style={[styles.section, { color: colors.textMuted, marginBottom: 0 }]}>
-              NOTIFICATIONS{unreadCount > 0 ? ` (${unreadCount} unread)` : ''}
-            </Text>
-            <Pressable
-              onPress={() => {
-                refreshNotifications();
-                router.push('/(app)/notifications' as any);
-              }}
-            >
-              <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }}>See all →</Text>
-            </Pressable>
-          </View>
-          {notifications.length === 0 ? (
-            <Text style={{ color: colors.textMuted, fontSize: 13 }}>No notifications yet. Assign a lead to test.</Text>
-          ) : (
-            notifications.slice(0, 5).map((n) => (
-              <NotificationCard
-                key={n.notification_id}
-                item={n}
-                compact
-                onPress={() => {
-                  if (n.lead_id) {
-                    router.push(leadDeepLinkPath(n.lead_id, user?.role, user?.email, user?.allowed_pages ?? undefined) as any);
-                  } else {
-                    router.push('/(app)/notifications' as any);
-                  }
-                }}
-              />
-            ))
-          )}
         </View>
 
         {/* Personal KPIs */}

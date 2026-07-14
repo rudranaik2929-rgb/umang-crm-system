@@ -20,11 +20,13 @@ function useWebPrivacyShield() {
         -ms-user-select: none !important;
         user-select: none !important;
       }
-      input, textarea {
+      input, textarea, [contenteditable="true"], [role="textbox"],
+      [data-editable="true"], .crm-text-input {
         -webkit-user-select: text !important;
         -moz-user-select: text !important;
         -ms-user-select: text !important;
         user-select: text !important;
+        pointer-events: auto !important;
       }
       @media print {
         body, html, #root, div {
@@ -39,19 +41,31 @@ function useWebPrivacyShield() {
     // Remove the old web background watermark if a previous build already added it.
     document.getElementById('privacy-shield-watermark')?.remove();
 
-    // 2. Prevent right-click context menu
+    const isEditableTarget = (target: EventTarget | null) => {
+      if (!(target instanceof Element)) return false;
+      return Boolean(
+        target.closest(
+          'input, textarea, [contenteditable="true"], [role="textbox"], [data-editable="true"], .crm-text-input',
+        ),
+      );
+    };
+
+    // 2. Prevent right-click context menu (allow in editable fields)
     const handleContextMenu = (e: MouseEvent) => {
+      if (isEditableTarget(e.target)) return;
       e.preventDefault();
       alert("🔒 PRIVACY SHIELD: Right-click context menu is disabled for security.");
     };
 
     // 3. Prevent dragging content
     const handleDrag = (e: DragEvent) => {
+      if (isEditableTarget(e.target)) return;
       e.preventDefault();
     };
 
-    // 4. Prevent copying text
+    // 4. Prevent copying text (allow copy/cut/paste inside editable fields)
     const handleCopy = (e: ClipboardEvent) => {
+      if (isEditableTarget(e.target)) return;
       e.preventDefault();
       alert("🔒 PRIVACY SHIELD: Copying CRM data is disabled for security.");
     };

@@ -7582,16 +7582,16 @@ async def list_notifications(
 
 @api_router.get("/notifications/unread-count")
 async def notifications_unread_count(cu: User = Depends(get_current_user)):
-    user_ids = set(_notification_user_ids(cu))
-    rows = _fetch_notifications_for_user(
-        cu,
-        select="notification_id,is_read,user_id",
-        extra_params={"is_read": "eq.false"},
-    )
-    cached = [n for n in SESSION_CACHE.get("notifications", []) if not n.get("is_read") and n.get("user_id") in user_ids]
-    db_ids = {r.get("notification_id") for r in rows}
-    extra = [n for n in cached if n.get("notification_id") not in db_ids]
-    return {"unread_count": len(rows) + len(extra)}
+    """Same merge + legacy filter as list — badge must match dashboard unread count."""
+    try:
+        notifications = _fetch_notifications_for_user(cu, select="*")
+        merged = _merge_notifications_for_user(cu, notifications)
+        merged = [n for n in merged if not _is_legacy_per_lead_assignment(n)]
+        unread = sum(1 for n in merged if not n.get("is_read"))
+        return {"unread_count": unread}
+    except Exception as exc:
+        logging.exception("notifications_unread_count failed user=%s: %s", cu.user_id, exc)
+        return {"unread_count": 0}
 
 
 @api_router.patch("/notifications/{notification_id}/read")

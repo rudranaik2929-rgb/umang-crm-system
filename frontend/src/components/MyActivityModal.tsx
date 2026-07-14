@@ -58,8 +58,9 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
 
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border }]} onPress={(e: any) => e?.stopPropagation?.()}>
+      <View style={styles.backdrop} pointerEvents="box-none">
+        <Pressable style={StyleSheet.absoluteFillObject} onPress={onClose} accessibilityLabel="Close list" />
+        <View style={[styles.card, { backgroundColor: colors.surface, borderColor: colors.border, zIndex: 1 }]}>
           <View style={styles.header}>
             <View style={{ flex: 1 }}>
               <Text style={[styles.title, { color: colors.text }]}>{label || 'My Activity'}</Text>
@@ -77,7 +78,7 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
               {kind === 'today_report' ? 'No work logged in the last 24 hours yet.' : 'No items in this category yet.'}
             </Text>
           ) : (
-            <ScrollView style={{ maxHeight: 520 }}>
+            <ScrollView style={{ maxHeight: 520 }} keyboardShouldPersistTaps="handled">
               {kind === 'today_report' ? items.map((row) => (
                 <Pressable
                   key={row.lead_id}
@@ -166,8 +167,8 @@ export function MyActivityModal({ visible, metric, onClose, userRole, onChanged 
               ))}
             </ScrollView>
           )}
-        </Pressable>
-      </Pressable>
+        </View>
+      </View>
       <LeadDetailModal
         leadId={openLead}
         visible={openLead !== null}

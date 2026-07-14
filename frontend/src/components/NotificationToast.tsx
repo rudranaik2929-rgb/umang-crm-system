@@ -55,15 +55,27 @@ export function NotificationToast() {
     if (!items.length) return;
 
     if (!primedRef.current) {
-      items.forEach((n) => seenRef.current.add(n.notification_id));
+      // Only skip already-read items on first paint so unread (follow-ups etc.) still toast on dashboard.
+      items.forEach((n) => {
+        if (n.is_read) seenRef.current.add(n.notification_id);
+      });
       primedRef.current = true;
-      return;
     }
 
     const fresh = items.filter((n) => {
       if (!n.notification_id || seenRef.current.has(n.notification_id)) return false;
+      if (n.is_read) return false;
       const meta = (n.metadata || {}) as Record<string, unknown>;
-      return Boolean(meta.assignment_summary) || n.type === 'lead_assigned';
+      const toastable =
+        Boolean(meta.assignment_summary)
+        || n.type === 'lead_assigned'
+        || n.type === 'follow_up_reminder'
+        || n.type === 'follow_up_overdue'
+        || n.type === 'lead_reassigned_removed'
+        || n.type === 'broadcast'
+        || n.priority === 'high'
+        || n.priority === 'urgent';
+      return toastable;
     });
     if (!fresh.length) return;
 
