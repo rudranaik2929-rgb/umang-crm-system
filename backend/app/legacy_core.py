@@ -7102,7 +7102,8 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
         "flat_cost": p.flat_cost, "agreement_value": p.agreement_value,
         "stamp_duty": p.stamp_duty, "registration_fees": p.registration_fees,
         "gst": p.gst, "society_charges": p.society_charges,
-        "payment_status": p.payment_status, "booking_date": p.booking_date.isoformat() if p.booking_date else None,
+        "payment_status": p.payment_status,
+        "booking_date": p.booking_date.isoformat() if p.booking_date else now_utc().isoformat(),
         "starred": p.starred, "completed_tasks": p.completed_tasks,
     }
     for k, v in optional_costs.items():

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput, Platform } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { api, getSnapshot, setSnapshot, BOOKING_REQUEST_TIMEOUT_MS } from '../../src/lib/api';
@@ -14,6 +14,39 @@ import { RegistrationReceiptModal } from '../../src/components/RegistrationRecei
 import { AddBookingLeadModal } from '../../src/components/AddBookingLeadModal';
 import { BOOKING_TASKS, bookingMatchesTask, countBookingTasks, normalizeCompletedTasks, type BookingTaskKey } from '../../src/lib/bookingTasks';
 import { useLocalSearchParams, useRouter } from 'expo-router';
+
+function todayIsoDate() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function toIsoDateInput(value?: string | null) {
+  if (!value) return '';
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return '';
+  const y = parsed.getFullYear();
+  const m = String(parsed.getMonth() + 1).padStart(2, '0');
+  const day = String(parsed.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+function formatBookingDateLabel(value?: string | null) {
+  const iso = toIsoDateInput(value);
+  if (!iso) return '';
+  const parsed = new Date(`${iso}T12:00:00`);
+  if (Number.isNaN(parsed.getTime())) return iso;
+  return parsed.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+function bookingDatePayload(isoDate: string) {
+  const day = toIsoDateInput(isoDate) || todayIsoDate();
+  return `${day}T12:00:00.000Z`;
+}
 
 function leadInBookingQueue(lead: any) {
   const pr = String(lead?.priority || '').toLowerCase();
@@ -228,6 +261,11 @@ export default function Bookings() {
               <Text style={[styles.cardTitle, { color: colors.text, flex: 1 }]} numberOfLines={1}>{b.property_name}</Text>
             </View>
             <Text style={[styles.cardSub, { color: colors.textMuted }]}>For {b.lead_name}</Text>
+            {b.booking_date ? (
+              <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 4 }}>
+                Booking date: {formatBookingDateLabel(b.booking_date)}
+              </Text>
+            ) : null}
             <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
               <Badge text={`AGREEMENT: ${realAgreementStatus.toUpperCase()}`} color={AGREEMENT_COLOR[realAgreementStatus] || colors.info} />
               <Badge text={`STATUS: ${(b.status || 'active').toUpperCase()}`} color={['confirmed', 'disbursement', 'sanctioned', 'amount received'].includes(b.status) ? colors.positive : cancelled ? colors.negative : b.status === 'registration' ? '#7C3AED' : b.status === 'bill submitted' ? colors.warning : colors.info} />
@@ -608,6 +646,7 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initia
   const [registrationFees, setRegistrationFees] = useState('');
   const [gst, setGst] = useState('');
   const [societyCharges, setSocietyCharges] = useState('');
+  const [bookingDate, setBookingDate] = useState(todayIsoDate());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const openedRef = useRef(false);
@@ -630,6 +669,7 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initia
     setRegistrationFees('');
     setGst('');
     setSocietyCharges('');
+    setBookingDate(todayIsoDate());
     setLeadId(initialLeadId || leads[0]?.lead_id || '');
   }, [visible, initialLeadId]);
 
@@ -654,6 +694,7 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initia
         property_name: property.trim() || 'Property TBD',
         booking_amount: parseNum(amount) ?? 0,
         token_received: parseNum(token) ?? 0,
+        booking_date: bookingDatePayload(bookingDate),
       };
       const flat = parseNum(flatCost); if (flat !== undefined) payload.flat_cost = flat;
       const agr = parseNum(agreementValue); if (agr !== undefined) payload.agreement_value = agr;
@@ -739,6 +780,13 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initia
                 </Text>
               ) : null}
               <FormField label="PROPERTY NAME (OPTIONAL)" testID="booking-property" value={property} onChange={setProperty} colors={colors} placeholder="Umang Skylark – 3BHK Tower B" />
+              <BookingDateField
+                label="BOOKING DATE *"
+                testID="booking-date"
+                value={bookingDate}
+                onChange={setBookingDate}
+                colors={colors}
+              />
               <FormField label="BOOKING AMOUNT (₹, OPTIONAL)" testID="booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
               <FormField label="TOKEN RECEIVED (₹, OPTIONAL)" testID="booking-token-input" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
               <Text style={[styles.label, { color: colors.textMuted, marginTop: 16 }]}>COST BREAKDOWN (ALL OPTIONAL)</Text>
@@ -771,6 +819,7 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
   const [registrationFees, setRegistrationFees] = useState('');
   const [gst, setGst] = useState('');
   const [societyCharges, setSocietyCharges] = useState('');
+  const [bookingDate, setBookingDate] = useState(todayIsoDate());
   const [status, setStatus] = useState('');
   const [agreement, setAgreement] = useState('');
   const [busy, setBusy] = useState(false);
@@ -786,6 +835,7 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
     setRegistrationFees(booking.registration_fees != null ? String(booking.registration_fees) : '');
     setGst(booking.gst != null ? String(booking.gst) : '');
     setSocietyCharges(booking.society_charges != null ? String(booking.society_charges) : '');
+    setBookingDate(toIsoDateInput(booking.booking_date) || toIsoDateInput(booking.created_at) || todayIsoDate());
     setStatus(booking.status || 'active');
     setAgreement((booking.agreement_status || 'pending').split(' | ')[0]);
   }, [booking]);
@@ -806,6 +856,7 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
         token_received: parseNum(token) ?? 0,
         status,
         agreement_status: agreement,
+        booking_date: bookingDatePayload(bookingDate),
       };
       const flat = parseNum(flatCost); if (flat !== undefined) payload.flat_cost = flat;
       const agr = parseNum(agreementValue); if (agr !== undefined) payload.agreement_value = agr;
@@ -830,6 +881,13 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
           <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Booking</Text>
           <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
             <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
+            <BookingDateField
+              label="BOOKING DATE *"
+              testID="edit-booking-date"
+              value={bookingDate}
+              onChange={setBookingDate}
+              colors={colors}
+            />
             <FormField label="BOOKING AMOUNT (₹)" testID="edit-booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
             <FormField label="TOKEN RECEIVED (₹)" testID="edit-booking-token" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
             <FormField label="AGREEMENT VALUE (₹)" testID="edit-booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
@@ -864,6 +922,84 @@ function FormField({ label, value, onChange, colors, keyboardType, testID, place
         value={value} onChangeText={onChange}
         keyboardType={keyboardType}
         placeholder={placeholder}
+        placeholderTextColor={colors.textMuted}
+        style={{ height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt }}
+      />
+    </View>
+  );
+}
+
+function BookingDateField({
+  label,
+  value,
+  onChange,
+  colors,
+  testID,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  colors: any;
+  testID?: string;
+}) {
+  if (Platform.OS === 'web') {
+    return (
+      <View>
+        <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>{label}</Text>
+        <View
+          style={{
+            height: 44,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: 8,
+            paddingHorizontal: 12,
+            backgroundColor: colors.surfaceAlt,
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 10,
+            position: 'relative',
+            overflow: 'hidden',
+          }}
+        >
+          <Ionicons name="calendar-outline" size={18} color={colors.primary} />
+          <Text style={{ color: colors.text, fontSize: 14, flex: 1 }} pointerEvents="none">
+            {formatBookingDateLabel(value) || 'Pick booking date'}
+          </Text>
+          <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }} pointerEvents="none">
+            Calendar
+          </Text>
+          <input
+            data-testid={testID}
+            type="date"
+            value={value || todayIsoDate()}
+            onChange={(e) => onChange(e.target.value)}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              width: '100%',
+              height: '100%',
+              opacity: 0.02,
+              cursor: 'pointer',
+              border: 'none',
+              background: 'transparent',
+            }}
+          />
+        </View>
+        <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
+          Tap to open calendar and set the booking date
+        </Text>
+      </View>
+    );
+  }
+
+  return (
+    <View>
+      <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>{label}</Text>
+      <TextInput
+        testID={testID}
+        value={value}
+        onChangeText={onChange}
+        placeholder="YYYY-MM-DD"
         placeholderTextColor={colors.textMuted}
         style={{ height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt }}
       />
