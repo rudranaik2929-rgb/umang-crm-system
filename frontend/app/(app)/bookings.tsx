@@ -14,38 +14,15 @@ import { RegistrationReceiptModal } from '../../src/components/RegistrationRecei
 import { AddBookingLeadModal } from '../../src/components/AddBookingLeadModal';
 import { BOOKING_TASKS, bookingMatchesTask, countBookingTasks, normalizeCompletedTasks, type BookingTaskKey } from '../../src/lib/bookingTasks';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-
-function todayIsoDate() {
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function toIsoDateInput(value?: string | null) {
-  if (!value) return '';
-  const raw = String(value).trim();
-  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10);
-  const parsed = new Date(raw);
-  if (Number.isNaN(parsed.getTime())) return '';
-  const y = parsed.getFullYear();
-  const m = String(parsed.getMonth() + 1).padStart(2, '0');
-  const day = String(parsed.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
+import { createPortal } from 'react-dom';
+import { DatePickerField, todayIsoDate, toIsoDateInput, formatDateLabel, isoDateToPayload } from '../../src/components/DatePickerField';
 
 function formatBookingDateLabel(value?: string | null) {
-  const iso = toIsoDateInput(value);
-  if (!iso) return '';
-  const parsed = new Date(`${iso}T12:00:00`);
-  if (Number.isNaN(parsed.getTime())) return iso;
-  return parsed.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+  return formatDateLabel(value);
 }
 
 function bookingDatePayload(isoDate: string) {
-  const day = toIsoDateInput(isoDate) || todayIsoDate();
-  return `${day}T12:00:00.000Z`;
+  return isoDateToPayload(isoDate);
 }
 
 function leadInBookingQueue(lead: any) {
@@ -743,69 +720,66 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initia
   }, [leads, leadId, leadSearch]);
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '90%' }]} onPress={(e: any) => e?.stopPropagation?.()}>
-          <Text style={[styles.cardTitle, { color: colors.text }]}>New Booking</Text>
-          {leads.length === 0 ? (
-            <Text style={{ color: colors.textSecondary, marginTop: 14, fontSize: 13 }}>
-              No leads in queue yet. When telecaller marks Hot Lead, they appear here under New Booking.
+    <BookingFormModal visible={visible} onClose={onClose} colors={colors}>
+      <Text style={[styles.cardTitle, { color: colors.text }]}>New Booking</Text>
+      {leads.length === 0 ? (
+        <Text style={{ color: colors.textSecondary, marginTop: 14, fontSize: 13 }}>
+          No leads in queue yet. When telecaller marks Hot Lead, they appear here under New Booking.
+        </Text>
+      ) : (
+        <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+          <Text style={[styles.label, { color: colors.textMuted }]}>SELECT LEAD (SEARCH & PICK)</Text>
+          <View style={[styles.searchRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+            <Ionicons name="search" size={16} color={colors.textMuted} />
+            <TextInput
+              value={leadSearch}
+              onChangeText={setLeadSearch}
+              placeholder="Search name, phone, location..."
+              placeholderTextColor={colors.textMuted}
+              style={{ flex: 1, color: colors.text, fontSize: 13, paddingVertical: 8, paddingHorizontal: 8 }}
+            />
+          </View>
+          <View style={{ marginTop: 10 }}>
+            <SearchableSelect
+              label="LEAD"
+              value={leadId}
+              options={leadOptions.length ? leadOptions : [{ key: '', label: 'No matches' }]}
+              onChange={setLeadId}
+              placeholder="Choose lead for booking"
+              testID="booking-lead-select"
+            />
+          </View>
+          {selectedLead ? (
+            <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 8 }}>
+              Selected: {selectedLead.name} · {selectedLead.phone || 'No phone'}
             </Text>
-          ) : (
-            <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
-              <Text style={[styles.label, { color: colors.textMuted }]}>SELECT LEAD (SEARCH & PICK)</Text>
-              <View style={[styles.searchRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
-                <Ionicons name="search" size={16} color={colors.textMuted} />
-                <TextInput
-                  value={leadSearch}
-                  onChangeText={setLeadSearch}
-                  placeholder="Search name, phone, location..."
-                  placeholderTextColor={colors.textMuted}
-                  style={{ flex: 1, color: colors.text, fontSize: 13, paddingVertical: 8, paddingHorizontal: 8 }}
-                />
-              </View>
-              <View style={{ marginTop: 10 }}>
-                <SearchableSelect
-                  label="LEAD"
-                  value={leadId}
-                  options={leadOptions.length ? leadOptions : [{ key: '', label: 'No matches' }]}
-                  onChange={setLeadId}
-                  placeholder="Choose lead for booking"
-                  testID="booking-lead-select"
-                />
-              </View>
-              {selectedLead ? (
-                <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 8 }}>
-                  Selected: {selectedLead.name} · {selectedLead.phone || 'No phone'}
-                </Text>
-              ) : null}
-              <FormField label="PROPERTY NAME (OPTIONAL)" testID="booking-property" value={property} onChange={setProperty} colors={colors} placeholder="Umang Skylark – 3BHK Tower B" />
-              <BookingDateField
-                label="BOOKING DATE *"
-                testID="booking-date"
-                value={bookingDate}
-                onChange={setBookingDate}
-                colors={colors}
-              />
-              <FormField label="BOOKING AMOUNT (₹, OPTIONAL)" testID="booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
-              <FormField label="TOKEN RECEIVED (₹, OPTIONAL)" testID="booking-token-input" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
-              <Text style={[styles.label, { color: colors.textMuted, marginTop: 16 }]}>COST BREAKDOWN (ALL OPTIONAL)</Text>
-              <FormField label="AGREEMENT VALUE (₹)" testID="booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
-              <FormField label="INTERIOR COST (₹)" testID="booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
-              <FormField label="STAMP DUTY (₹)" testID="booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
-              <FormField label="REGISTRATION FEES (₹)" testID="booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
-              <FormField label="GST (₹)" testID="booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
-              <FormField label="SOCIETY CHARGES (₹)" testID="booking-society-charges" value={societyCharges} onChange={setSocietyCharges} colors={colors} keyboardType="numeric" />
-              {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
-              <Pressable testID="booking-submit" onPress={submit} disabled={busy || !leadId}
-                style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center', opacity: leadId ? 1 : 0.5 }]}>
-                {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Create Booking</Text>}
-              </Pressable>
-            </ScrollView>
-          )}
-        </Pressable>
-      </Pressable>
-    </Modal>
+          ) : null}
+          <FormField label="PROPERTY NAME (OPTIONAL)" testID="booking-property" value={property} onChange={setProperty} colors={colors} placeholder="Umang Skylark – 3BHK Tower B" />
+          <DatePickerField
+            label="BOOKING DATE *"
+            testID="booking-date"
+            value={bookingDate}
+            onChange={setBookingDate}
+            colors={colors}
+            helper="Tap Change to open calendar"
+          />
+          <FormField label="BOOKING AMOUNT (₹, OPTIONAL)" testID="booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
+          <FormField label="TOKEN RECEIVED (₹, OPTIONAL)" testID="booking-token-input" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
+          <Text style={[styles.label, { color: colors.textMuted, marginTop: 16 }]}>COST BREAKDOWN (ALL OPTIONAL)</Text>
+          <FormField label="AGREEMENT VALUE (₹)" testID="booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
+          <FormField label="INTERIOR COST (₹)" testID="booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
+          <FormField label="STAMP DUTY (₹)" testID="booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
+          <FormField label="REGISTRATION FEES (₹)" testID="booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
+          <FormField label="GST (₹)" testID="booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
+          <FormField label="SOCIETY CHARGES (₹)" testID="booking-society-charges" value={societyCharges} onChange={setSocietyCharges} colors={colors} keyboardType="numeric" />
+          {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 10 }}>{error}</Text> : null}
+          <Pressable testID="booking-submit" onPress={submit} disabled={busy || !leadId}
+            style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center', opacity: leadId ? 1 : 0.5 }]}>
+            {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Create Booking</Text>}
+          </Pressable>
+        </ScrollView>
+      )}
+    </BookingFormModal>
   );
 }
 
@@ -872,43 +846,108 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
   };
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
+    <BookingFormModal visible={visible} onClose={onClose} colors={colors}>
+      <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Booking</Text>
+      <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+        <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
+        <DatePickerField
+          label="BOOKING DATE *"
+          testID="edit-booking-date"
+          value={bookingDate}
+          onChange={setBookingDate}
+          colors={colors}
+          helper="Tap Change to open calendar"
+        />
+        <FormField label="BOOKING AMOUNT (₹)" testID="edit-booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
+        <FormField label="TOKEN RECEIVED (₹)" testID="edit-booking-token" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
+        <FormField label="AGREEMENT VALUE (₹)" testID="edit-booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
+        <FormField label="INTERIOR COST (₹)" testID="edit-booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
+        <FormField label="STAMP DUTY (₹)" testID="edit-booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
+        <FormField label="REGISTRATION FEES (₹)" testID="edit-booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
+        <FormField label="GST (₹)" testID="edit-booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
+        <FormField label="SOCIETY CHARGES (₹)" testID="edit-booking-society-charges" value={societyCharges} onChange={setSocietyCharges} colors={colors} keyboardType="numeric" />
+        <FormField label="STATUS" testID="edit-booking-status" value={status} onChange={setStatus} colors={colors} />
+        <FormField label="AGREEMENT STATUS" testID="edit-booking-agreement" value={agreement} onChange={setAgreement} colors={colors} />
         <Pressable
-          onPress={(event: any) => event?.stopPropagation?.()}
-          style={[styles.modal, { backgroundColor: colors.surface, borderColor: colors.border, maxHeight: '90%' }]}
+          testID="edit-booking-submit"
+          onPress={submit}
+          disabled={busy}
+          style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}
         >
-          <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Booking</Text>
-          <ScrollView contentContainerStyle={{ paddingBottom: 8 }}>
-            <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
-            <BookingDateField
-              label="BOOKING DATE *"
-              testID="edit-booking-date"
-              value={bookingDate}
-              onChange={setBookingDate}
-              colors={colors}
-            />
-            <FormField label="BOOKING AMOUNT (₹)" testID="edit-booking-amount" value={amount} onChange={setAmount} colors={colors} keyboardType="numeric" />
-            <FormField label="TOKEN RECEIVED (₹)" testID="edit-booking-token" value={token} onChange={setToken} colors={colors} keyboardType="numeric" />
-            <FormField label="AGREEMENT VALUE (₹)" testID="edit-booking-agreement-value" value={agreementValue} onChange={setAgreementValue} colors={colors} keyboardType="numeric" />
-            <FormField label="INTERIOR COST (₹)" testID="edit-booking-flat-cost" value={flatCost} onChange={setFlatCost} colors={colors} keyboardType="numeric" />
-            <FormField label="STAMP DUTY (₹)" testID="edit-booking-stamp-duty" value={stampDuty} onChange={setStampDuty} colors={colors} keyboardType="numeric" />
-            <FormField label="REGISTRATION FEES (₹)" testID="edit-booking-registration-fees" value={registrationFees} onChange={setRegistrationFees} colors={colors} keyboardType="numeric" />
-            <FormField label="GST (₹)" testID="edit-booking-gst" value={gst} onChange={setGst} colors={colors} keyboardType="numeric" />
-            <FormField label="SOCIETY CHARGES (₹)" testID="edit-booking-society-charges" value={societyCharges} onChange={setSocietyCharges} colors={colors} keyboardType="numeric" />
-            <FormField label="STATUS" testID="edit-booking-status" value={status} onChange={setStatus} colors={colors} />
-            <FormField label="AGREEMENT STATUS" testID="edit-booking-agreement" value={agreement} onChange={setAgreement} colors={colors} />
-            <Pressable
-              testID="edit-booking-submit"
-              onPress={submit}
-              disabled={busy}
-              style={[styles.primary, { backgroundColor: colors.primary, marginTop: 16, height: 42, justifyContent: 'center' }]}
-            >
-              {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Booking</Text>}
-            </Pressable>
-          </ScrollView>
+          {busy ? <ActivityIndicator color="#fff" /> : <Text style={styles.primaryText}>Save Booking</Text>}
         </Pressable>
-      </Pressable>
+      </ScrollView>
+    </BookingFormModal>
+  );
+}
+
+function BookingFormModal({
+  visible,
+  onClose,
+  colors,
+  children,
+}: {
+  visible: boolean;
+  onClose: () => void;
+  colors: any;
+  children: React.ReactNode;
+}) {
+  if (!visible) return null;
+
+  const body = (
+    <View style={styles.backdrop} pointerEvents="box-none">
+      <Pressable
+        style={[StyleSheet.absoluteFillObject, { zIndex: 0 }]}
+        onPress={onClose}
+        accessibilityLabel="Close booking form"
+      />
+      <View
+        style={[
+          styles.modal,
+          {
+            backgroundColor: colors.surface,
+            borderColor: colors.border,
+            maxHeight: '90%',
+            position: 'relative',
+            zIndex: 2,
+            elevation: 8,
+            width: '100%',
+            maxWidth: 560,
+          },
+        ]}
+      >
+        {children}
+      </View>
+    </View>
+  );
+
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    return createPortal(
+      <View
+        style={{
+          position: 'fixed',
+          top: 0,
+          left: 0,
+          right: 0,
+          bottom: 0,
+          width: '100vw',
+          height: '100vh',
+          zIndex: 12000,
+          backgroundColor: 'rgba(0,0,0,0.55)',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 16,
+        } as any}
+      >
+        {body}
+      </View>,
+      document.body,
+    );
+  }
+
+  return (
+    <Modal visible transparent animationType="fade" onRequestClose={onClose}>
+      {body}
     </Modal>
   );
 }
@@ -922,84 +961,6 @@ function FormField({ label, value, onChange, colors, keyboardType, testID, place
         value={value} onChangeText={onChange}
         keyboardType={keyboardType}
         placeholder={placeholder}
-        placeholderTextColor={colors.textMuted}
-        style={{ height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt }}
-      />
-    </View>
-  );
-}
-
-function BookingDateField({
-  label,
-  value,
-  onChange,
-  colors,
-  testID,
-}: {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-  colors: any;
-  testID?: string;
-}) {
-  if (Platform.OS === 'web') {
-    return (
-      <View>
-        <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>{label}</Text>
-        <View
-          style={{
-            height: 44,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: 8,
-            paddingHorizontal: 12,
-            backgroundColor: colors.surfaceAlt,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 10,
-            position: 'relative',
-            overflow: 'hidden',
-          }}
-        >
-          <Ionicons name="calendar-outline" size={18} color={colors.primary} />
-          <Text style={{ color: colors.text, fontSize: 14, flex: 1 }} pointerEvents="none">
-            {formatBookingDateLabel(value) || 'Pick booking date'}
-          </Text>
-          <Text style={{ color: colors.primary, fontSize: 12, fontWeight: '700' }} pointerEvents="none">
-            Calendar
-          </Text>
-          <input
-            data-testid={testID}
-            type="date"
-            value={value || todayIsoDate()}
-            onChange={(e) => onChange(e.target.value)}
-            style={{
-              position: 'absolute',
-              inset: 0,
-              width: '100%',
-              height: '100%',
-              opacity: 0.02,
-              cursor: 'pointer',
-              border: 'none',
-              background: 'transparent',
-            }}
-          />
-        </View>
-        <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 6 }}>
-          Tap to open calendar and set the booking date
-        </Text>
-      </View>
-    );
-  }
-
-  return (
-    <View>
-      <Text style={[styles.label, { color: colors.textMuted, marginTop: 12 }]}>{label}</Text>
-      <TextInput
-        testID={testID}
-        value={value}
-        onChangeText={onChange}
-        placeholder="YYYY-MM-DD"
         placeholderTextColor={colors.textMuted}
         style={{ height: 40, borderWidth: 1, borderColor: colors.border, borderRadius: 8, padding: 10, color: colors.text, backgroundColor: colors.surfaceAlt }}
       />

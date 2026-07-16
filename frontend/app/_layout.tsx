@@ -20,7 +20,7 @@ function useWebPrivacyShield() {
         -ms-user-select: none !important;
         user-select: none !important;
       }
-      input, textarea, [contenteditable="true"], [role="textbox"],
+      input, textarea, input[type="date"], .crm-date-input, [contenteditable="true"], [role="textbox"],
       [data-editable="true"], .crm-text-input {
         -webkit-user-select: text !important;
         -moz-user-select: text !important;
@@ -45,7 +45,7 @@ function useWebPrivacyShield() {
       if (!(target instanceof Element)) return false;
       return Boolean(
         target.closest(
-          'input, textarea, [contenteditable="true"], [role="textbox"], [data-editable="true"], .crm-text-input',
+          'input, textarea, input[type="date"], .crm-date-input, [contenteditable="true"], [role="textbox"], [data-editable="true"], .crm-text-input',
         ),
       );
     };
