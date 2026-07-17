@@ -552,7 +552,7 @@ export default function Bookings() {
           setPrefillLeadId(null);
         }}
         initialLeadId={prefillLeadId}
-        onCreated={async (created) => {
+        onCreated={async (created: any) => {
           setShowCreate(false);
           setPrefillLeadId(null);
           if (created?.booking_id) {
@@ -748,6 +748,7 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initia
               onChange={setLeadId}
               placeholder="Choose lead for booking"
               testID="booking-lead-select"
+              modalZIndex={14000}
             />
           </View>
           {selectedLead ? (

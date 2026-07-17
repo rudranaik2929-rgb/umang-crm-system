@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, Modal } from 'react-native';
+import { View, Text, StyleSheet, Pressable, TextInput, ScrollView, Modal, Platform } from 'react-native';
+import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 
@@ -18,6 +19,7 @@ type Props = {
   placeholder?: string;
   testID?: string;
   compact?: boolean;
+  modalZIndex?: number;
 };
 
 export function SearchableSelect({
@@ -28,6 +30,7 @@ export function SearchableSelect({
   placeholder = 'Select…',
   testID,
   compact = false,
+  modalZIndex = 14000,
 }: Props) {
   const { colors } = useTheme();
   const [open, setOpen] = useState(false);
@@ -53,6 +56,65 @@ export function SearchableSelect({
     setOpen(false);
   };
 
+  const picker = open ? (
+    <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
+      <Pressable
+        style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
+        onPress={(e) => e.stopPropagation?.()}
+      >
+        <View style={styles.sheetHead}>
+          <Text style={[styles.sheetTitle, { color: colors.text }]}>{label}</Text>
+          <Pressable onPress={() => setOpen(false)} hitSlop={12}>
+            <Ionicons name="close" size={22} color={colors.textMuted} />
+          </Pressable>
+        </View>
+        <View style={[styles.searchRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+          <Ionicons name="search" size={16} color={colors.textMuted} />
+          <TextInput
+            value={query}
+            onChangeText={setQuery}
+            placeholder="Type to search…"
+            placeholderTextColor={colors.textMuted}
+            autoFocus
+            style={{ flex: 1, color: colors.text, fontSize: 14, paddingVertical: 8, paddingHorizontal: 8 }}
+          />
+          {query ? (
+            <Pressable onPress={() => setQuery('')} hitSlop={8}>
+              <Ionicons name="close-circle" size={18} color={colors.textMuted} />
+            </Pressable>
+          ) : null}
+        </View>
+        <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
+          {filtered.length === 0 ? (
+            <Text style={{ color: colors.textMuted, textAlign: 'center', padding: 20, fontSize: 13 }}>No matches</Text>
+          ) : filtered.map((opt) => {
+            const active = opt.key === value;
+            return (
+              <Pressable
+                key={opt.key}
+                onPress={() => pick(opt.key)}
+                style={[styles.option, {
+                  borderBottomColor: colors.border,
+                  backgroundColor: active ? colors.primary + '12' : 'transparent',
+                }]}
+              >
+                <View style={{ flex: 1 }}>
+                  <Text style={{ color: active ? colors.primary : colors.text, fontSize: 13, fontWeight: active ? '700' : '500' }}>
+                    {opt.label}{opt.count != null ? ` (${opt.count})` : ''}
+                  </Text>
+                  {opt.sublabel ? (
+                    <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>{opt.sublabel}</Text>
+                  ) : null}
+                </View>
+                {active ? <Ionicons name="checkmark-circle" size={18} color={colors.primary} /> : null}
+              </Pressable>
+            );
+          })}
+        </ScrollView>
+      </Pressable>
+    </Pressable>
+  ) : null;
+
   return (
     <View style={[styles.wrap, compact && styles.wrapCompact]}>
       {label ? <Text style={[styles.label, { color: colors.textMuted }]}>{label}</Text> : null}
@@ -67,64 +129,16 @@ export function SearchableSelect({
         <Ionicons name="chevron-down" size={16} color={colors.textMuted} />
       </Pressable>
 
-      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
-        <Pressable style={styles.backdrop} onPress={() => setOpen(false)}>
-          <Pressable
-            style={[styles.sheet, { backgroundColor: colors.surface, borderColor: colors.border }]}
-            onPress={(e) => e.stopPropagation?.()}
-          >
-            <View style={styles.sheetHead}>
-              <Text style={[styles.sheetTitle, { color: colors.text }]}>{label}</Text>
-              <Pressable onPress={() => setOpen(false)} hitSlop={12}>
-                <Ionicons name="close" size={22} color={colors.textMuted} />
-              </Pressable>
-            </View>
-            <View style={[styles.searchRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
-              <Ionicons name="search" size={16} color={colors.textMuted} />
-              <TextInput
-                value={query}
-                onChangeText={setQuery}
-                placeholder="Type to search…"
-                placeholderTextColor={colors.textMuted}
-                autoFocus
-                style={{ flex: 1, color: colors.text, fontSize: 14, paddingVertical: 8, paddingHorizontal: 8 }}
-              />
-              {query ? (
-                <Pressable onPress={() => setQuery('')} hitSlop={8}>
-                  <Ionicons name="close-circle" size={18} color={colors.textMuted} />
-                </Pressable>
-              ) : null}
-            </View>
-            <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
-              {filtered.length === 0 ? (
-                <Text style={{ color: colors.textMuted, textAlign: 'center', padding: 20, fontSize: 13 }}>No matches</Text>
-              ) : filtered.map((opt) => {
-                const active = opt.key === value;
-                return (
-                  <Pressable
-                    key={opt.key}
-                    onPress={() => pick(opt.key)}
-                    style={[styles.option, {
-                      borderBottomColor: colors.border,
-                      backgroundColor: active ? colors.primary + '12' : 'transparent',
-                    }]}
-                  >
-                    <View style={{ flex: 1 }}>
-                      <Text style={{ color: active ? colors.primary : colors.text, fontSize: 13, fontWeight: active ? '700' : '500' }}>
-                        {opt.label}{opt.count != null ? ` (${opt.count})` : ''}
-                      </Text>
-                      {opt.sublabel ? (
-                        <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>{opt.sublabel}</Text>
-                      ) : null}
-                    </View>
-                    {active ? <Ionicons name="checkmark-circle" size={18} color={colors.primary} /> : null}
-                  </Pressable>
-                );
-              })}
-            </ScrollView>
-          </Pressable>
-        </Pressable>
-      </Modal>
+      {Platform.OS === 'web' && typeof document !== 'undefined'
+        ? (picker ? createPortal(
+            <View style={[styles.webOverlay, { zIndex: modalZIndex }]}>{picker}</View>,
+            document.body,
+          ) : null)
+        : (
+            <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+              {picker}
+            </Modal>
+          )}
     </View>
   );
 }
@@ -142,6 +156,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     height: 40,
   },
+  webOverlay: {
+    position: 'fixed',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100vw',
+    height: '100vh',
+  } as any,
   backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 20 },
   sheet: { borderRadius: 12, borderWidth: 1, padding: 14, maxWidth: 420, width: '100%', alignSelf: 'center' },
   sheetHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 },
