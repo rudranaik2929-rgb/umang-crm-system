@@ -277,14 +277,14 @@ export default function Dashboard() {
           />
           <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Today's unassigned · subset of Open Leads" onPress={() => setLeadsBucket('new_today')} />
           <MetricCard icon="mail-unread-outline" label="Open Leads" value={model.openLeads} accent="#6366F1" helper="Unassigned or fresh assigned · part of Total" onPress={() => setLeadsBucket('open_leads')} />
+          <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · exclusive" onPress={() => setLeadsBucket('missed_leads')} />
           <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Hot / positive only · exclusive" onPress={() => setLeadsBucket('positive')} />
           <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('ringing')} />
           <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('not_interested')} />
-          <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · exclusive" onPress={() => setLeadsBucket('missed_leads')} />
-          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('registration')} />
           <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('visited')} />
-          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking / loan / closed · exclusive" onPress={() => setLeadsBucket('booking')} />
           <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · exclusive`} onPress={() => setLeadsBucket('follow_up')} />
+          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking / loan / closed · exclusive" onPress={() => setLeadsBucket('booking')} />
+          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('registration')} />
           {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
             const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
             return (
