@@ -406,6 +406,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
           <ScrollView style={st.list} contentContainerStyle={st.listContent} showsVerticalScrollIndicator>
             {isWide ? (
               <View style={[st.tableHeader, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+                <Text style={[st.th, st.colIndex, { color: colors.textMuted }]}>#</Text>
                 <Text style={[st.th, st.colName, { color: colors.textMuted }]}>Name</Text>
                 <Text style={[st.th, st.colContact, { color: colors.textMuted }]}>Contact</Text>
                 <Text style={[st.th, st.colEmployee, { color: colors.textMuted }]}>Employee</Text>
@@ -414,8 +415,9 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                 <Text style={[st.th, st.colDate, { color: colors.textMuted }]}>Date</Text>
               </View>
             ) : null}
-            {leads.map((l) => {
+            {leads.map((l, index) => {
               const budget = formatBudgetStringLakhs(l.budget);
+              const serial = index + 1;
               if (isWide) {
                 return (
                   <Pressable
@@ -426,6 +428,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                       backgroundColor: pressed ? colors.primary + '08' : colors.surface,
                     }]}
                   >
+                    <Text style={[st.td, st.colIndex, { color: colors.textMuted }]}>{serial}</Text>
                     <Text style={[st.td, st.colName, { color: colors.text, fontWeight: '700' }]} numberOfLines={2}>{l.name}</Text>
                     <Text style={[st.td, st.colContact, { color: colors.textSecondary }]} numberOfLines={2}>
                       {l.phone}{l.email ? `\n${l.email}` : ''}
@@ -453,6 +456,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                   onPress={() => setOpenLead(l.lead_id)}
                   style={[st.row, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
                 >
+                  <Text style={[st.rowIndex, { color: colors.textMuted }]}>{serial}</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.text, fontWeight: '700' }}>{l.name}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone}</Text>
@@ -583,6 +587,8 @@ const st = StyleSheet.create({
   },
   th: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
   td: { fontSize: 12, lineHeight: 17 },
+  colIndex: { width: 34, minWidth: 34, flexGrow: 0, flexShrink: 0, textAlign: 'right' },
+  rowIndex: { fontSize: 11, fontWeight: '600', minWidth: 22, textAlign: 'right' },
   colName: { flex: 1.1, minWidth: 120 },
   colContact: { flex: 1, minWidth: 110 },
   colEmployee: { flex: 0.9, minWidth: 100 },
