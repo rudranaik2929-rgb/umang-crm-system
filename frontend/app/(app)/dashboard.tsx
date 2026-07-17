@@ -15,9 +15,6 @@ import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { EmployeeMetricModal } from '../../src/components/EmployeeMetricModal';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
-import { useNotifications } from '../../src/notifications/NotificationContext';
-import { NotificationCard } from '../../src/components/NotificationCard';
-import { leadDeepLinkPath } from '../../src/lib/openLeadNavigation';
 import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel, platformLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
 import { BOOKING_TASKS, DASHBOARD_BOOKING_TASK_KEYS } from '../../src/lib/bookingTasks';
@@ -57,8 +54,6 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const isManager = user?.role === 'manager';
   const canLoadDashboard = canAccessMainDashboard(user?.role, user?.email);
-  const { items: notifications, unreadCount, refresh: refreshNotifications, error: notificationError } = useNotifications();
-
   const load = useCallback(async () => {
     setLoadError(null);
     try {
@@ -262,80 +257,52 @@ export default function Dashboard() {
           )}
         </View>
 
-        <View style={styles.metricGrid}>
-          <MetricCard
-            icon="people-outline"
-            label="Total Leads"
-            value={model.totalLeads}
-            accent={colors.info}
-            onPress={() => setLeadsBucket('all')}
-            helper={
-              stats?.housing_leads != null
-                ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · partition = ${model.partitionSum}`
-                : `Open+status boxes = ${model.partitionSum} (excl. New Today)`
-            }
-          />
-          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Today's unassigned · subset of Open Leads" onPress={() => setLeadsBucket('new_today')} />
-          <MetricCard icon="mail-unread-outline" label="Open Leads" value={model.openLeads} accent="#6366F1" helper="Unassigned or fresh assigned · part of Total" onPress={() => setLeadsBucket('open_leads')} />
-          <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · exclusive" onPress={() => setLeadsBucket('missed_leads')} />
-          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Hot / positive only · exclusive" onPress={() => setLeadsBucket('positive')} />
-          <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('ringing')} />
-          <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('not_interested')} />
-          <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('visited')} />
-          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · exclusive`} onPress={() => setLeadsBucket('follow_up')} />
-          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking / loan / closed · exclusive" onPress={() => setLeadsBucket('booking')} />
-          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('registration')} />
-          {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
-            const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
-            return (
-              <MetricCard
-                key={task.key}
-                icon={task.icon}
-                label={task.label}
-                value={Number(model.bookingTaskBuckets?.[task.key] ?? 0)}
-                accent={task.color}
-                helper="Booking pipeline · tap to open"
-                onPress={() => router.push(`/(app)/bookings?task=${task.key}` as any)}
-              />
-            );
-          })}
+        <View style={styles.metricSection}>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Lead Overview</Text>
+          <View style={styles.metricGrid}>
+            <MetricCard
+              icon="people-outline"
+              label="Total Leads"
+              value={model.totalLeads}
+              accent={colors.info}
+              onPress={() => setLeadsBucket('all')}
+              helper={
+                stats?.housing_leads != null
+                  ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · partition = ${model.partitionSum}`
+                  : `Open+status boxes = ${model.partitionSum} (excl. New Today)`
+              }
+            />
+            <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Today's unassigned · subset of Open Leads" onPress={() => setLeadsBucket('new_today')} />
+            <MetricCard icon="mail-unread-outline" label="Open Leads" value={model.openLeads} accent="#6366F1" helper="Unassigned or fresh assigned · part of Total" onPress={() => setLeadsBucket('open_leads')} />
+            <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · exclusive" onPress={() => setLeadsBucket('missed_leads')} />
+            <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Hot / positive only · exclusive" onPress={() => setLeadsBucket('positive')} />
+            <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('ringing')} />
+            <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('not_interested')} />
+            <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('visited')} />
+            <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · exclusive`} onPress={() => setLeadsBucket('follow_up')} />
+          </View>
         </View>
 
-        <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
-          <View style={styles.panelHeader}>
-            <View>
-              <Text style={[styles.panelTitle, { color: colors.text }]}>
-                Notifications{unreadCount > 0 ? ` (${unreadCount} unread)` : ''}
-              </Text>
-              <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                Lead assignments and team alerts
-              </Text>
-            </View>
-            <Pressable onPress={() => { refreshNotifications(); router.push('/(app)/notifications' as any); }}>
-              <Ionicons name="notifications-outline" size={20} color={colors.primary} />
-            </Pressable>
+        <View style={styles.metricSection}>
+          <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Booking Overview</Text>
+          <View style={styles.metricGrid}>
+            <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking / loan / closed · exclusive" onPress={() => setLeadsBucket('booking')} />
+            <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('registration')} />
+            {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
+              const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
+              return (
+                <MetricCard
+                  key={task.key}
+                  icon={task.icon}
+                  label={task.label}
+                  value={Number(model.bookingTaskBuckets?.[task.key] ?? 0)}
+                  accent={task.color}
+                  helper="Booking pipeline · tap to open"
+                  onPress={() => router.push(`/(app)/bookings?task=${task.key}` as any)}
+                />
+              );
+            })}
           </View>
-          {notificationError ? (
-            <Text style={{ color: colors.negative, fontSize: 12, marginBottom: 8 }}>{notificationError}</Text>
-          ) : null}
-          {notifications.length === 0 ? (
-            <Text style={{ color: colors.textMuted, fontSize: 13 }}>No notifications yet.</Text>
-          ) : (
-            notifications.slice(0, 5).map((n) => (
-              <NotificationCard
-                key={n.notification_id}
-                item={n}
-                compact
-                onPress={() => {
-                  if (n.lead_id) {
-                    router.push(leadDeepLinkPath(n.lead_id, user?.role, user?.email, user?.allowed_pages ?? undefined) as any);
-                  } else {
-                    router.push('/(app)/notifications' as any);
-                  }
-                }}
-              />
-            ))
-          )}
         </View>
 
         <Pressable
@@ -677,6 +644,8 @@ const styles = StyleSheet.create({
   tinyDot: { width: 8, height: 8, borderRadius: 4 },
   tinyValue: { fontSize: 16, fontWeight: '800' },
   tinyLabel: { fontSize: 10, marginTop: 1 },
+  metricSection: { gap: 10 },
+  sectionLabel: { fontSize: 12, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase' },
   metricGrid: { flexDirection: 'row', gap: 12, flexWrap: 'wrap' },
   followUpMiniRow: { flexDirection: 'row', gap: 8, marginRight: 8 },
   followUpMiniBox: { minWidth: 88, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 8, borderWidth: 1, alignItems: 'center' },
