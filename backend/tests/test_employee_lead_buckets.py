@@ -127,3 +127,75 @@ def test_ringing_action_clears_follow_up_at():
         "ringing",
     )
     assert cleared.get("follow_up_at") is None
+
+
+def test_dashboard_missed_leads_bucket():
+    leads = [
+        _lead("missed1", 30),
+        _lead("missed2", 48),
+        _lead("fresh", 2),
+        _lead("ringing", 40, call_status="ringing"),
+        _lead("negative", 50, status="negative"),
+    ]
+    missed = main.filter_lead_bucket(leads, "missed_leads", "2026-07-14")
+    assert {l["lead_id"] for l in missed} == {"missed1", "missed2"}
+
+
+def test_dashboard_missed_does_not_overlap_exclusive_buckets():
+    today = "2026-07-14"
+    leads = [
+        _lead("missed1", 30),
+        _lead("ringing", 40, call_status="ringing"),
+        _lead("fu", 10, follow_up_at=f"{today}T09:00:00+00:00"),
+        _lead("neg", 10, status="negative"),
+    ]
+    counts = main.dashboard_exclusive_status_counts(leads, today)
+    missed = main.filter_lead_bucket(leads, "missed_leads", today)
+    ringing = main.filter_lead_bucket(leads, "ringing", today)
+    follow = main.filter_lead_bucket(leads, "follow_up", today)
+    negative = main.filter_lead_bucket(leads, "not_interested", today)
+    all_ids = (
+        {l["lead_id"] for l in missed}
+        | {l["lead_id"] for l in ringing}
+        | {l["lead_id"] for l in follow}
+        | {l["lead_id"] for l in negative}
+    )
+    assert len(all_ids) == sum(counts.values())
+    assert counts["missed_leads"] == 1
+
+
+def test_dashboard_exclusive_buckets_sum_lte_total():
+    today = "2026-07-14"
+    leads = [
+        _lead("missed1", 30),
+        _lead("ringing", 40, call_status="ringing"),
+        _lead("fu", 10, follow_up_at=f"{today}T09:00:00+00:00"),
+        _lead("neg", 10, status="negative"),
+        {"lead_id": "unassigned", "status": "active", "stage": "new", "assigned_to": None},
+        _lead("hot", 5, stage="positive", priority="hot"),
+    ]
+    total = len(main.filter_lead_bucket(leads, "all", today))
+    exclusive = sum(main.dashboard_exclusive_status_counts(leads, today).values())
+    assert exclusive <= total
+
+
+def test_employee_status_boxes_sum_to_total():
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    leads = [
+        _lead("missed", 30),
+        _lead("untouched", 2),
+        _lead("ringing", 10, call_status="ringing"),
+        _lead("fu", 10, follow_up_at=f"{today}T09:00:00+00:00"),
+        _lead("hot", 10, stage="positive", priority="hot"),
+        _lead("visited", 10, stage="site_visit"),
+        _lead("booking", 10, stage="booking"),
+        _lead("closed", 10, stage="closed"),
+        _lead("positive", 10, stage="positive"),
+        _lead("neg", 10, status="negative"),
+        _lead("low", 10, status="negative", priority="low_budget"),
+        _lead("touched", 10, last_employee_action_at=(datetime.now(timezone.utc) - timedelta(hours=5)).isoformat()),
+    ]
+    stats = main.compute_employee_assignment_stats(leads, "telecaller")
+    assert stats["emp_new_leads"] == 2  # untouched + missed (both no workflow action)
+    assert stats["assigned_total"] == 10  # all actioned except missed + untouched
+    assert main.sum_employee_status_buckets(stats) == stats["assigned_total"]

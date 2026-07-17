@@ -144,6 +144,7 @@ export default function Dashboard() {
       newToday: Number(bucketSource?.new_today ?? 0),
       positiveLeads: Number(bucketSource?.positive ?? stats?.positive_leads ?? 0),
       negativeLeads: Number(bucketSource?.not_interested ?? stats?.negative_leads ?? 0),
+      missedLeads: Number(bucketSource?.missed_leads ?? 0),
       registrationLeads: Number(bucketSource?.registration ?? stats?.registration_leads ?? 0),
       visitedLeads: Number(bucketSource?.visited ?? stats?.visited_leads ?? 0),
       bookingLeads: Number(bucketSource?.booking ?? 0),
@@ -263,6 +264,7 @@ export default function Dashboard() {
           <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Filter by employee & source" onPress={() => setLeadsBucket('positive')} />
           <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="All ringing / call-back leads" onPress={() => setLeadsBucket('ringing')} />
           <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Filter by employee & source" onPress={() => setLeadsBucket('not_interested')} />
+          <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · tap for list" onPress={() => setLeadsBucket('missed_leads')} />
           <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Filter by employee & source" onPress={() => setLeadsBucket('registration')} />
           <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Site visit marked · filter by employee" onPress={() => setLeadsBucket('visited')} />
           <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Filter by employee & source" onPress={() => setLeadsBucket('booking')} />

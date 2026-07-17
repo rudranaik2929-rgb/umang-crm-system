@@ -913,11 +913,14 @@ def normalize_employee_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, 
 
 
 def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
-    """One primary bucket per lead — boxes are mutually exclusive (sum ≤ Total Leads).
+    """One primary bucket per lead — boxes are mutually exclusive (sum = Total Leads on backlog).
 
-    Priority: negative → booking → hot → visited → ringing → follow_up.
+    Priority: negative → booking → hot → visited → ringing → follow_up → positive/closed → in-progress.
     Progressive pipeline stages beat leftover call_status / follow_up_at.
+    Missed leads are excluded (they live in New Leads, not Total).
     """
+    if is_missed_lead(lead):
+        return None
     if lead.get("status") == "negative":
         if _lead_priority(lead) == "low_budget":
             return "low_budget"
@@ -932,6 +935,12 @@ def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
         return "ringing"
     if lead.get("follow_up_at"):
         return "follow_up"
+    if lead.get("stage") == "positive":
+        return "hot"
+    if lead.get("stage") == "closed":
+        return "booking_done"
+    if lead.get("assigned_to") and lead.get("status") == "active" and has_employee_workflow_action(lead):
+        return "ringing"
     return None
 
 
@@ -5747,7 +5756,26 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
         _notify_assignment_summary(assigned_to, 1, cu)
     return updated
 
-LEAD_BUCKET_KEYS = ["all", "new_today", "positive", "not_interested", "registration", "visited", "booking", "follow_up", "ringing"]
+LEAD_BUCKET_KEYS = [
+    "all", "new_today", "positive", "not_interested", "missed_leads",
+    "registration", "visited", "booking", "follow_up", "ringing",
+]
+# Mutually exclusive company-dashboard status boxes (each lead in at most one).
+DASHBOARD_EXCLUSIVE_STATUS_BUCKETS = ("not_interested", "missed_leads", "ringing", "follow_up")
+# Stage drill-downs overlap each other and positive — do NOT expect these to sum to Total Leads.
+DASHBOARD_HIERARCHICAL_BUCKETS = ("positive", "registration", "visited", "booking")
+EMPLOYEE_STATUS_BUCKET_KEYS = (
+    "hot", "visited", "not_interested", "low_budget", "booking_done", "ringing", "follow_up",
+)
+EMPLOYEE_STATUS_BUCKET_STAT_KEYS = {
+    "hot": "emp_hot",
+    "visited": "emp_visited",
+    "not_interested": "emp_not_interested",
+    "low_budget": "emp_low_budget",
+    "booking_done": "emp_booking_done",
+    "ringing": "emp_ringing",
+    "follow_up": "emp_follow_ups",
+}
 DASHBOARD_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
 
 
@@ -5796,6 +5824,8 @@ def apply_dashboard_assignee_filter(
 def lead_dashboard_sort_date(lead: Dict[str, Any], bucket_key: str) -> Optional[datetime]:
     if bucket_key == "follow_up":
         return parse_lead_ts(lead.get("follow_up_at")) or parse_lead_ts(lead.get("created_at"))
+    if bucket_key == "missed_leads":
+        return effective_assigned_at(lead) or parse_lead_ts(lead.get("updated_at")) or parse_lead_ts(lead.get("created_at"))
     if bucket_key == "visited":
         return (
             parse_lead_ts(lead.get("last_employee_action_at"))
@@ -5859,12 +5889,25 @@ def sort_dashboard_leads(
     return sorted(leads, key=sort_dt, reverse=True)
 
 
+def sum_employee_status_buckets(stats: Dict[str, int]) -> int:
+    """Sum exclusive employee workflow pills that partition Total Leads (backlog)."""
+    return sum(int(stats.get(EMPLOYEE_STATUS_BUCKET_STAT_KEYS[key], 0) or 0) for key in EMPLOYEE_STATUS_BUCKET_KEYS)
+
+
+def dashboard_exclusive_status_counts(all_leads: List[Dict[str, Any]], today: str) -> Dict[str, int]:
+    """Counts for mutually exclusive company-dashboard status boxes."""
+    return {key: len(filter_lead_bucket(all_leads, key, today)) for key in DASHBOARD_EXCLUSIVE_STATUS_BUCKETS}
+
+
 def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: str) -> List[Dict[str, Any]]:
     """Single source of truth for dashboard bucket lists + counts.
     Always deduped so the metric box number == the opened list length.
 
-    Ringing and Follow Up are mutually exclusive (same classifier as employee KPI boxes).
+    Exclusive status boxes (no overlap): not_interested, missed_leads, ringing, follow_up.
+    Ringing and Follow Up use the same classifier as employee KPI boxes.
     Positive / Visited / Booking / Registration are stage drill-downs (hierarchical, not a partition of Total).
+    new_today is a date filter on unassigned leads — not part of the status partition.
+    missed_leads is computed (assigned 24h+ with no employee action) — no DB column.
     """
     if bucket_key == "new_today":
         filtered = [
@@ -5873,6 +5916,8 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
         ]
     elif bucket_key == "not_interested":
         filtered = [l for l in all_leads if l.get("status") == "negative"]
+    elif bucket_key == "missed_leads":
+        filtered = [l for l in all_leads if is_missed_lead(l)]
     elif bucket_key == "positive":
         filtered = [l for l in all_leads if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration", "closed"] and l.get("status") != "negative"]
     elif bucket_key == "registration":
