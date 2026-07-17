@@ -102,3 +102,71 @@ def test_leads_filtered_clamps_limit_and_offset(monkeypatch):
         assert body["has_more"] is False
     finally:
         main.app.dependency_overrides.clear()
+
+
+def test_leads_filtered_multi_status_filter(monkeypatch):
+    leads = [
+        {
+            "lead_id": "open1",
+            "name": "Open",
+            "phone": "+911",
+            "source": "manual_entry",
+            "stage": "new",
+            "status": "active",
+            "assigned_to": None,
+            "created_at": "2026-07-10T10:00:00Z",
+        },
+        {
+            "lead_id": "ring1",
+            "name": "Ring",
+            "phone": "+912",
+            "source": "manual_entry",
+            "stage": "assigned",
+            "status": "active",
+            "call_status": "ringing",
+            "assigned_to": "emp1",
+            "assigned_at": "2026-07-01T10:00:00Z",
+            "created_at": "2026-07-01T10:00:00Z",
+        },
+        {
+            "lead_id": "hot1",
+            "name": "Hot",
+            "phone": "+913",
+            "source": "manual_entry",
+            "stage": "positive",
+            "status": "active",
+            "priority": "hot",
+            "assigned_to": "emp1",
+            "assigned_at": "2026-07-01T10:00:00Z",
+            "created_at": "2026-07-01T10:00:00Z",
+        },
+        {
+            "lead_id": "cold1",
+            "name": "Cold",
+            "phone": "+914",
+            "source": "manual_entry",
+            "stage": "positive",
+            "status": "active",
+            "priority": "cold",
+            "assigned_to": "emp1",
+            "assigned_at": "2026-07-01T10:00:00Z",
+            "created_at": "2026-07-01T10:00:00Z",
+        },
+    ]
+    monkeypatch.setattr(main, "fetch_all_leads_merged", lambda select=None: leads)
+    monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
+
+    main.app.dependency_overrides[main.get_current_user] = lambda: _FakeUser()
+    try:
+        client = TestClient(main.app)
+        res = client.get(
+            "/api/leads/filtered",
+            params={"bucket": "all", "status": "ringing,cold_leads", "limit": 50},
+        )
+        assert res.status_code == 200, res.text
+        body = res.json()
+        assert body["total"] == 2
+        assert {l["lead_id"] for l in body["leads"]} == {"ring1", "cold1"}
+        assert body["filters"]["status"] == "ringing,cold_leads"
+    finally:
+        main.app.dependency_overrides.clear()

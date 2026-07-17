@@ -5774,7 +5774,7 @@ LEAD_BUCKET_KEYS = [
     "all", "new_today", "open_leads", "positive", "cold_leads", "not_interested", "missed_leads",
     "registration", "visited", "booking", "follow_up", "ringing",
 ]
-# Full exclusive partition of Total Leads (`all`) — sum of these == lead_buckets["all"].
+# Lead Overview exclusive partition of Total Leads (`all`) — booking dept excluded.
 DASHBOARD_PARTITION_BUCKETS = (
     "open_leads",
     "missed_leads",
@@ -5783,13 +5783,16 @@ DASHBOARD_PARTITION_BUCKETS = (
     "positive",
     "cold_leads",
     "visited",
-    "registration",
-    "booking",
     "not_interested",
+)
+# Booking Overview department — separate from Total Leads.
+DASHBOARD_BOOKING_BUCKETS = (
+    "booking",
+    "registration",
 )
 # Legacy alias: workflow status pills that never overlap each other.
 DASHBOARD_EXCLUSIVE_STATUS_BUCKETS = ("not_interested", "missed_leads", "ringing", "follow_up")
-# Kept for callers; these stage boxes are now exclusive via classify_company_dashboard_bucket.
+# Kept for callers; these stage boxes are exclusive via classify_company_dashboard_bucket.
 DASHBOARD_HIERARCHICAL_BUCKETS = ("positive", "cold_leads", "registration", "visited", "booking")
 EMPLOYEE_STATUS_BUCKET_KEYS = (
     "hot", "cold", "visited", "not_interested", "low_budget", "booking_done", "ringing", "follow_up",
@@ -5817,6 +5820,26 @@ def parse_dashboard_source_filter(source: str) -> List[str]:
         if key and key != "all" and key in DASHBOARD_SOURCE_FILTERS and key not in keys:
             keys.append(key)
     return keys
+
+
+def parse_dashboard_status_filter(status: str) -> List[str]:
+    """Comma-separated exclusive partition keys for Total Leads multi-status filter."""
+    allowed = set(DASHBOARD_PARTITION_BUCKETS)
+    raw = (status or "all").strip().lower()
+    if raw in ("", "all"):
+        return []
+    keys: List[str] = []
+    for part in raw.split(","):
+        key = part.strip().lower()
+        if key and key != "all" and key in allowed and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def lead_matches_dashboard_status(lead: Dict[str, Any], status_keys: List[str]) -> bool:
+    if not status_keys:
+        return True
+    return classify_company_dashboard_bucket(lead) in set(status_keys)
 
 
 def lead_matches_dashboard_source(lead: Dict[str, Any], source_keys: List[str]) -> bool:
@@ -5928,11 +5951,12 @@ def dashboard_exclusive_status_counts(all_leads: List[Dict[str, Any]], today: st
 
 
 def classify_company_dashboard_bucket(lead: Dict[str, Any]) -> Optional[str]:
-    """Exactly one partition box per lead counted in Total Leads.
+    """Exactly one dashboard box label per pipeline lead.
 
-    Priority mirrors employee workflow boxes, then splits booking_done into
-    registration vs booking, and places untouched / unassigned leads in open_leads.
-    Returns None for broker / fake-meta rows that are excluded from Total.
+    Lead Overview partition (sums to Total Leads): open_leads, missed, ringing,
+    follow_up, positive, cold_leads, visited, not_interested.
+    Booking Overview department (not in Total): booking, registration.
+    Returns None for broker / fake-meta rows that are excluded from both.
     """
     if classify_lead_platform(lead.get("source")) == "meta" and not is_real_meta_lead(lead):
         return None
@@ -5963,8 +5987,13 @@ def classify_company_dashboard_bucket(lead: Dict[str, Any]) -> Optional[str]:
     return "open_leads"
 
 
+def is_booking_department_lead(lead: Dict[str, Any]) -> bool:
+    """Booking Overview department — excluded from Total Leads / Lead Overview."""
+    return classify_company_dashboard_bucket(lead) in DASHBOARD_BOOKING_BUCKETS
+
+
 def dashboard_partition_counts(all_leads: List[Dict[str, Any]], today: Optional[str] = None) -> Dict[str, int]:
-    """Counts for the full exclusive partition of Total Leads."""
+    """Counts for the Lead Overview exclusive partition of Total Leads."""
     day = today or now_utc().date().isoformat()
     return {key: len(filter_lead_bucket(all_leads, key, day)) for key in DASHBOARD_PARTITION_BUCKETS}
 
@@ -5973,16 +6002,20 @@ def sum_dashboard_partition(counts: Dict[str, int]) -> int:
     return sum(int(counts.get(key, 0) or 0) for key in DASHBOARD_PARTITION_BUCKETS)
 
 
+def sum_dashboard_booking_buckets(counts: Dict[str, int]) -> int:
+    return sum(int(counts.get(key, 0) or 0) for key in DASHBOARD_BOOKING_BUCKETS)
+
+
 def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: str) -> List[Dict[str, Any]]:
     """Single source of truth for dashboard bucket lists + counts.
     Always deduped so the metric box number == the opened list length.
 
-    Partition boxes (no overlap; sum == Total / all):
+    Lead Overview partition (no overlap; sum == Total / all):
       open_leads, missed_leads, ringing, follow_up, positive, cold_leads, visited,
-      registration, booking, not_interested.
+      not_interested.
+    Booking Overview (separate department; NOT in Total):
+      booking, registration.
     new_today is a date subset of unassigned open leads — not part of the partition sum.
-    missed_leads is computed (assigned 24h+ with no employee action) — no DB column.
-    cold_leads = stage positive + priority cold (including scheduled follow-ups).
     """
     if bucket_key == "new_today":
         cleaned = clean_leads_for_platform_stats(all_leads)
@@ -5991,8 +6024,10 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
             if is_unassigned_new_lead(l) and (l.get("created_at") or "")[:10] == today
         ]
     elif bucket_key == "all":
-        filtered = clean_leads_for_platform_stats(all_leads)
-    elif bucket_key in DASHBOARD_PARTITION_BUCKETS:
+        # Total Leads = Lead Overview only — exclude Booking department.
+        cleaned = clean_leads_for_platform_stats(all_leads)
+        filtered = [l for l in cleaned if not is_booking_department_lead(l)]
+    elif bucket_key in DASHBOARD_PARTITION_BUCKETS or bucket_key in DASHBOARD_BOOKING_BUCKETS:
         cleaned = clean_leads_for_platform_stats(all_leads)
         filtered = [l for l in cleaned if classify_company_dashboard_bucket(l) == bucket_key]
     else:
@@ -6015,6 +6050,7 @@ def compute_lead_bucket_counts(
     counts = {key: len(filter_lead_bucket(leads, key, day)) for key in LEAD_BUCKET_KEYS}
     # Invariant helpers for API consumers / tests.
     counts["partition_sum"] = sum_dashboard_partition(counts)
+    counts["booking_partition_sum"] = sum_dashboard_booking_buckets(counts)
     return counts
 
 
@@ -6025,16 +6061,18 @@ async def list_leads_filtered(
     offset: int = 0,
     assigned_to: Optional[str] = None,
     source: str = "all",
+    status: str = "all",
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
     month: Optional[str] = None,
     sort: str = "newest",
     cu: User = Depends(get_current_user),
 ):
-    """Dashboard drill-down lists with optional employee + source filters.
+    """Dashboard drill-down lists with optional employee, source, and status filters.
 
     Pagination: ``limit`` (max 500) + ``offset``. Bucket classification is unchanged;
-    only the returned page slice moves.
+    only the returned page slice moves. ``status`` is a comma-separated multi-select of
+    exclusive partition keys (e.g. ringing,cold_leads).
     """
     bucket_key = (bucket or "all").strip().lower()
     if bucket_key not in set(LEAD_BUCKET_KEYS):
@@ -6043,6 +6081,13 @@ async def list_leads_filtered(
     source_keys = parse_dashboard_source_filter(source)
     if (source or "all").strip().lower() not in ("", "all") and not source_keys:
         raise HTTPException(400, detail=f"source must be one of: {', '.join(DASHBOARD_SOURCE_FILTERS)}")
+
+    status_keys = parse_dashboard_status_filter(status)
+    if (status or "all").strip().lower() not in ("", "all") and not status_keys:
+        raise HTTPException(
+            400,
+            detail=f"status must be one of: {', '.join(DASHBOARD_PARTITION_BUCKETS)}",
+        )
 
     limit = min(max(limit, 1), 500)
     offset = max(offset, 0)
@@ -6055,6 +6100,7 @@ async def list_leads_filtered(
     })
     filtered = filter_lead_bucket(all_leads, bucket_key, today)
     filtered = [l for l in filtered if lead_matches_dashboard_source(l, source_keys)]
+    filtered = [l for l in filtered if lead_matches_dashboard_status(l, status_keys)]
     filtered = apply_dashboard_assignee_filter(filtered, assigned_to, employees)
     filtered = apply_dashboard_date_filter(filtered, bucket_key, date_from, date_to, month)
     filtered = sort_dashboard_leads(filtered, bucket_key, sort)
@@ -6079,6 +6125,7 @@ async def list_leads_filtered(
         "filters": {
             "assigned_to": assigned_to or "all",
             "source": source or "all",
+            "status": status or "all",
             "date_from": date_from or "",
             "date_to": date_to or "",
             "month": month or "",

@@ -35,6 +35,18 @@ const SOURCE_OPTIONS = [
   { key: 'other', label: platformLabel('other'), color: '#64748B' },
 ];
 
+/** Lead Overview statuses — multi-select filter in Total Leads popup (excl. Booking dept). */
+const STATUS_OPTIONS = [
+  { key: 'open_leads', label: 'Open', color: '#6366F1' },
+  { key: 'missed_leads', label: 'Missed', color: '#DC2626' },
+  { key: 'positive', label: 'Positive', color: '#16A34A' },
+  { key: 'cold_leads', label: 'Cold', color: '#64748B' },
+  { key: 'ringing', label: 'Ringing', color: '#F97316' },
+  { key: 'not_interested', label: 'Not Interested', color: '#E11D48' },
+  { key: 'visited', label: 'Visited', color: '#14B8A6' },
+  { key: 'follow_up', label: 'Follow Up', color: '#F59E0B' },
+];
+
 /** Matches backend /leads/filtered max page size. */
 const PAGE_SIZE = 500;
 
@@ -55,7 +67,6 @@ function formatDate(value?: string) {
 }
 
 type DatePreset = 'all' | 'this_month' | 'last_30' | 'month' | 'range';
-type SortOrder = 'newest' | 'oldest' | 'day_asc' | 'day_desc';
 
 function currentMonthKey() {
   const now = new Date();
@@ -129,8 +140,8 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
   const [employees, setEmployees] = useState<any[]>(employeesProp || []);
   const [assignedTo, setAssignedTo] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [datePreset, setDatePreset] = useState<DatePreset>('all');
-  const [sortOrder, setSortOrder] = useState<SortOrder>('newest');
   const [rangeFrom, setRangeFrom] = useState('');
   const [rangeTo, setRangeTo] = useState('');
   const [monthValue, setMonthValue] = useState(currentMonthKey());
@@ -140,8 +151,8 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     if (visible) {
       setAssignedTo('all');
       setSourceFilter('all');
+      setStatusFilter('all');
       setDatePreset('all');
-      setSortOrder('newest');
       setRangeFrom('');
       setRangeTo('');
       setMonthValue(currentMonthKey());
@@ -149,10 +160,10 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     }
   }, [visible, bucket]);
 
-  // Reset to first page when filters/sort change (not when page itself changes).
+  // Reset to first page when filters change (not when page itself changes).
   useEffect(() => {
     setPage(0);
-  }, [assignedTo, sourceFilter, datePreset, sortOrder, rangeFrom, rangeTo, monthValue]);
+  }, [assignedTo, sourceFilter, statusFilter, datePreset, rangeFrom, rangeTo, monthValue]);
 
   useEffect(() => {
     if (employeesProp?.length) setEmployees(employeesProp);
@@ -171,12 +182,20 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
   );
 
   const selectedSources = useMemo(() => new Set(parseInquiryStatusFilter(sourceFilter)), [sourceFilter]);
+  const selectedStatuses = useMemo(() => new Set(parseInquiryStatusFilter(statusFilter)), [statusFilter]);
 
   const toggleSource = (key: string) => {
     const next = new Set(selectedSources);
     if (next.has(key)) next.delete(key);
     else next.add(key);
     setSourceFilter(serializeInquiryStatusFilter(Array.from(next)));
+  };
+
+  const toggleStatus = (key: string) => {
+    const next = new Set(selectedStatuses);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
+    setStatusFilter(serializeInquiryStatusFilter(Array.from(next)));
   };
 
   const load = useCallback(async () => {
@@ -189,10 +208,11 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
         bucket,
         limit: String(PAGE_SIZE),
         offset: String(offset),
-        sort: sortOrder,
+        sort: 'newest',
       };
       if (assignedTo && assignedTo !== 'all') params.assigned_to = assignedTo;
       if (sourceFilter && sourceFilter !== 'all') params.source = sourceFilter;
+      if (statusFilter && statusFilter !== 'all') params.status = statusFilter;
       if (datePreset === 'this_month') {
         params.month = currentMonthKey();
       } else if (datePreset === 'last_30') {
@@ -217,7 +237,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     } finally {
       if (reqId === loadRef.current) setLoading(false);
     }
-  }, [visible, bucket, page, assignedTo, sourceFilter, datePreset, sortOrder, rangeFrom, rangeTo, monthValue]);
+  }, [visible, bucket, page, assignedTo, sourceFilter, statusFilter, datePreset, rangeFrom, rangeTo, monthValue]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -238,15 +258,13 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     return 'All dates';
   })();
 
-  const sortLabel = sortOrder === 'newest' ? 'Newest first'
-    : sortOrder === 'oldest' ? 'Oldest first'
-      : sortOrder === 'day_asc' ? 'Day ↑'
-        : 'Day ↓';
-
   const sourceSummary = selectedSources.size
     ? SOURCE_OPTIONS.filter((o) => selectedSources.has(o.key)).map((o) => o.label).join(' · ')
     : 'All sources';
-  const subtitleParts = [sourceSummary, dateSummary, sortLabel].join(' · ');
+  const statusSummary = selectedStatuses.size
+    ? STATUS_OPTIONS.filter((o) => selectedStatuses.has(o.key)).map((o) => o.label).join(' · ')
+    : 'All statuses';
+  const subtitleParts = [statusSummary, sourceSummary, dateSummary].join(' · ');
 
   if (!visible) return null;
 
@@ -258,13 +276,6 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     { key: 'last_30', label: 'Last 30 days' },
     { key: 'month', label: 'Full month' },
     { key: 'range', label: 'Date range' },
-  ];
-
-  const SORT_OPTIONS: { key: SortOrder; label: string }[] = [
-    { key: 'newest', label: 'Newest' },
-    { key: 'oldest', label: 'Oldest' },
-    { key: 'day_asc', label: 'Day A→Z' },
-    { key: 'day_desc', label: 'Day Z→A' },
   ];
 
   const content = (
@@ -392,21 +403,35 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
             </View>
           ) : null}
         </View>
-        <View style={st.filterBlock}>
-          <Text style={[st.filterLabel, { color: colors.textMuted }]}>SORT</Text>
+        <View style={[st.filterBlock, { flex: 1, minWidth: 280 }]}>
+          <Text style={[st.filterLabel, { color: colors.textMuted }]}>STATUS (MULTI)</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={st.sourceRow}>
-            {SORT_OPTIONS.map((opt) => {
-              const active = sortOrder === opt.key;
+            <Pressable
+              testID="dashboard-leads-status-all"
+              onPress={() => setStatusFilter('all')}
+              style={[st.sourceChip, {
+                borderColor: selectedStatuses.size === 0 ? colors.primary : colors.border,
+                backgroundColor: selectedStatuses.size === 0 ? colors.primary + '18' : colors.surfaceAlt,
+              }]}
+            >
+              <Text style={{ color: selectedStatuses.size === 0 ? colors.primary : colors.text, fontSize: 11, fontWeight: '700' }}>
+                All
+              </Text>
+            </Pressable>
+            {STATUS_OPTIONS.map((opt) => {
+              const active = selectedStatuses.has(opt.key);
               return (
                 <Pressable
                   key={opt.key}
-                  onPress={() => setSortOrder(opt.key)}
+                  testID={`dashboard-leads-status-${opt.key}`}
+                  onPress={() => toggleStatus(opt.key)}
                   style={[st.sourceChip, {
-                    borderColor: active ? colors.accent : colors.border,
-                    backgroundColor: active ? colors.accent + '18' : colors.surfaceAlt,
+                    borderColor: active ? opt.color : colors.border,
+                    backgroundColor: active ? opt.color + '18' : colors.surfaceAlt,
                   }]}
                 >
-                  <Text style={{ color: active ? colors.accent : colors.text, fontSize: 11, fontWeight: active ? '700' : '500' }}>
+                  <Ionicons name={active ? 'checkbox' : 'square-outline'} size={14} color={active ? opt.color : colors.textMuted} />
+                  <Text style={{ color: active ? opt.color : colors.text, fontSize: 11, fontWeight: active ? '700' : '500' }}>
                     {opt.label}
                   </Text>
                 </Pressable>

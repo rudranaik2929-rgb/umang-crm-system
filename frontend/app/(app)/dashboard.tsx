@@ -160,9 +160,14 @@ export default function Dashboard() {
           + Number(bucketSource?.positive ?? 0)
           + Number(bucketSource?.cold_leads ?? 0)
           + Number(bucketSource?.visited ?? 0)
-          + Number(bucketSource?.registration ?? 0)
-          + Number(bucketSource?.booking ?? 0)
           + Number(bucketSource?.not_interested ?? 0)
+        ),
+      ),
+      bookingPartitionSum: Number(
+        bucketSource?.booking_partition_sum
+        ?? (
+          Number(bucketSource?.booking ?? 0)
+          + Number(bucketSource?.registration ?? 0)
         ),
       ),
       loans: Number(stats?.loans || 0),
@@ -270,8 +275,8 @@ export default function Dashboard() {
               onPress={() => setLeadsBucket('all')}
               helper={
                 stats?.housing_leads != null
-                  ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · partition = ${model.partitionSum}`
-                  : `Open+status boxes = ${model.partitionSum} (excl. New Today)`
+                  ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · Lead Overview = ${model.partitionSum}`
+                  : `Lead Overview boxes = ${model.partitionSum} (excl. Booking dept)`
               }
             />
             <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Today's unassigned · subset of Open Leads" onPress={() => setLeadsBucket('new_today')} />
@@ -289,8 +294,8 @@ export default function Dashboard() {
         <View style={styles.metricSection}>
           <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Booking Overview</Text>
           <View style={styles.metricGrid}>
-            <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking / loan / closed · exclusive" onPress={() => setLeadsBucket('booking')} />
-            <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('registration')} />
+            <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking department · not in Total Leads" onPress={() => setLeadsBucket('booking')} />
+            <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Booking department · not in Total Leads" onPress={() => setLeadsBucket('registration')} />
             {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
               const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
               return (
