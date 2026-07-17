@@ -179,6 +179,69 @@ def test_dashboard_exclusive_buckets_sum_lte_total():
     assert exclusive <= total
 
 
+def test_dashboard_partition_sums_to_total():
+    """Open + Missed + Ringing + Follow Up + Positive + Visited + Registration + Booking + NI == Total."""
+    today = "2026-07-14"
+    leads = [
+        _lead("missed1", 30),
+        _lead("fresh", 2),
+        _lead("ringing", 40, call_status="ringing"),
+        _lead("fu", 10, follow_up_at=f"{today}T09:00:00+00:00"),
+        _lead("neg", 10, status="negative"),
+        {"lead_id": "unassigned", "status": "active", "stage": "new", "assigned_to": None,
+         "created_at": f"{today}T08:00:00+00:00"},
+        {"lead_id": "older_unassigned", "status": "active", "stage": "new", "assigned_to": None,
+         "created_at": "2026-07-01T08:00:00+00:00"},
+        _lead("hot", 5, stage="positive", priority="hot"),
+        _lead("visited", 10, stage="site_visit"),
+        _lead("reg", 10, stage="registration"),
+        _lead("booking", 10, stage="booking"),
+        _lead("loan", 10, stage="loan"),
+        _lead("closed", 10, stage="closed"),
+    ]
+    counts = main.compute_lead_bucket_counts(leads, today)
+    assert counts["all"] == 13
+    assert counts["open_leads"] == 3  # fresh + unassigned + older_unassigned
+    assert counts["missed_leads"] == 1
+    assert counts["ringing"] == 1
+    assert counts["follow_up"] == 1
+    assert counts["not_interested"] == 1
+    assert counts["positive"] == 1  # hot only — not visited/booking/reg
+    assert counts["visited"] == 1
+    assert counts["registration"] == 1
+    assert counts["booking"] == 3  # booking + loan + closed
+    assert counts["partition_sum"] == counts["all"]
+    assert main.sum_dashboard_partition(counts) == counts["all"]
+    # New Today is a subset of open leads, not an extra partition member.
+    assert counts["new_today"] == 1
+    assert counts["new_today"] <= counts["open_leads"]
+
+
+def test_positive_bucket_excludes_visited_and_booking():
+    today = "2026-07-14"
+    leads = [
+        _lead("hot", 5, stage="positive", priority="hot"),
+        _lead("visited", 10, stage="site_visit"),
+        _lead("booking", 10, stage="booking"),
+        _lead("reg", 10, stage="registration"),
+    ]
+    positive = main.filter_lead_bucket(leads, "positive", today)
+    visited = main.filter_lead_bucket(leads, "visited", today)
+    booking = main.filter_lead_bucket(leads, "booking", today)
+    registration = main.filter_lead_bucket(leads, "registration", today)
+    assert {l["lead_id"] for l in positive} == {"hot"}
+    assert {l["lead_id"] for l in visited} == {"visited"}
+    assert {l["lead_id"] for l in booking} == {"booking"}
+    assert {l["lead_id"] for l in registration} == {"reg"}
+    ids = (
+        {l["lead_id"] for l in positive}
+        | {l["lead_id"] for l in visited}
+        | {l["lead_id"] for l in booking}
+        | {l["lead_id"] for l in registration}
+    )
+    assert len(ids) == 4
+
+
 def test_employee_status_boxes_sum_to_total():
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     leads = [
@@ -212,12 +275,14 @@ def test_lead_bucket_counts_match_filter_length():
         {"lead_id": "new_today", "status": "active", "stage": "new", "assigned_to": None,
          "created_at": f"{today}T08:00:00+00:00"},
         {"lead_id": "positive", "status": "active", "stage": "positive", "assigned_to": "emp1",
-         "created_at": "2026-07-01T08:00:00+00:00"},
+         "created_at": "2026-07-01T08:00:00+00:00", "priority": "hot"},
     ]
     counts = main.compute_lead_bucket_counts(leads, today)
     for key in main.LEAD_BUCKET_KEYS:
         filtered = main.filter_lead_bucket(leads, key, today)
         assert counts[key] == len(filtered), f"bucket {key}: count {counts[key]} != list {len(filtered)}"
+    assert counts["partition_sum"] == counts["all"]
+    assert counts["open_leads"] == 1  # new_today unassigned only (missed are separate)
 
 
 def test_narrow_lead_select_breaks_missed_bucket_counts():

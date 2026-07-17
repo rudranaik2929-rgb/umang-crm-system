@@ -5757,12 +5757,24 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
     return updated
 
 LEAD_BUCKET_KEYS = [
-    "all", "new_today", "positive", "not_interested", "missed_leads",
+    "all", "new_today", "open_leads", "positive", "not_interested", "missed_leads",
     "registration", "visited", "booking", "follow_up", "ringing",
 ]
-# Mutually exclusive company-dashboard status boxes (each lead in at most one).
+# Full exclusive partition of Total Leads (`all`) — sum of these == lead_buckets["all"].
+DASHBOARD_PARTITION_BUCKETS = (
+    "open_leads",
+    "missed_leads",
+    "ringing",
+    "follow_up",
+    "positive",
+    "visited",
+    "registration",
+    "booking",
+    "not_interested",
+)
+# Legacy alias: workflow status pills that never overlap each other.
 DASHBOARD_EXCLUSIVE_STATUS_BUCKETS = ("not_interested", "missed_leads", "ringing", "follow_up")
-# Stage drill-downs overlap each other and positive — do NOT expect these to sum to Total Leads.
+# Kept for callers; these stage boxes are now exclusive via classify_company_dashboard_bucket.
 DASHBOARD_HIERARCHICAL_BUCKETS = ("positive", "registration", "visited", "booking")
 EMPLOYEE_STATUS_BUCKET_KEYS = (
     "hot", "visited", "not_interested", "low_budget", "booking_done", "ringing", "follow_up",
@@ -5899,49 +5911,72 @@ def dashboard_exclusive_status_counts(all_leads: List[Dict[str, Any]], today: st
     return {key: len(filter_lead_bucket(all_leads, key, today)) for key in DASHBOARD_EXCLUSIVE_STATUS_BUCKETS}
 
 
+def classify_company_dashboard_bucket(lead: Dict[str, Any]) -> Optional[str]:
+    """Exactly one partition box per lead counted in Total Leads.
+
+    Priority mirrors employee workflow boxes, then splits booking_done into
+    registration vs booking, and places untouched / unassigned leads in open_leads.
+    Returns None for broker / fake-meta rows that are excluded from Total.
+    """
+    if classify_lead_platform(lead.get("source")) == "meta" and not is_real_meta_lead(lead):
+        return None
+    if is_broker_pool_lead(lead) or classify_lead_platform(lead.get("source")) == "brokerage":
+        return None
+    if lead.get("status") == "negative":
+        return "not_interested"
+    if is_missed_lead(lead):
+        return "missed_leads"
+    metric = classify_employee_performance_metric(lead)
+    if metric == "ringing":
+        return "ringing"
+    if metric == "follow_up":
+        return "follow_up"
+    if metric == "visited":
+        return "visited"
+    if metric == "hot":
+        return "positive"
+    if metric == "booking_done":
+        if lead.get("stage") == "registration":
+            return "registration"
+        return "booking"
+    if metric in ("not_interested", "low_budget"):
+        return "not_interested"
+    # Unassigned, fresh assigned (<24h untouched), or other non-actioned pipeline rows.
+    return "open_leads"
+
+
+def dashboard_partition_counts(all_leads: List[Dict[str, Any]], today: Optional[str] = None) -> Dict[str, int]:
+    """Counts for the full exclusive partition of Total Leads."""
+    day = today or now_utc().date().isoformat()
+    return {key: len(filter_lead_bucket(all_leads, key, day)) for key in DASHBOARD_PARTITION_BUCKETS}
+
+
+def sum_dashboard_partition(counts: Dict[str, int]) -> int:
+    return sum(int(counts.get(key, 0) or 0) for key in DASHBOARD_PARTITION_BUCKETS)
+
+
 def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: str) -> List[Dict[str, Any]]:
     """Single source of truth for dashboard bucket lists + counts.
     Always deduped so the metric box number == the opened list length.
 
-    Exclusive status boxes (no overlap): not_interested, missed_leads, ringing, follow_up.
-    Ringing and Follow Up use the same classifier as employee KPI boxes.
-    Positive / Visited / Booking / Registration are stage drill-downs (hierarchical, not a partition of Total).
-    new_today is a date filter on unassigned leads — not part of the status partition.
+    Partition boxes (no overlap; sum == Total / all):
+      open_leads, missed_leads, ringing, follow_up, positive, visited,
+      registration, booking, not_interested.
+    new_today is a date subset of unassigned open leads — not part of the partition sum.
     missed_leads is computed (assigned 24h+ with no employee action) — no DB column.
     """
     if bucket_key == "new_today":
+        cleaned = clean_leads_for_platform_stats(all_leads)
         filtered = [
-            l for l in all_leads
+            l for l in cleaned
             if is_unassigned_new_lead(l) and (l.get("created_at") or "")[:10] == today
         ]
-    elif bucket_key == "not_interested":
-        filtered = [l for l in all_leads if l.get("status") == "negative"]
-    elif bucket_key == "missed_leads":
-        filtered = [l for l in all_leads if is_missed_lead(l)]
-    elif bucket_key == "positive":
-        filtered = [l for l in all_leads if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration", "closed"] and l.get("status") != "negative"]
-    elif bucket_key == "registration":
-        filtered = [l for l in all_leads if l.get("stage") == "registration"]
-    elif bucket_key == "visited":
-        filtered = [
-            l for l in all_leads
-            if l.get("stage") == "site_visit" and l.get("status") != "negative"
-        ]
-    elif bucket_key == "booking":
-        filtered = [l for l in all_leads if l.get("stage") in ["booking", "loan"] and l.get("status") != "negative"]
-    elif bucket_key == "follow_up":
-        # Exclusive primary bucket — never also counted as Ringing/Hot/Visited/Booking.
-        filtered = [
-            l for l in all_leads
-            if classify_employee_performance_metric(l) == "follow_up"
-        ]
-    elif bucket_key == "ringing":
-        filtered = [
-            l for l in all_leads
-            if classify_employee_performance_metric(l) == "ringing"
-        ]
+    elif bucket_key == "all":
+        filtered = clean_leads_for_platform_stats(all_leads)
+    elif bucket_key in DASHBOARD_PARTITION_BUCKETS:
+        cleaned = clean_leads_for_platform_stats(all_leads)
+        filtered = [l for l in cleaned if classify_company_dashboard_bucket(l) == bucket_key]
     else:
-        # Pipeline total — every lead row in Supabase (except broker pool / fake Meta tests).
         filtered = clean_leads_for_platform_stats(all_leads)
     filtered = dedupe_leads_by_external_id(filtered)
     filtered.sort(
@@ -5958,7 +5993,10 @@ def compute_lead_bucket_counts(
     """Single source of truth for dashboard box counts — same filter+dedupe as /leads/filtered."""
     leads = all_leads if all_leads is not None else fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
     day = today or now_utc().date().isoformat()
-    return {key: len(filter_lead_bucket(leads, key, day)) for key in LEAD_BUCKET_KEYS}
+    counts = {key: len(filter_lead_bucket(leads, key, day)) for key in LEAD_BUCKET_KEYS}
+    # Invariant helpers for API consumers / tests.
+    counts["partition_sum"] = sum_dashboard_partition(counts)
+    return counts
 
 
 @api_router.get("/leads/filtered")

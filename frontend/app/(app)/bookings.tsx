@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput, Platform } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput, Platform, useWindowDimensions } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { api, getSnapshot, setSnapshot, BOOKING_REQUEST_TIMEOUT_MS } from '../../src/lib/api';
@@ -16,6 +16,7 @@ import { BOOKING_TASKS, bookingMatchesTask, countBookingTasks, normalizeComplete
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { createPortal } from 'react-dom';
 import { DatePickerField, todayIsoDate, toIsoDateInput, formatDateLabel, isoDateToPayload } from '../../src/components/DatePickerField';
+import { useSidebarLayout } from '../../src/layout/SidebarLayoutContext';
 
 function formatBookingDateLabel(value?: string | null) {
   return formatDateLabel(value);
@@ -727,7 +728,7 @@ function CreateBookingModal({ visible, onClose, onCreated, leads, colors, initia
           No leads in queue yet. When telecaller marks Hot Lead, they appear here under New Booking.
         </Text>
       ) : (
-        <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 16 }} keyboardShouldPersistTaps="handled">
           <Text style={[styles.label, { color: colors.textMuted }]}>SELECT LEAD (SEARCH & PICK)</Text>
           <View style={[styles.searchRow, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
             <Ionicons name="search" size={16} color={colors.textMuted} />
@@ -848,7 +849,7 @@ function EditBookingModal({ visible, onClose, onSaved, booking, colors }: any) {
   return (
     <BookingFormModal visible={visible} onClose={onClose} colors={colors}>
       <Text style={[styles.cardTitle, { color: colors.text }]}>Edit Booking</Text>
-      <ScrollView contentContainerStyle={{ paddingBottom: 8 }} keyboardShouldPersistTaps="handled">
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 16 }} keyboardShouldPersistTaps="handled">
         <FormField label="PROPERTY NAME" testID="edit-booking-property" value={property} onChange={setProperty} colors={colors} />
         <DatePickerField
           label="BOOKING DATE *"
@@ -892,6 +893,20 @@ function BookingFormModal({
   colors: any;
   children: React.ReactNode;
 }) {
+  const { width: sidebarWidth } = useSidebarLayout();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const sheetDimensions = useMemo(() => {
+    const pad = 24;
+    const sidebarPad = Platform.OS === 'web' && windowWidth >= 960 ? Math.min(sidebarWidth, windowWidth * 0.35) : 0;
+    const availableW = Math.max(300, windowWidth - sidebarPad - pad * 2);
+    const w = Math.min(1040, availableW);
+    const h = Math.min(820, Math.max(420, windowHeight * 0.88));
+    if (Platform.OS === 'web') {
+      return { width: w, maxWidth: w, height: h, maxHeight: h };
+    }
+    return { width: '100%' as const, maxWidth: w, height: '90%' as const, maxHeight: '90%' as const };
+  }, [windowWidth, windowHeight, sidebarWidth]);
+
   if (!visible) return null;
 
   const body = (
@@ -899,55 +914,72 @@ function BookingFormModal({
       <Pressable
         style={[StyleSheet.absoluteFillObject, { zIndex: 0 }]}
         onPress={onClose}
+        accessibilityRole="button"
         accessibilityLabel="Close booking form"
       />
       <View
         style={[
           styles.modal,
+          sheetDimensions,
           {
             backgroundColor: colors.surface,
             borderColor: colors.border,
-            maxHeight: '90%',
             position: 'relative',
             zIndex: 2,
             elevation: 8,
-            width: '100%',
-            maxWidth: 560,
+            ...(Platform.OS === 'web' ? ({ pointerEvents: 'auto' } as any) : null),
           },
         ]}
+        {...(Platform.OS === 'web'
+          ? { onClick: (e: any) => e?.stopPropagation?.() } as any
+          : { onStartShouldSetResponder: () => true })}
       >
-        {children}
+        <View style={styles.modalHeader}>
+          <Pressable
+            onPress={onClose}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Close"
+            style={styles.modalCloseBtn}
+          >
+            <Ionicons name="close" size={22} color={colors.textMuted} />
+          </Pressable>
+        </View>
+        <View style={styles.modalBody}>
+          {children}
+        </View>
       </View>
     </View>
   );
 
+  const overlayStyle = Platform.OS === 'web'
+    ? ({
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
+        height: '100vh',
+        zIndex: 12000,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: 'rgba(15, 23, 42, 0.45)',
+      } as any)
+    : styles.nativeOverlay;
+
   if (Platform.OS === 'web' && typeof document !== 'undefined') {
     return createPortal(
-      <View
-        style={{
-          position: 'fixed',
-          top: 0,
-          left: 0,
-          right: 0,
-          bottom: 0,
-          width: '100vw',
-          height: '100vh',
-          zIndex: 12000,
-          backgroundColor: 'rgba(0,0,0,0.55)',
-          alignItems: 'center',
-          justifyContent: 'center',
-          padding: 16,
-        } as any}
-      >
-        {body}
-      </View>,
+      <View style={overlayStyle}>{body}</View>,
       document.body,
     );
   }
 
   return (
     <Modal visible transparent animationType="fade" onRequestClose={onClose}>
-      {body}
+      <View style={styles.nativeOverlay}>
+        {body}
+      </View>
     </Modal>
   );
 }
@@ -1057,8 +1089,44 @@ const styles = StyleSheet.create({
   fill: { height: '100%', borderRadius: 4 },
   actions: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 14 },
   act: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 10, height: 30, borderRadius: 6, borderWidth: 1 },
-  backdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
-  modal: { width: '92%', maxWidth: 480, padding: 20, borderRadius: 12, borderWidth: 1 },
+  backdrop: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    backgroundColor: 'transparent',
+  },
+  nativeOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+  },
+  modal: {
+    borderRadius: 16,
+    borderWidth: 1,
+    overflow: 'hidden',
+    flexDirection: 'column',
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    paddingTop: 12,
+    marginBottom: 4,
+  },
+  modalCloseBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalBody: {
+    flex: 1,
+    minHeight: 0,
+  },
   label: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2, marginBottom: 6 },
   leadOpt: { padding: 10, borderRadius: 8, borderWidth: 1 },
   searchRow: {

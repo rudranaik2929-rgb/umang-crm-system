@@ -142,6 +142,7 @@ export default function Dashboard() {
       cold,
       conversionScore,
       newToday: Number(bucketSource?.new_today ?? 0),
+      openLeads: Number(bucketSource?.open_leads ?? 0),
       positiveLeads: Number(bucketSource?.positive ?? 0),
       negativeLeads: Number(bucketSource?.not_interested ?? 0),
       missedLeads: Number(bucketSource?.missed_leads ?? 0),
@@ -153,6 +154,20 @@ export default function Dashboard() {
       confirmedBookings: Number(stats?.confirmed_bookings || 0),
       followUps: Number(bucketSource?.follow_up ?? 0),
       pendingFollowUps: Number(stats?.pending_follow_ups ?? 0),
+      partitionSum: Number(
+        bucketSource?.partition_sum
+        ?? (
+          Number(bucketSource?.open_leads ?? 0)
+          + Number(bucketSource?.missed_leads ?? 0)
+          + Number(bucketSource?.ringing ?? 0)
+          + Number(bucketSource?.follow_up ?? 0)
+          + Number(bucketSource?.positive ?? 0)
+          + Number(bucketSource?.visited ?? 0)
+          + Number(bucketSource?.registration ?? 0)
+          + Number(bucketSource?.booking ?? 0)
+          + Number(bucketSource?.not_interested ?? 0)
+        ),
+      ),
       loans: Number(stats?.loans || 0),
       disbursedLoans: Number(stats?.disbursed_loans || 0),
       employees: Number(stats?.employees || 0),
@@ -256,19 +271,20 @@ export default function Dashboard() {
             onPress={() => setLeadsBucket('all')}
             helper={
               stats?.housing_leads != null
-                ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · tap for full screen`
-                : 'Tap for full-screen list with filters'
+                ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · partition = ${model.partitionSum}`
+                : `Open+status boxes = ${model.partitionSum} (excl. New Today)`
             }
           />
-          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Unassigned today · tap for list" onPress={() => setLeadsBucket('new_today')} />
-          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Filter by employee & source" onPress={() => setLeadsBucket('positive')} />
-          <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="All ringing / call-back leads" onPress={() => setLeadsBucket('ringing')} />
-          <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Filter by employee & source" onPress={() => setLeadsBucket('not_interested')} />
-          <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · tap for list" onPress={() => setLeadsBucket('missed_leads')} />
-          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Filter by employee & source" onPress={() => setLeadsBucket('registration')} />
-          <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Site visit marked · filter by employee" onPress={() => setLeadsBucket('visited')} />
-          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Filter by employee & source" onPress={() => setLeadsBucket('booking')} />
-          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · filter by employee`} onPress={() => setLeadsBucket('follow_up')} />
+          <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Today's unassigned · subset of Open Leads" onPress={() => setLeadsBucket('new_today')} />
+          <MetricCard icon="mail-unread-outline" label="Open Leads" value={model.openLeads} accent="#6366F1" helper="Unassigned or fresh assigned · part of Total" onPress={() => setLeadsBucket('open_leads')} />
+          <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Hot / positive only · exclusive" onPress={() => setLeadsBucket('positive')} />
+          <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('ringing')} />
+          <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('not_interested')} />
+          <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · exclusive" onPress={() => setLeadsBucket('missed_leads')} />
+          <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('registration')} />
+          <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('visited')} />
+          <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking / loan / closed · exclusive" onPress={() => setLeadsBucket('booking')} />
+          <MetricCard icon="calendar-outline" label="Follow Ups" value={model.followUps} accent="#F97316" helper={`${model.pendingFollowUps} pending · exclusive`} onPress={() => setLeadsBucket('follow_up')} />
           {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
             const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
             return (
