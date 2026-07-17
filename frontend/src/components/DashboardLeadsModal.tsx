@@ -248,9 +248,24 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
       <View style={st.contentShell}>
       <View style={[st.header, { borderBottomColor: colors.border }]}>
         <View style={{ flex: 1 }}>
-          <Text style={[st.title, { color: colors.text }]}>{title}</Text>
+          <View style={st.titleRow}>
+            <Text style={[st.title, { color: colors.text }]} numberOfLines={1}>
+              {title}
+            </Text>
+            {!loading ? (
+              <View style={[st.countBadge, { backgroundColor: colors.primary + '18', borderColor: colors.primary + '40' }]}>
+                <Text style={[st.countBadgeText, { color: colors.primary }]}>
+                  {total.toLocaleString('en-IN')}
+                </Text>
+              </View>
+            ) : null}
+          </View>
           <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 4 }}>
-            {loading ? 'Loading…' : `${total} leads · ${subtitleParts}`}
+            {loading
+              ? 'Loading…'
+              : leads.length < total && total > 0
+                ? `Showing ${leads.length.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} leads · ${subtitleParts}`
+                : `${total.toLocaleString('en-IN')} lead${total === 1 ? '' : 's'} · ${subtitleParts}`}
           </Text>
         </View>
         <Pressable onPress={onClose} style={[st.closeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
@@ -506,7 +521,17 @@ const st = StyleSheet.create({
     paddingBottom: 14,
     borderBottomWidth: 1,
   },
-  title: { fontSize: 22, fontWeight: '800', letterSpacing: -0.4 },
+  titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, flexWrap: 'wrap' },
+  title: { fontSize: 22, fontWeight: '800', letterSpacing: -0.4, flexShrink: 1 },
+  countBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    borderWidth: 1,
+    minWidth: 36,
+    alignItems: 'center',
+  },
+  countBadgeText: { fontSize: 14, fontWeight: '800', letterSpacing: -0.2 },
   closeBtn: { width: 40, height: 40, borderRadius: 10, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   filtersPanel: {
     flexDirection: 'row',
