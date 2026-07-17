@@ -99,6 +99,20 @@ def test_inquiry_follow_up_status_does_not_collide_with_ringing():
     assert main.classify_inquiry_status(both) == "ringing"
 
 
+def test_inquiry_cold_and_follow_up_filters():
+    cold = _lead(stage="positive", priority="cold")
+    hot = _lead(stage="positive", priority="hot")
+    fu = _lead(follow_up_at="2026-06-28T10:00:00+00:00")
+    assert main.classify_inquiry_status(cold) == "cold"
+    assert main.classify_inquiry_status(hot) == "hot"
+    assert main.lead_matches_inquiry_filter(cold, "cold") is True
+    assert main.lead_matches_inquiry_filter(hot, "cold") is False
+    assert main.lead_matches_inquiry_filter(fu, "follow_up") is True
+    assert main.lead_matches_inquiry_filter(cold, "follow_up,cold") is True
+    assert "follow_up" in main.ASSIGN_INQUIRY_STATUSES
+    assert "cold" in main.ASSIGN_INQUIRY_STATUSES
+
+
 def test_dashboard_visited_bucket():
     rows = [
         _lead(lead_id="v1", stage="site_visit", status="active"),

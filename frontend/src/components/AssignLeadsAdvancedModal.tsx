@@ -34,8 +34,10 @@ const INQUIRY_OPTIONS = [
   { key: 'visited', label: 'Visited' },
   { key: 'booked', label: 'Booked' },
   { key: 'ringing', label: 'Ringing' },
+  { key: 'follow_up', label: 'Follow Up' },
   { key: 'not_interested', label: 'Not Interested' },
   { key: 'hot', label: 'Hot' },
+  { key: 'cold', label: 'Cold Lead' },
   { key: 'low_budget', label: 'Low Budget' },
   { key: 'other_location', label: 'Other Location' },
   { key: 'already_purchased', label: 'Already Purchased' },
@@ -61,6 +63,7 @@ const STATUS_ACTIONS = [
   { key: 'not_searching', label: 'Not Searching' },
   { key: 'ringing', label: 'Ringing' },
   { key: 'hot', label: 'Hot' },
+  { key: 'cold', label: 'Cold Lead' },
   { key: 'new', label: 'Reset to New' },
 ];
 

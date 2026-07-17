@@ -241,9 +241,17 @@ def test_cold_lead_beats_follow_up_and_is_not_positive():
     assert {l["lead_id"] for l in cold} == {"cold_fu"}
     assert {l["lead_id"] for l in positive} == {"hot"}
     assert {l["lead_id"] for l in follow} == {"plain_fu"}
-    assert main.inquiry_preset_to_patch(
+    cold_patch = main.inquiry_preset_to_patch(
         {"stage": "positive", "status": "active", "priority": "cold"}, "cold"
-    ).get("priority") == "cold"
+    )
+    assert cold_patch.get("priority") == "cold"
+    assert cold_patch.get("follow_up_at") is None
+    fu_patch = main.inquiry_preset_to_patch({"status": "active"}, "follow_up")
+    assert fu_patch.get("priority") is None
+    assert fu_patch.get("call_status") is None
+    assert main.classify_inquiry_status(leads[0]) == "cold"
+    assert main.classify_inquiry_status(leads[2]) == "follow_up"
+
 
 
 def test_positive_bucket_excludes_visited_and_booking():

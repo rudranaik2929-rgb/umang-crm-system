@@ -918,7 +918,7 @@ def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
 
     Priority: negative → booking → hot → cold → visited → ringing → follow_up → positive/closed → in-progress.
     Progressive pipeline stages beat leftover call_status / follow_up_at.
-    Cold (priority=cold) beats follow_up_at so Cold Lead → Follow Up stays in Cold, not Follow Up.
+    Cold Lead (priority=cold) is separate from Follow Up; cold alone lands in Cold box.
     Missed leads are excluded (they live in New Leads, not Total).
     """
     if is_missed_lead(lead):
@@ -1611,7 +1611,7 @@ class BulkLeadDeleteRequest(BaseModel):
 
 
 ASSIGN_INQUIRY_STATUSES = [
-    "all", "active", "new", "hot", "cold", "visited", "booked", "ringing",
+    "all", "active", "new", "hot", "cold", "follow_up", "visited", "booked", "ringing",
     "not_interested", "low_budget", "other_location", "already_purchased", "not_searching", "unassigned",
 ]
 ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
@@ -1628,6 +1628,7 @@ INQUIRY_ACTION_PRESETS: Dict[str, Dict[str, Any]] = {
     "ringing": {"status": "active", "call_status": "ringing"},
     "hot": {"status": "active", "stage": "positive", "priority": "hot"},
     "cold": {"status": "active", "stage": "positive", "priority": "cold"},
+    "follow_up": {"status": "active"},
     "low_budget": {"status": "negative", "priority": "low_budget"},
     "other_location": {"status": "negative", "priority": "other_location"},
     "already_purchased": {"status": "negative", "priority": "already_purchased"},
@@ -1998,10 +1999,17 @@ def inquiry_preset_to_patch(preset: Dict[str, Any], inquiry_action: Optional[str
         patch.setdefault("priority", HOT_PRIORITY)
         patch["call_status"] = None
     elif action == "cold":
+        # Cold Lead only — not shared with Follow Up.
         patch.setdefault("status", "active")
         patch.setdefault("stage", "positive")
         patch.setdefault("priority", COLD_PRIORITY)
         patch["call_status"] = None
+        patch["follow_up_at"] = None
+    elif action == "follow_up":
+        # Follow Up box — clear hot/cold so exclusive Follow Up wins.
+        patch.setdefault("status", "active")
+        patch["call_status"] = None
+        patch["priority"] = None
     elif action == "not_interested":
         patch.setdefault("status", "negative")
         patch["call_status"] = None
@@ -6676,9 +6684,17 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     if p.stage in ("site_visit", "positive", "booking", "loan", "registration") and p.stage and p.stage != old_lead.get("stage"):
         data["call_status"] = None
 
+    # Cold Lead only — not shared with Follow Up.
+    if p.priority == COLD_PRIORITY:
+        data["call_status"] = None
+        data["follow_up_at"] = None
+        data.setdefault("stage", "positive")
+        data.setdefault("status", "active")
+
     # Direct follow-up schedule via PATCH — leave Ringing so primary box is Follow Up.
     if p.follow_up_at is not None and data.get("follow_up_at"):
         data["call_status"] = None
+        data["priority"] = None
 
     if not _can_manage_all_leads(cu):
         workflow_touched = any(
@@ -7109,8 +7125,9 @@ async def create_lead_follow_up(lead_id: str, p: LeadFollowUpCreate, cu: User = 
 
     lead_update = {
         "follow_up_at": follow_up_at.isoformat(),
-        # Scheduling a follow-up is the primary status — leave Ringing.
+        # Scheduling a follow-up is the primary status — leave Ringing / Cold / Hot.
         "call_status": None,
+        "priority": None,
         "updated_at": now_utc().isoformat(),
         "last_employee_action_at": now_utc().isoformat(),
     }

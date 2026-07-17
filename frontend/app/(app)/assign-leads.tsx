@@ -62,6 +62,9 @@ function statusActionPatch(action: string | null | undefined): Record<string, an
   if (key === 'hot') {
     return { status: 'active', stage: 'positive', priority: 'hot' };
   }
+  if (key === 'cold') {
+    return { status: 'active', stage: 'positive', priority: 'cold', call_status: null, follow_up_at: null };
+  }
   if (key === 'not_interested') {
     return { status: 'negative', call_status: null, follow_up_at: null };
   }
@@ -84,19 +87,31 @@ function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilter
   if (assignee && assignee !== 'all') {
     return String(lead?.assigned_to || '') === assignee;
   }
-  const inquiry = (filters.inquiry_status || 'all').trim().toLowerCase();
-  if (!inquiry || inquiry === 'all') return true;
-  if (inquiry === 'unassigned') return !String(lead?.assigned_to || '').trim();
-  if (inquiry === 'not_interested') {
-    return lead?.status === 'negative'
-      && !['low_budget', 'other_location', 'already_purchased', 'not_searching'].includes(String(lead?.priority || ''));
-  }
-  if (inquiry === 'ringing') return Boolean(String(lead?.call_status || '').trim());
-  if (inquiry === 'visited') return lead?.stage === 'site_visit';
-  if (inquiry === 'booked') return ['booking', 'loan', 'registration'].includes(lead?.stage);
-  if (inquiry === 'hot') return String(lead?.priority || '') === 'hot';
-  if (inquiry === 'new') return !String(lead?.assigned_to || '').trim() && lead?.stage === 'new';
-  return true;
+  const inquiryRaw = (filters.inquiry_status || 'all').trim().toLowerCase();
+  if (!inquiryRaw || inquiryRaw === 'all') return true;
+  const keys = inquiryRaw.split(',').map((s) => s.trim()).filter((s) => s && s !== 'all');
+  if (!keys.length) return true;
+  return keys.some((inquiry) => {
+    if (inquiry === 'unassigned') return !String(lead?.assigned_to || '').trim();
+    if (inquiry === 'not_interested') {
+      return lead?.status === 'negative'
+        && !['low_budget', 'other_location', 'already_purchased', 'not_searching'].includes(String(lead?.priority || ''));
+    }
+    if (inquiry === 'ringing') return Boolean(String(lead?.call_status || '').trim());
+    if (inquiry === 'visited') return lead?.stage === 'site_visit';
+    if (inquiry === 'booked') return ['booking', 'loan', 'registration'].includes(lead?.stage);
+    if (inquiry === 'hot') return String(lead?.priority || '') === 'hot';
+    if (inquiry === 'cold') return String(lead?.priority || '') === 'cold';
+    if (inquiry === 'follow_up') {
+      return Boolean(lead?.follow_up_at)
+        && !String(lead?.call_status || '').trim()
+        && !['hot', 'cold'].includes(String(lead?.priority || '').toLowerCase());
+    }
+    if (inquiry === 'new') return !String(lead?.assigned_to || '').trim() && lead?.stage === 'new';
+    if (inquiry === 'active') return lead?.status !== 'negative' && lead?.stage !== 'closed';
+    if (lead?.inquiry_status) return String(lead.inquiry_status).toLowerCase() === inquiry;
+    return true;
+  });
 }
 
 function sleep(ms: number) {
@@ -136,8 +151,10 @@ const INQUIRY_COLORS: Record<string, string> = {
   visited: '#14B8A6',
   booked: '#22C55E',
   ringing: '#F97316',
+  follow_up: '#F59E0B',
   not_interested: '#E11D48',
   hot: '#EF4444',
+  cold: '#64748B',
   low_budget: '#A855F7',
 };
 
