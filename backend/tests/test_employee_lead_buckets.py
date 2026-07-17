@@ -199,3 +199,38 @@ def test_employee_status_boxes_sum_to_total():
     assert stats["emp_new_leads"] == 2  # untouched + missed (both no workflow action)
     assert stats["assigned_total"] == 10  # all actioned except missed + untouched
     assert main.sum_employee_status_buckets(stats) == stats["assigned_total"]
+
+
+def test_lead_bucket_counts_match_filter_length():
+    today = "2026-07-14"
+    leads = [
+        _lead("missed1", 30),
+        _lead("missed2", 48),
+        _lead("ringing", 40, call_status="ringing"),
+        _lead("fu", 10, follow_up_at=f"{today}T09:00:00+00:00"),
+        _lead("neg", 10, status="negative"),
+        {"lead_id": "new_today", "status": "active", "stage": "new", "assigned_to": None,
+         "created_at": f"{today}T08:00:00+00:00"},
+        {"lead_id": "positive", "status": "active", "stage": "positive", "assigned_to": "emp1",
+         "created_at": "2026-07-01T08:00:00+00:00"},
+    ]
+    counts = main.compute_lead_bucket_counts(leads, today)
+    for key in main.LEAD_BUCKET_KEYS:
+        filtered = main.filter_lead_bucket(leads, key, today)
+        assert counts[key] == len(filtered), f"bucket {key}: count {counts[key]} != list {len(filtered)}"
+
+
+def test_narrow_lead_select_breaks_missed_bucket_counts():
+    """Regression: dashboard stats used a trimmed select and under-counted missed leads."""
+    today = "2026-07-14"
+    leads = [
+        _lead("missed1", 30),
+        _lead("missed2", 48),
+    ]
+    narrow_select = (
+        "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,priority,call_status,"
+        "follow_up_at,assigned_to,created_at"
+    )
+    projected = [main._project_lead_fields(l, narrow_select) for l in leads]
+    assert len(main.filter_lead_bucket(projected, "missed_leads", today)) == 0
+    assert main.compute_lead_bucket_counts(leads, today)["missed_leads"] == 2

@@ -127,8 +127,8 @@ export default function Dashboard() {
   const model = useMemo(() => {
     const sd = stats?.stage_distribution || {};
     const activeLeads = leads.filter((l) => l.status !== 'negative');
-    const bucketSource = buckets && Object.keys(buckets).length ? buckets : (stats?.lead_buckets || {});
-    const totalLeads = Number(stats?.total_leads ?? bucketSource?.all ?? 0);
+    const bucketSource = stats?.lead_buckets || buckets || {};
+    const totalLeads = Number(bucketSource?.all ?? stats?.total_leads ?? 0);
 
     const hot = activeLeads.filter((l) => HOT_STAGES.includes(l.stage)).length || HOT_STAGES.reduce((sum, stage) => sum + Number(sd[stage] || 0), 0);
     const cold = activeLeads.filter((l) => pipelineStageMatch(l, 'new')).length
@@ -142,16 +142,16 @@ export default function Dashboard() {
       cold,
       conversionScore,
       newToday: Number(bucketSource?.new_today ?? 0),
-      positiveLeads: Number(bucketSource?.positive ?? stats?.positive_leads ?? 0),
-      negativeLeads: Number(bucketSource?.not_interested ?? stats?.negative_leads ?? 0),
+      positiveLeads: Number(bucketSource?.positive ?? 0),
+      negativeLeads: Number(bucketSource?.not_interested ?? 0),
       missedLeads: Number(bucketSource?.missed_leads ?? 0),
-      registrationLeads: Number(bucketSource?.registration ?? stats?.registration_leads ?? 0),
-      visitedLeads: Number(bucketSource?.visited ?? stats?.visited_leads ?? 0),
+      registrationLeads: Number(bucketSource?.registration ?? 0),
+      visitedLeads: Number(bucketSource?.visited ?? 0),
       bookingLeads: Number(bucketSource?.booking ?? 0),
       ringingLeads: Number(bucketSource?.ringing ?? 0),
       bookings: Number(stats?.bookings || 0),
       confirmedBookings: Number(stats?.confirmed_bookings || 0),
-      followUps: Number(bucketSource?.follow_up ?? stats?.follow_ups ?? 0),
+      followUps: Number(bucketSource?.follow_up ?? 0),
       pendingFollowUps: Number(stats?.pending_follow_ups ?? 0),
       loans: Number(stats?.loans || 0),
       disbursedLoans: Number(stats?.disbursed_loans || 0),

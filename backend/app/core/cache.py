@@ -26,6 +26,11 @@ LEADS_CANONICAL_SELECT = (
     "follow_up_at,created_at,updated_at,starred,brokerage_amount"
 )
 
+# Dashboard metric boxes + /leads/filtered drill-down MUST use the same lead shape.
+# Narrow selects break is_missed_lead (needs assigned_at/updated_at/last_employee_action_at)
+# and classify_employee_performance_metric (ringing/follow_up), so counts diverge from lists.
+DASHBOARD_BUCKET_LEAD_SELECT = LEADS_CANONICAL_SELECT
+
 EMPLOYEE_WORKFLOW_LEAD_SELECT = (
     "lead_id,name,phone,email,source,assigned_to,status,stage,priority,call_status,"
     "follow_up_at,assigned_at,last_employee_action_at,created_at,updated_at,lead_type,"
@@ -49,5 +54,6 @@ __all__ = [
     "_leads_cache_lock",
     "_leads_cache_loading",
     "LEADS_CANONICAL_SELECT",
+    "DASHBOARD_BUCKET_LEAD_SELECT",
     "EMPLOYEE_WORKFLOW_LEAD_SELECT",
 ]

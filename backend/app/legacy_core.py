@@ -5951,6 +5951,16 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
     return filtered
 
 
+def compute_lead_bucket_counts(
+    all_leads: Optional[List[Dict[str, Any]]] = None,
+    today: Optional[str] = None,
+) -> Dict[str, int]:
+    """Single source of truth for dashboard box counts — same filter+dedupe as /leads/filtered."""
+    leads = all_leads if all_leads is not None else fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
+    day = today or now_utc().date().isoformat()
+    return {key: len(filter_lead_bucket(leads, key, day)) for key in LEAD_BUCKET_KEYS}
+
+
 @api_router.get("/leads/filtered")
 async def list_leads_filtered(
     bucket: str = "all",
@@ -5974,11 +5984,7 @@ async def list_leads_filtered(
 
     limit = min(max(limit, 1), 500)
     today = now_utc().date().isoformat()
-    select = (
-        "lead_id,name,phone,email,source,stage,status,priority,call_status,"
-        "budget,location,property_type,assigned_to,assigned_at,follow_up_at,created_at,updated_at"
-    )
-    all_leads = fetch_all_leads_merged(select)
+    all_leads = fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
     employees = sb_select("employees", {
         "select": "employee_id,name,email,role,department,active,user_id",
         "active": "eq.true",
@@ -6055,11 +6061,7 @@ async def workspace_leads(
 async def stats_lead_buckets(cu: User = Depends(get_current_user)):
     """Counts for every dashboard metric box, computed with the EXACT same
     filter+dedupe as /leads/filtered so each box number matches its opened list."""
-    today = now_utc().date().isoformat()
-    all_leads = fetch_all_leads_merged(
-        "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,follow_up_at,created_at"
-    )
-    return {key: len(filter_lead_bucket(all_leads, key, today)) for key in LEAD_BUCKET_KEYS}
+    return compute_lead_bucket_counts()
 
 
 @api_router.get("/leads/assign-queue")
@@ -8194,10 +8196,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
         "employees": ("employees", {"select": "employee_id"}),
         "campaigns": ("campaigns", {"select": "campaign_id"}),
     })
-    leads = fetch_all_leads_merged(
-        "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,priority,call_status,"
-        "follow_up_at,assigned_to,created_at"
-    )
+    leads = fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
     bookings = fetched["bookings"]
     visits = fetched["visits"]
     loans = fetched["loans"]
@@ -8234,7 +8233,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     campaigns = fetched["campaigns"]
     rev = sum(booking_brokerage_amount(b) for b in bookings)
     today = now_utc().date().isoformat()
-    lead_buckets = {key: len(filter_lead_bucket(leads, key, today)) for key in LEAD_BUCKET_KEYS}
+    lead_buckets = compute_lead_bucket_counts(leads, today)
     follow_up_total = lead_buckets.get("follow_up", 0)
     booking_task_buckets = compute_booking_task_counts(bookings)
     pending_follow_up_total = sum(
@@ -8243,7 +8242,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     )
 
     return {
-        "total_leads": platform_stats["total"],
+        "total_leads": lead_buckets.get("all", platform_stats["total"]),
         "broker_pool_leads": len(broker_pool),
         "housing_leads": housing_count,
         "meta_leads": meta_count,
