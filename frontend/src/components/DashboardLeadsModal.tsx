@@ -34,6 +34,9 @@ const SOURCE_OPTIONS = [
   { key: 'other', label: platformLabel('other'), color: '#64748B' },
 ];
 
+/** Matches backend /leads/filtered max page size. */
+const PAGE_SIZE = 500;
+
 type Props = {
   visible: boolean;
   bucket: string;
@@ -119,6 +122,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
   const isWide = windowWidth >= 768;
   const [leads, setLeads] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
   const [loading, setLoading] = useState(false);
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [employees, setEmployees] = useState<any[]>(employeesProp || []);
@@ -140,8 +144,14 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
       setRangeFrom('');
       setRangeTo('');
       setMonthValue(currentMonthKey());
+      setPage(0);
     }
   }, [visible, bucket]);
+
+  // Reset to first page when filters/sort change (not when page itself changes).
+  useEffect(() => {
+    setPage(0);
+  }, [assignedTo, sourceFilter, datePreset, sortOrder, rangeFrom, rangeTo, monthValue]);
 
   useEffect(() => {
     if (employeesProp?.length) setEmployees(employeesProp);
@@ -173,7 +183,13 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     const reqId = ++loadRef.current;
     setLoading(true);
     try {
-      const params: Record<string, string> = { bucket, limit: '500', sort: sortOrder };
+      const offset = page * PAGE_SIZE;
+      const params: Record<string, string> = {
+        bucket,
+        limit: String(PAGE_SIZE),
+        offset: String(offset),
+        sort: sortOrder,
+      };
       if (assignedTo && assignedTo !== 'all') params.assigned_to = assignedTo;
       if (sourceFilter && sourceFilter !== 'all') params.source = sourceFilter;
       if (datePreset === 'this_month') {
@@ -200,9 +216,16 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
     } finally {
       if (reqId === loadRef.current) setLoading(false);
     }
-  }, [visible, bucket, assignedTo, sourceFilter, datePreset, sortOrder, rangeFrom, rangeTo, monthValue]);
+  }, [visible, bucket, page, assignedTo, sourceFilter, datePreset, sortOrder, rangeFrom, rangeTo, monthValue]);
 
   useEffect(() => { load(); }, [load]);
+
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageOffset = page * PAGE_SIZE;
+  const rangeStart = total === 0 ? 0 : pageOffset + 1;
+  const rangeEnd = pageOffset + leads.length;
+  const canPrev = page > 0;
+  const canNext = pageOffset + leads.length < total;
 
   const dateSummary = (() => {
     if (datePreset === 'all') return 'All dates';
@@ -263,9 +286,9 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
           <Text style={{ color: colors.textMuted, fontSize: 13, marginTop: 4 }}>
             {loading
               ? 'Loading…'
-              : leads.length < total && total > 0
-                ? `Showing ${leads.length.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} leads · ${subtitleParts}`
-                : `${total.toLocaleString('en-IN')} lead${total === 1 ? '' : 's'} · ${subtitleParts}`}
+              : total > 0
+                ? `${rangeStart.toLocaleString('en-IN')}–${rangeEnd.toLocaleString('en-IN')} of ${total.toLocaleString('en-IN')} leads · ${subtitleParts}`
+                : `0 leads · ${subtitleParts}`}
           </Text>
         </View>
         <Pressable onPress={onClose} style={[st.closeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
@@ -417,7 +440,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
             ) : null}
             {leads.map((l, index) => {
               const budget = formatBudgetStringLakhs(l.budget);
-              const serial = index + 1;
+              const serial = pageOffset + index + 1;
               if (isWide) {
                 return (
                   <Pressable
@@ -481,6 +504,44 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
             })}
           </ScrollView>
         )}
+        {total > PAGE_SIZE ? (
+          <View
+            style={[st.paginationBar, { borderTopColor: colors.border, backgroundColor: colors.surface }]}
+            testID="dashboard-leads-pagination"
+          >
+            <Pressable
+              testID="dashboard-leads-prev"
+              onPress={() => canPrev && !loading && setPage((p) => Math.max(0, p - 1))}
+              disabled={!canPrev || loading}
+              style={[st.pageBtn, {
+                borderColor: colors.border,
+                backgroundColor: colors.surfaceAlt,
+                opacity: canPrev && !loading ? 1 : 0.4,
+              }]}
+              accessibilityRole="button"
+              accessibilityLabel="Previous page"
+            >
+              <Ionicons name="chevron-back" size={20} color={colors.text} />
+            </Pressable>
+            <Text style={{ color: colors.textSecondary, fontSize: 13, fontWeight: '600' }}>
+              Page {(page + 1).toLocaleString('en-IN')} of {totalPages.toLocaleString('en-IN')}
+            </Text>
+            <Pressable
+              testID="dashboard-leads-next"
+              onPress={() => canNext && !loading && setPage((p) => p + 1)}
+              disabled={!canNext || loading}
+              style={[st.pageBtn, {
+                borderColor: colors.border,
+                backgroundColor: colors.surfaceAlt,
+                opacity: canNext && !loading ? 1 : 0.4,
+              }]}
+              accessibilityRole="button"
+              accessibilityLabel="Next page"
+            >
+              <Ionicons name="chevron-forward" size={20} color={colors.text} />
+            </Pressable>
+          </View>
+        ) : null}
       </View>
       </View>
 
@@ -563,6 +624,24 @@ const st = StyleSheet.create({
   centerBox: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 40 },
   list: { flex: 1 },
   listContent: { paddingVertical: 12, gap: 8 },
+  paginationBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+    borderTopWidth: 1,
+    marginTop: 4,
+  },
+  pageBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 10,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   row: { flexDirection: 'row', padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 8, alignItems: 'center', gap: 10 },
   tableHeader: {
     flexDirection: 'row',

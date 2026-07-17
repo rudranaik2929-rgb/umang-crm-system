@@ -6003,6 +6003,7 @@ def compute_lead_bucket_counts(
 async def list_leads_filtered(
     bucket: str = "all",
     limit: int = 500,
+    offset: int = 0,
     assigned_to: Optional[str] = None,
     source: str = "all",
     date_from: Optional[str] = None,
@@ -6011,7 +6012,11 @@ async def list_leads_filtered(
     sort: str = "newest",
     cu: User = Depends(get_current_user),
 ):
-    """Dashboard drill-down lists with optional employee + source filters."""
+    """Dashboard drill-down lists with optional employee + source filters.
+
+    Pagination: ``limit`` (max 500) + ``offset``. Bucket classification is unchanged;
+    only the returned page slice moves.
+    """
     bucket_key = (bucket or "all").strip().lower()
     if bucket_key not in set(LEAD_BUCKET_KEYS):
         raise HTTPException(400, detail=f"bucket must be one of: {', '.join(LEAD_BUCKET_KEYS)}")
@@ -6021,6 +6026,7 @@ async def list_leads_filtered(
         raise HTTPException(400, detail=f"source must be one of: {', '.join(DASHBOARD_SOURCE_FILTERS)}")
 
     limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
     today = now_utc().date().isoformat()
     all_leads = fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
     employees = sb_select("employees", {
@@ -6041,12 +6047,16 @@ async def list_leads_filtered(
                 filtered = [l for l in filtered if lead_assigned_to_employee(l, emp)]
             else:
                 filtered = [l for l in filtered if l.get("assigned_to") == emp_id]
-    page = enrich_leads_with_employee_names(filtered[:limit], employees)
+    total_filtered = len(filtered)
+    page = enrich_leads_with_employee_names(filtered[offset:offset + limit], employees)
     return {
         "bucket": bucket_key,
-        "total": len(filtered),
+        "total": total_filtered,
         "leads": page,
         "employees": employees,
+        "offset": offset,
+        "limit": limit,
+        "has_more": (offset + len(page)) < total_filtered,
         "filters": {
             "assigned_to": assigned_to or "all",
             "source": source or "all",
