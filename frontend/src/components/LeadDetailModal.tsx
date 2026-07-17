@@ -82,13 +82,21 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     notes: string;
   }) => {
     if (!leadId || !followUpPayload) return;
-    setBusy(followUpAction);
+    const action = followUpAction;
+    setBusy(action);
     setActionError(null);
     try {
       await api.patch(`/leads/${leadId}`, followUpPayload);
       await api.post(`/leads/${leadId}/follow-up`, form);
       setFollowUpOpen(false);
-      goFollowUps();
+      setActiveCategory(null);
+      if (action === 'cold') {
+        setActionMessage('Marked as Cold Lead with follow-up. Visible in Cold Leads on the dashboard.');
+        onChanged?.();
+        await load(true);
+      } else {
+        goFollowUps();
+      }
     } catch (e: any) {
       const detail = e?.response?.data?.detail;
       setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not schedule follow-up. Please try again.');
@@ -1026,17 +1034,17 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                         <View style={styles.subGrid}>
                           <SubActionBtn 
                             label="Cold Lead → Follow Up" 
-                            sub="Schedule date, time, reason and notes"
+                            sub="Schedule follow-up · shows in Cold Leads box on dashboard"
                             onPress={() => openFollowUpForm({ stage: 'positive', status: 'active', priority: 'cold' }, 'cold')}
                             busy={busy === 'cold'}
-                            color={colors.positive}
+                            color="#64748B"
                           />
                           <SubActionBtn 
                             label="Hot Lead 🔥" 
-                            sub="Shows in Booking & Loan department — New Booking / New Application"
+                            sub="Shows in Positive Leads · Booking & Loan New Booking / Application"
                             onPress={async () => {
                               await updateLead({ stage: 'positive', status: 'active', priority: 'hot' }, 'hot');
-                              setActionMessage('Marked as Hot. Lead is now visible in Booking and Loan departments (New Booking / New Application).');
+                              setActionMessage('Marked as Hot. Visible in Positive Leads and Booking / Loan queues.');
                               setActiveCategory(null);
                             }}
                             busy={busy === 'hot'}

@@ -180,7 +180,7 @@ def test_dashboard_exclusive_buckets_sum_lte_total():
 
 
 def test_dashboard_partition_sums_to_total():
-    """Open + Missed + Ringing + Follow Up + Positive + Visited + Registration + Booking + NI == Total."""
+    """Open + Missed + Ringing + Follow Up + Positive + Cold + Visited + Registration + Booking + NI == Total."""
     today = "2026-07-14"
     leads = [
         _lead("missed1", 30),
@@ -193,6 +193,7 @@ def test_dashboard_partition_sums_to_total():
         {"lead_id": "older_unassigned", "status": "active", "stage": "new", "assigned_to": None,
          "created_at": "2026-07-01T08:00:00+00:00"},
         _lead("hot", 5, stage="positive", priority="hot"),
+        _lead("cold", 5, stage="positive", priority="cold", follow_up_at=f"{today}T10:00:00+00:00"),
         _lead("visited", 10, stage="site_visit"),
         _lead("reg", 10, stage="registration"),
         _lead("booking", 10, stage="booking"),
@@ -200,13 +201,14 @@ def test_dashboard_partition_sums_to_total():
         _lead("closed", 10, stage="closed"),
     ]
     counts = main.compute_lead_bucket_counts(leads, today)
-    assert counts["all"] == 13
+    assert counts["all"] == 14
     assert counts["open_leads"] == 3  # fresh + unassigned + older_unassigned
     assert counts["missed_leads"] == 1
     assert counts["ringing"] == 1
     assert counts["follow_up"] == 1
     assert counts["not_interested"] == 1
-    assert counts["positive"] == 1  # hot only — not visited/booking/reg
+    assert counts["positive"] == 1  # hot only — not cold/visited/booking/reg
+    assert counts["cold_leads"] == 1  # cold beats follow_up_at
     assert counts["visited"] == 1
     assert counts["registration"] == 1
     assert counts["booking"] == 3  # booking + loan + closed
@@ -215,6 +217,26 @@ def test_dashboard_partition_sums_to_total():
     # New Today is a subset of open leads, not an extra partition member.
     assert counts["new_today"] == 1
     assert counts["new_today"] <= counts["open_leads"]
+
+
+def test_cold_lead_beats_follow_up_and_is_not_positive():
+    today = "2026-07-14"
+    leads = [
+        _lead("cold_fu", 5, stage="positive", priority="cold", follow_up_at=f"{today}T10:00:00+00:00"),
+        _lead("hot", 5, stage="positive", priority="hot"),
+        _lead("plain_fu", 5, follow_up_at=f"{today}T09:00:00+00:00"),
+    ]
+    assert main.classify_employee_performance_metric(leads[0]) == "cold"
+    assert main.classify_company_dashboard_bucket(leads[0]) == "cold_leads"
+    cold = main.filter_lead_bucket(leads, "cold_leads", today)
+    positive = main.filter_lead_bucket(leads, "positive", today)
+    follow = main.filter_lead_bucket(leads, "follow_up", today)
+    assert {l["lead_id"] for l in cold} == {"cold_fu"}
+    assert {l["lead_id"] for l in positive} == {"hot"}
+    assert {l["lead_id"] for l in follow} == {"plain_fu"}
+    assert main.inquiry_preset_to_patch(
+        {"stage": "positive", "status": "active", "priority": "cold"}, "cold"
+    ).get("priority") == "cold"
 
 
 def test_positive_bucket_excludes_visited_and_booking():

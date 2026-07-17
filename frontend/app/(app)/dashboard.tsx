@@ -139,6 +139,7 @@ export default function Dashboard() {
       newToday: Number(bucketSource?.new_today ?? 0),
       openLeads: Number(bucketSource?.open_leads ?? 0),
       positiveLeads: Number(bucketSource?.positive ?? 0),
+      coldLeads: Number(bucketSource?.cold_leads ?? 0),
       negativeLeads: Number(bucketSource?.not_interested ?? 0),
       missedLeads: Number(bucketSource?.missed_leads ?? 0),
       registrationLeads: Number(bucketSource?.registration ?? 0),
@@ -157,6 +158,7 @@ export default function Dashboard() {
           + Number(bucketSource?.ringing ?? 0)
           + Number(bucketSource?.follow_up ?? 0)
           + Number(bucketSource?.positive ?? 0)
+          + Number(bucketSource?.cold_leads ?? 0)
           + Number(bucketSource?.visited ?? 0)
           + Number(bucketSource?.registration ?? 0)
           + Number(bucketSource?.booking ?? 0)
@@ -276,6 +278,7 @@ export default function Dashboard() {
             <MetricCard icon="mail-unread-outline" label="Open Leads" value={model.openLeads} accent="#6366F1" helper="Unassigned or fresh assigned · part of Total" onPress={() => setLeadsBucket('open_leads')} />
             <MetricCard icon="alert-circle-outline" label="Missed Leads" value={model.missedLeads} accent={colors.negative} helper="Assigned 24h+ with no action · exclusive" onPress={() => setLeadsBucket('missed_leads')} />
             <MetricCard icon="trending-up-outline" label="Positive Leads" value={model.positiveLeads} accent={colors.positive} helper="Hot / positive only · exclusive" onPress={() => setLeadsBucket('positive')} />
+            <MetricCard icon="snow-outline" label="Cold Leads" value={model.coldLeads} accent="#64748B" helper="Positive → Cold Lead · exclusive" onPress={() => setLeadsBucket('cold_leads')} />
             <MetricCard icon="call-outline" label="Ringing" value={model.ringingLeads} accent="#F97316" helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('ringing')} />
             <MetricCard icon="remove-circle-outline" label="Not Interested" value={model.negativeLeads} accent={colors.negative} helper="Exclusive status · part of Total" onPress={() => setLeadsBucket('not_interested')} />
             <MetricCard icon="location-outline" label="Visited" value={model.visitedLeads} accent="#14B8A6" helper="Exclusive stage · part of Total" onPress={() => setLeadsBucket('visited')} />

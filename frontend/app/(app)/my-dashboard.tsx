@@ -30,9 +30,9 @@ const ROLE_ACCENT: Record<string, string> = {
 };
 
 const ROLE_HIGHLIGHT: Record<string, string[]> = {
-  telecaller: ['missed_leads', 'hot', 'today_follow_ups', 'follow_ups', 'ringing', 'today_activity', 'not_interested'],
-  site_visit: ['missed_leads', 'visited', 'hot', 'follow_ups', 'today_activity'],
-  sales_executive: ['missed_leads', 'visited', 'hot', 'booking_done', 'follow_ups', 'today_activity'],
+  telecaller: ['missed_leads', 'hot', 'cold', 'today_follow_ups', 'follow_ups', 'ringing', 'today_activity', 'not_interested'],
+  site_visit: ['missed_leads', 'visited', 'hot', 'cold', 'follow_ups', 'today_activity'],
+  sales_executive: ['missed_leads', 'visited', 'hot', 'cold', 'booking_done', 'follow_ups', 'today_activity'],
   booking: ['missed_leads', 'booking_done', 'today_activity'],
   loan: ['missed_leads', 'booking_done', 'today_activity'],
   marketing: ['missed_leads', 'not_interested', 'today_activity'],
@@ -49,6 +49,7 @@ const MY_PERFORMANCE_KPIS: Array<{
   { label: 'Total Leads', metric: 'total', icon: 'list-outline', colorKey: 'info', valueKey: 'leads_total' },
   { label: 'Missed Lead', metric: 'missed_leads', icon: 'alert-circle', colorKey: 'negative', valueKey: 'emp_missed_leads' },
   { label: 'Hot', metric: 'hot', icon: 'flame', colorKey: 'warning', valueKey: 'emp_hot' },
+  { label: 'Cold', metric: 'cold', icon: 'snow', colorKey: 'muted', valueKey: 'emp_cold' },
   { label: 'Visited', metric: 'visited', icon: 'location', colorKey: 'info', valueKey: 'emp_visited' },
   { label: 'Not Interested', metric: 'not_interested', icon: 'close-circle', colorKey: 'negative', valueKey: 'emp_not_interested' },
   { label: 'Booking Done', metric: 'booking_done', icon: 'checkmark-done', colorKey: 'positive', valueKey: 'emp_booking_done' },
@@ -316,6 +317,7 @@ export default function MyDashboard() {
                   info: colors.info,
                   accent: colors.accent,
                   negative: colors.negative,
+                  muted: colors.textMuted || '#64748B',
                 };
                 const c = colorMap[kpi.colorKey] || colors.primary;
                 const value = personal[kpi.valueKey] ?? 0;

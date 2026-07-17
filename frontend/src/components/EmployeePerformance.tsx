@@ -23,6 +23,7 @@ const ROLE_LABELS: Record<string, string> = {
 const WORKFLOW_METRICS = [
   { key: 'emp_missed_leads', apiKey: 'missed_leads', label: 'Missed Lead', icon: 'alert-circle' as const, colorKey: 'negative' },
   { key: 'emp_hot', apiKey: 'hot', label: 'Hot', icon: 'flame' as const, colorKey: 'warning' },
+  { key: 'emp_cold', apiKey: 'cold', label: 'Cold', icon: 'snow' as const, colorKey: 'muted' },
   { key: 'emp_visited', apiKey: 'visited', label: 'Visited', icon: 'location' as const, colorKey: 'info' },
   { key: 'emp_not_interested', apiKey: 'not_interested', label: 'Not Interested', icon: 'close-circle' as const, colorKey: 'negative' },
   { key: 'emp_booking_done', apiKey: 'booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },
@@ -174,6 +175,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                       negative: colors.negative,
                       positive: colors.positive,
                       accent: colors.accent,
+                      muted: colors.textMuted || '#64748B',
                     };
                     const pillColor = 'color' in metric
                       ? metric.color

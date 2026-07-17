@@ -11,6 +11,7 @@ const METRIC_LABELS: Record<string, string> = {
   new_leads: 'New Leads — Not Yet Updated',
   missed_leads: 'Missed Lead',
   hot: 'Hot',
+  cold: 'Cold Leads',
   visited: 'Visited — Mark Visited Only',
   not_interested: 'Not Interested',
   booking_done: 'Booking Done',

@@ -795,7 +795,7 @@ def has_employee_workflow_action(lead: Dict[str, Any]) -> bool:
     if lead.get("follow_up_at"):
         return True
     pr = _lead_priority(lead)
-    if pr in ("hot", "low_budget", "not_searching", HANDOFF_BOOKING, HANDOFF_LOAN):
+    if pr in (HOT_PRIORITY, COLD_PRIORITY, "low_budget", "not_searching", HANDOFF_BOOKING, HANDOFF_LOAN):
         return True
     if lead.get("stage") not in (None, "new", "assigned"):
         return True
@@ -885,6 +885,7 @@ def _lead_priority(lead: Dict[str, Any]) -> str:
 HANDOFF_BOOKING = "handoff_booking"
 HANDOFF_LOAN = "handoff_loan"
 HOT_PRIORITY = "hot"
+COLD_PRIORITY = "cold"
 
 
 def lead_ready_for_booking_queue(lead: Dict[str, Any]) -> bool:
@@ -915,8 +916,9 @@ def normalize_employee_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, 
 def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
     """One primary bucket per lead — boxes are mutually exclusive (sum = Total Leads on backlog).
 
-    Priority: negative → booking → hot → visited → ringing → follow_up → positive/closed → in-progress.
+    Priority: negative → booking → hot → cold → visited → ringing → follow_up → positive/closed → in-progress.
     Progressive pipeline stages beat leftover call_status / follow_up_at.
+    Cold (priority=cold) beats follow_up_at so Cold Lead → Follow Up stays in Cold, not Follow Up.
     Missed leads are excluded (they live in New Leads, not Total).
     """
     if is_missed_lead(lead):
@@ -927,8 +929,10 @@ def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
         return "not_interested"
     if lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]:
         return "booking_done"
-    if _lead_priority(lead) == "hot":
+    if _lead_priority(lead) == HOT_PRIORITY:
         return "hot"
+    if _lead_priority(lead) == COLD_PRIORITY:
+        return "cold"
     if lead.get("stage") == "site_visit":
         return "visited"
     if clean_text(lead.get("call_status")):
@@ -936,6 +940,7 @@ def classify_employee_performance_metric(lead: Dict[str, Any]) -> Optional[str]:
     if lead.get("follow_up_at"):
         return "follow_up"
     if lead.get("stage") == "positive":
+        # Legacy positive without explicit cold/hot → Positive / Hot box.
         return "hot"
     if lead.get("stage") == "closed":
         return "booking_done"
@@ -976,6 +981,7 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
     return {
         "emp_active": len(filter_employee_metric_leads(emp_leads, "active")),
         "emp_hot": len(filter_employee_metric_leads(emp_leads, "hot")),
+        "emp_cold": len(filter_employee_metric_leads(emp_leads, "cold")),
         "emp_visited": len(filter_employee_metric_leads(emp_leads, "visited")),
         "emp_not_interested": len(filter_employee_metric_leads(emp_leads, "not_interested")),
         "emp_booking_done": len(filter_employee_metric_leads(emp_leads, "booking_done")),
@@ -1054,6 +1060,8 @@ def workflow_status_label(lead: Dict[str, Any]) -> str:
         return "Booking Done"
     if metric == "hot":
         return "Hot"
+    if metric == "cold":
+        return "Cold Lead"
     if metric == "visited":
         return "Visited"
     if metric == "follow_up":
@@ -1098,7 +1106,7 @@ def classify_inquiry_status(lead: Dict[str, Any]) -> str:
         return "booked"
     if metric == "follow_up":
         return "follow_up"
-    if metric in ("ringing", "hot", "visited"):
+    if metric in ("ringing", "hot", "cold", "visited"):
         return metric
     if lead.get("stage") == "positive":
         return "active"
@@ -1603,7 +1611,7 @@ class BulkLeadDeleteRequest(BaseModel):
 
 
 ASSIGN_INQUIRY_STATUSES = [
-    "all", "active", "new", "hot", "visited", "booked", "ringing",
+    "all", "active", "new", "hot", "cold", "visited", "booked", "ringing",
     "not_interested", "low_budget", "other_location", "already_purchased", "not_searching", "unassigned",
 ]
 ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
@@ -1619,6 +1627,7 @@ INQUIRY_ACTION_PRESETS: Dict[str, Dict[str, Any]] = {
     "not_interested": {"status": "negative"},
     "ringing": {"status": "active", "call_status": "ringing"},
     "hot": {"status": "active", "stage": "positive", "priority": "hot"},
+    "cold": {"status": "active", "stage": "positive", "priority": "cold"},
     "low_budget": {"status": "negative", "priority": "low_budget"},
     "other_location": {"status": "negative", "priority": "other_location"},
     "already_purchased": {"status": "negative", "priority": "already_purchased"},
@@ -1986,7 +1995,12 @@ def inquiry_preset_to_patch(preset: Dict[str, Any], inquiry_action: Optional[str
     elif action == "hot":
         patch.setdefault("status", "active")
         patch.setdefault("stage", "positive")
-        patch.setdefault("priority", "hot")
+        patch.setdefault("priority", HOT_PRIORITY)
+        patch["call_status"] = None
+    elif action == "cold":
+        patch.setdefault("status", "active")
+        patch.setdefault("stage", "positive")
+        patch.setdefault("priority", COLD_PRIORITY)
         patch["call_status"] = None
     elif action == "not_interested":
         patch.setdefault("status", "negative")
@@ -5757,7 +5771,7 @@ async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, c
     return updated
 
 LEAD_BUCKET_KEYS = [
-    "all", "new_today", "open_leads", "positive", "not_interested", "missed_leads",
+    "all", "new_today", "open_leads", "positive", "cold_leads", "not_interested", "missed_leads",
     "registration", "visited", "booking", "follow_up", "ringing",
 ]
 # Full exclusive partition of Total Leads (`all`) — sum of these == lead_buckets["all"].
@@ -5767,6 +5781,7 @@ DASHBOARD_PARTITION_BUCKETS = (
     "ringing",
     "follow_up",
     "positive",
+    "cold_leads",
     "visited",
     "registration",
     "booking",
@@ -5775,12 +5790,13 @@ DASHBOARD_PARTITION_BUCKETS = (
 # Legacy alias: workflow status pills that never overlap each other.
 DASHBOARD_EXCLUSIVE_STATUS_BUCKETS = ("not_interested", "missed_leads", "ringing", "follow_up")
 # Kept for callers; these stage boxes are now exclusive via classify_company_dashboard_bucket.
-DASHBOARD_HIERARCHICAL_BUCKETS = ("positive", "registration", "visited", "booking")
+DASHBOARD_HIERARCHICAL_BUCKETS = ("positive", "cold_leads", "registration", "visited", "booking")
 EMPLOYEE_STATUS_BUCKET_KEYS = (
-    "hot", "visited", "not_interested", "low_budget", "booking_done", "ringing", "follow_up",
+    "hot", "cold", "visited", "not_interested", "low_budget", "booking_done", "ringing", "follow_up",
 )
 EMPLOYEE_STATUS_BUCKET_STAT_KEYS = {
     "hot": "emp_hot",
+    "cold": "emp_cold",
     "visited": "emp_visited",
     "not_interested": "emp_not_interested",
     "low_budget": "emp_low_budget",
@@ -5935,6 +5951,8 @@ def classify_company_dashboard_bucket(lead: Dict[str, Any]) -> Optional[str]:
         return "visited"
     if metric == "hot":
         return "positive"
+    if metric == "cold":
+        return "cold_leads"
     if metric == "booking_done":
         if lead.get("stage") == "registration":
             return "registration"
@@ -5960,10 +5978,11 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
     Always deduped so the metric box number == the opened list length.
 
     Partition boxes (no overlap; sum == Total / all):
-      open_leads, missed_leads, ringing, follow_up, positive, visited,
+      open_leads, missed_leads, ringing, follow_up, positive, cold_leads, visited,
       registration, booking, not_interested.
     new_today is a date subset of unassigned open leads — not part of the partition sum.
     missed_leads is computed (assigned 24h+ with no employee action) — no DB column.
+    cold_leads = stage positive + priority cold (including scheduled follow-ups).
     """
     if bucket_key == "new_today":
         cleaned = clean_leads_for_platform_stats(all_leads)
@@ -8697,6 +8716,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "assigned_in_progress": assignment["assigned_in_progress"],
             "assigned_follow_ups": assignment["assigned_follow_ups"],
             "emp_hot": metric_counts["hot"],
+            "emp_cold": metric_counts["cold"],
             "emp_visited": metric_counts["visited"],
             "emp_not_interested": metric_counts["not_interested"],
             "emp_booking_done": metric_counts["booking_done"],
@@ -8732,7 +8752,7 @@ EMPLOYEE_METRIC_KEYS = [
 ] + BOOKING_TASK_KEYS
 
 MY_DASHBOARD_METRICS = [
-    "new_leads", "total", "missed_leads", "hot", "visited",
+    "new_leads", "total", "missed_leads", "hot", "cold", "visited",
     "not_interested", "booking_done", "low_budget", "follow_ups", "today_follow_ups",
     "ringing", "today_activity",
 ]
@@ -8759,6 +8779,7 @@ PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
     "loans_done": "Loans",
     "active": "Active Leads",
     "hot": "Hot Leads",
+    "cold": "Cold Leads",
     "visited": "Visited",
     "not_interested": "Not Interested",
     "booking_done": "Booking Done",
@@ -8821,7 +8842,7 @@ def personal_dashboard_metric_items(
         return filter_employee_metric_leads(backlog, "active")
     if key in ("today_activity", "today"):
         return build_today_activity_report(activities or [], rows)
-    if key in ("hot", "visited", "booking_done", "low_budget", "ringing"):
+    if key in ("hot", "cold", "visited", "booking_done", "low_budget", "ringing"):
         return filter_employee_metric_leads(backlog, key)
     return []
 

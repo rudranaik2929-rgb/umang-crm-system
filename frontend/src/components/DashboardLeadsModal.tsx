@@ -18,6 +18,7 @@ const BUCKET_TITLES: Record<string, string> = {
   new_today: 'New Today (Unassigned)',
   open_leads: 'Open Leads',
   positive: 'Positive Leads',
+  cold_leads: 'Cold Leads',
   not_interested: 'Not Interested',
   missed_leads: 'Missed Leads',
   registration: 'Registration',

@@ -40,6 +40,7 @@ const WORKFLOW_STATUS_COLORS: Record<string, string> = {
   not_interested: '#E11D48',
   low_budget: '#E11D48',
   hot: '#E11D48',
+  cold: '#64748B',
   visited: '#0EA5E9',
   booking_done: '#059669',
   booked: '#059669',
@@ -48,6 +49,7 @@ const WORKFLOW_STATUS_COLORS: Record<string, string> = {
   assigned: '#8B5CF6',
   active: '#6366F1',
   closed: '#10B981',
+  positive: '#22C55E',
 };
 
 function leadPriority(lead: any): string {
@@ -96,6 +98,7 @@ export function workflowStatusLabel(lead: any): string {
     return 'Booking Done';
   }
   if (pr === 'hot') return 'Hot';
+  if (pr === 'cold') return 'Cold Lead';
   if (stage === 'site_visit') return 'Visited';
   if (stage === 'positive') return 'Interested';
   if (lead?.follow_up_at && lead?.status !== 'negative') return 'Follow Up';
@@ -113,6 +116,7 @@ export function workflowStatusColor(lead: any): string {
   if (label === 'Not Interested' || label in NEGATIVE_PRIORITY_LABELS) return WORKFLOW_STATUS_COLORS.not_interested;
   if (label === 'Low Budget') return WORKFLOW_STATUS_COLORS.low_budget;
   if (label === 'Hot') return WORKFLOW_STATUS_COLORS.hot;
+  if (label === 'Cold Lead') return WORKFLOW_STATUS_COLORS.cold;
   if (label === 'Visited') return WORKFLOW_STATUS_COLORS.visited;
   if (label === 'Interested') return WORKFLOW_STATUS_COLORS.positive;
   if (label === 'Booking Done') return WORKFLOW_STATUS_COLORS.booking_done;
