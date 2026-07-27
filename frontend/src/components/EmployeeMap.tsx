@@ -3,10 +3,6 @@ import { View, StyleSheet, Platform, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 import { useTheme } from '../theme/ThemeContext';
 
-/** Google Maps JavaScript API key (Maps JS only — no Directions/Places/Distance Matrix). */
-const GOOGLE_MAPS_API_KEY =
-  (typeof process !== 'undefined' && process.env?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY) || '';
-
 export interface TrackedEmployee {
   employee_id: string;
   name: string;
@@ -24,15 +20,6 @@ export interface TrackedEmployee {
 interface Props {
   employees: TrackedEmployee[];
   selectedId?: string | null;
-}
-
-function escapeHtml(value: string) {
-  return value
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 function markerColor(iso?: string | null): string {
@@ -69,7 +56,6 @@ export function EmployeeMap({ employees, selectedId }: Props) {
   );
 
   const html = useMemo(() => {
-    const key = escapeHtml(GOOGLE_MAPS_API_KEY);
     const markersJson = JSON.stringify(
       located.map((e) => ({
         id: e.employee_id,
@@ -95,13 +81,17 @@ export function EmployeeMap({ employees, selectedId }: Props) {
 <html>
 <head>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <style>
     html, body, #map { margin: 0; padding: 0; height: 100%; width: 100%; background: #0f172a; }
-    .gm-style .gm-style-iw-c { border-radius: 10px !important; }
+    .leaflet-popup-content-wrapper { border-radius: 10px; font-family: system-ui, sans-serif; }
+    .leaflet-popup-content { margin: 10px 14px; line-height: 1.4; }
+    .leaflet-control-attribution { font-size: 10px; }
   </style>
 </head>
 <body>
   <div id="map"></div>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script>
     var MARKERS = ${markersJson};
     function pinSvg(color) {
@@ -114,72 +104,53 @@ export function EmployeeMap({ employees, selectedId }: Props) {
         );
     }
     function initMap() {
-      var map = new google.maps.Map(document.getElementById('map'), {
-        center: { lat: 19.47, lng: 72.8 },
-        zoom: 10,
-        mapTypeControl: false,
-        streetViewControl: false,
-        fullscreenControl: true,
-        zoomControl: true,
-      });
-      var bounds = new google.maps.LatLngBounds();
-      var info = new google.maps.InfoWindow();
+      var map = L.map('map', { zoomControl: true }).setView([19.47, 72.8], 10);
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+      }).addTo(map);
+
+      var bounds = [];
+      var highlightMarker = null;
+
       MARKERS.forEach(function (m) {
-        var pos = { lat: m.lat, lng: m.lng };
-        bounds.extend(pos);
-        var marker = new google.maps.Marker({
-          position: pos,
-          map: map,
-          title: m.name,
-          icon: {
-            url: pinSvg(m.color),
-            scaledSize: new google.maps.Size(36, 48),
-            anchor: new google.maps.Point(18, 48),
-          },
-          zIndex: m.highlight ? 999 : 1,
+        var icon = L.icon({
+          iconUrl: pinSvg(m.color),
+          iconSize: [36, 48],
+          iconAnchor: [18, 48],
+          popupAnchor: [0, -48],
         });
-        marker.addListener('click', function () {
-          info.setContent(
-            '<div style="font-family:system-ui,sans-serif;min-width:180px;padding:2px 0">' +
-            '<div style="font-weight:700;font-size:14px;margin-bottom:6px">' + m.name + '</div>' +
-            '<div style="font-size:12px;color:#334155;margin-bottom:4px"><b>Current Lead:</b> ' + m.lead + '</div>' +
-            '<div style="font-size:12px;color:#64748b"><b>Last Updated:</b> ' + m.seen + '</div>' +
-            '</div>'
-          );
-          info.open(map, marker);
-          if (m.highlight) map.panTo(pos);
-        });
+        var marker = L.marker([m.lat, m.lng], {
+          icon: icon,
+          zIndexOffset: m.highlight ? 999 : 0,
+        }).addTo(map);
+        marker.bindPopup(
+          '<div style="min-width:180px;padding:2px 0">' +
+          '<div style="font-weight:700;font-size:14px;margin-bottom:6px">' + m.name + '</div>' +
+          '<div style="font-size:12px;color:#334155;margin-bottom:4px"><b>Current Lead:</b> ' + m.lead + '</div>' +
+          '<div style="font-size:12px;color:#64748b"><b>Last Updated:</b> ' + m.seen + '</div>' +
+          '</div>',
+        );
+        bounds.push([m.lat, m.lng]);
         if (m.highlight) {
-          map.setCenter(pos);
-          map.setZoom(14);
-          google.maps.event.trigger(marker, 'click');
+          highlightMarker = marker;
+          map.setView([m.lat, m.lng], 14);
         }
       });
-      if (MARKERS.length > 1 && !MARKERS.some(function (m) { return m.highlight; })) {
-        map.fitBounds(bounds, 48);
-      } else if (MARKERS.length === 1 && !MARKERS[0].highlight) {
-        map.setCenter({ lat: MARKERS[0].lat, lng: MARKERS[0].lng });
-        map.setZoom(13);
+
+      if (highlightMarker) {
+        highlightMarker.openPopup();
+      } else if (bounds.length > 1) {
+        map.fitBounds(bounds, { padding: [48, 48] });
+      } else if (bounds.length === 1) {
+        map.setView(bounds[0], 13);
       }
     }
-  </script>
-  <script async defer
-    src="https://maps.googleapis.com/maps/api/js?key=${key}&callback=initMap">
+    initMap();
   </script>
 </body>
 </html>`;
   }, [located, selectedId]);
-
-  if (!GOOGLE_MAPS_API_KEY) {
-    return (
-      <View style={[styles.empty, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
-        <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }}>Google Maps API key missing</Text>
-        <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 8, textAlign: 'center', lineHeight: 18 }}>
-          Set EXPO_PUBLIC_GOOGLE_MAPS_API_KEY in frontend/.env (Maps JavaScript API only).
-        </Text>
-      </View>
-    );
-  }
 
   if (located.length === 0) {
     return (
