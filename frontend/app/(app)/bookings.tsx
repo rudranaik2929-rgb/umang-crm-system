@@ -94,13 +94,11 @@ export default function Bookings() {
       ]);
       const allBookings = Array.isArray(b.data) ? b.data : [];
       let bookingData = allBookings;
+      // Do NOT filter by booking-queue leads — queue excludes already-booked rows, so a
+      // just-created booking would vanish on refresh. Scope by officer when needed.
       if (!seesAllBookings(user?.role) && (user as any)?.acting_as_employee_id) {
-        const myLeadIds = new Set(
-          (l.data || [])
-            .filter((x: any) => x.assigned_to === (user as any).acting_as_employee_id)
-            .map((x: any) => x.lead_id),
-        );
-        bookingData = allBookings.filter((x: any) => myLeadIds.has(x.lead_id));
+        const eid = (user as any).acting_as_employee_id;
+        bookingData = allBookings.filter((x: any) => x.booking_officer_id === eid);
       }
       setBookings(bookingData);
       const bookedLeadIds = new Set(allBookings.map((x: any) => x.lead_id));
@@ -555,6 +553,8 @@ export default function Bookings() {
         onCreated={async (created: any) => {
           setShowCreate(false);
           setPrefillLeadId(null);
+          await load();
+          // Re-merge after refresh so a slow/replica list cannot wipe a successful create.
           if (created?.booking_id) {
             setBookings((prev) => {
               const ids = new Set(prev.map((x) => x.booking_id));
@@ -562,7 +562,6 @@ export default function Bookings() {
             });
             setLeads((prev) => prev.filter((x) => x.lead_id !== created.lead_id));
           }
-          await load();
         }}
         leads={leads}
         colors={colors}

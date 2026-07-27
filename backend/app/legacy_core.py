@@ -7253,6 +7253,35 @@ async def list_visit_followups(visit_id: Optional[str]=None, lead_id: Optional[s
     return sorted(followups, key=lambda f: f.get("follow_up_at") or "", reverse=True)
 
 # ---- Bookings ----
+def _persist_booking_row(row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Insert a booking; retry without optional columns if the schema is missing newer fields.
+
+    Never treat a failed insert as success — that left ghost SESSION_CACHE rows that
+    vanished on the next list/prune (looked like auto-delete after create).
+    """
+    result = sb_insert("bookings", row)
+    if result:
+        return result if isinstance(result, dict) else row
+
+    core_keys = {
+        "booking_id", "lead_id", "lead_name", "property_name",
+        "booking_amount", "token_received", "agreement_status",
+        "payment_progress", "status", "created_at",
+    }
+    # Drop newer/optional columns that may not exist on older DBs, then retry.
+    stripped = {k: v for k, v in row.items() if k in core_keys}
+    if stripped != row:
+        logging.warning(
+            "booking insert retry without optional columns booking_id=%s dropped=%s",
+            row.get("booking_id"),
+            sorted(set(row) - core_keys),
+        )
+        result = sb_insert("bookings", stripped)
+        if result:
+            return result if isinstance(result, dict) else stripped
+    return None
+
+
 @api_router.post("/bookings")
 async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
     leads = sb_select("leads", {"lead_id": f"eq.{p.lead_id}", "select": "lead_id,name"})
@@ -7290,8 +7319,11 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
     officer_id = resolve_employee_id(cu)
     if officer_id:
         b["booking_officer_id"] = officer_id
-    result = sb_insert("bookings", b)
-    SESSION_CACHE["bookings"].insert(0, result or b)
+    result = _persist_booking_row(b)
+    if not result:
+        logging.error("create_booking: insert failed booking_id=%s lead_id=%s", bid, p.lead_id)
+        raise HTTPException(status_code=503, detail="Could not save booking. Please try again.")
+    SESSION_CACHE["bookings"].insert(0, result)
     sb_update("leads", "lead_id", p.lead_id, {
         "stage": "booking",
         "priority": None,
@@ -7299,7 +7331,7 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
     })
     update_cached_lead(p.lead_id, {"stage": "booking", "priority": None, "updated_at": now_utc().isoformat()})
     invalidate_leads_cache()
-    return result or b
+    return result
 
 @api_router.get("/bookings")
 async def list_bookings(cu: User=Depends(get_current_user)):
