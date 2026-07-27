@@ -119,6 +119,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const [employees, setEmployees] = useState<any[]>([]);
   const [showAssignDropdown, setShowAssignDropdown] = useState(false);
   const [assignSearch, setAssignSearch] = useState('');
+  const [showSiteVisitorPicker, setShowSiteVisitorPicker] = useState(false);
+  const [siteVisitorSearch, setSiteVisitorSearch] = useState('');
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [editingDetails, setEditingDetails] = useState(false);
@@ -199,6 +201,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       setAiSummary(null);
       setShowAssignDropdown(false);
       setAssignSearch('');
+      setShowSiteVisitorPicker(false);
+      setSiteVisitorSearch('');
       setActionMessage(null);
       setActionError(null);
       setEditingDetails(false);
@@ -397,6 +401,27 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       await load(true);
       onChanged?.();
       broadcastDataChanged();
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const assignSiteVisitor = async (employeeId: string, employeeName: string) => {
+    if (!leadId) return;
+    setBusy('assign_site_visitor');
+    setActionError(null);
+    try {
+      await api.post(`/leads/${leadId}/assign-site-visitor`, { site_visitor_id: employeeId });
+      setShowSiteVisitorPicker(false);
+      setSiteVisitorSearch('');
+      setActiveCategory(null);
+      setActionMessage(`Site visitor assigned: ${employeeName}. Visible in Site Visit Assigned on both dashboards.`);
+      await load(true);
+      onChanged?.();
+      broadcastDataChanged();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not assign site visitor.');
     } finally {
       setBusy(null);
     }
@@ -1057,6 +1082,22 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             busy={busy === 'follow_up'}
                             color="#F59E0B"
                           />
+                          {(userRole === 'admin' || userRole === 'manager' || userRole === 'telecaller' || userRole === 'sales_executive' || userRole === 'site_visit') && (
+                            <SubActionBtn
+                              label="Assign Site Visitor"
+                              sub={
+                                lead.site_visitor_id
+                                  ? `Assigned: ${employees.find((e: any) => e.employee_id === lead.site_visitor_id)?.name || lead.site_visitor_id}`
+                                  : 'Pick sales executive · both dashboards'
+                              }
+                              onPress={() => {
+                                setShowSiteVisitorPicker((v) => !v);
+                                setSiteVisitorSearch('');
+                              }}
+                              busy={busy === 'assign_site_visitor'}
+                              color="#0EA5E9"
+                            />
+                          )}
                           {(userRole === 'admin' || userRole === 'booking' || userRole === 'loan') && (
                             <SubActionBtn 
                               label="🏆 Deal Won (Close)" 
@@ -1067,6 +1108,67 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                               busy={busy === 'deal_won'}
                               color="#D4AF37"
                             />
+                          )}
+                          {showSiteVisitorPicker && (
+                            <View style={{ width: '100%', marginTop: 8, gap: 6 }}>
+                              <TextInput
+                                value={siteVisitorSearch}
+                                onChangeText={setSiteVisitorSearch}
+                                placeholder="Search sales executive…"
+                                placeholderTextColor={colors.textMuted}
+                                style={{
+                                  borderWidth: 1,
+                                  borderColor: colors.border,
+                                  borderRadius: 8,
+                                  paddingHorizontal: 10,
+                                  paddingVertical: 8,
+                                  color: colors.text,
+                                  fontSize: 13,
+                                  backgroundColor: colors.surfaceAlt,
+                                }}
+                              />
+                              {employees
+                                .filter((e: any) => {
+                                  const role = String(e.role || '').toLowerCase();
+                                  if (role !== 'sales_executive' && role !== 'site_visit') return false;
+                                  const q = siteVisitorSearch.trim().toLowerCase();
+                                  if (!q) return true;
+                                  return String(e.name || '').toLowerCase().includes(q)
+                                    || String(e.email || '').toLowerCase().includes(q);
+                                })
+                                .slice(0, 12)
+                                .map((emp: any) => (
+                                  <Pressable
+                                    key={emp.employee_id}
+                                    onPress={() => assignSiteVisitor(emp.employee_id, emp.name)}
+                                    disabled={busy === 'assign_site_visitor'}
+                                    style={({ pressed }) => ({
+                                      paddingVertical: 10,
+                                      paddingHorizontal: 12,
+                                      borderRadius: 8,
+                                      borderWidth: 1,
+                                      borderColor: emp.employee_id === lead.site_visitor_id ? '#0EA5E9' : colors.border,
+                                      backgroundColor: pressed
+                                        ? '#0EA5E910'
+                                        : (emp.employee_id === lead.site_visitor_id ? '#0EA5E915' : colors.surface),
+                                    })}
+                                  >
+                                    <Text style={{ color: colors.text, fontSize: 13, fontWeight: '600' }}>{emp.name}</Text>
+                                    <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
+                                      Sales Executive
+                                      {emp.employee_id === lead.site_visitor_id ? ' · current' : ''}
+                                    </Text>
+                                  </Pressable>
+                                ))}
+                              {employees.filter((e: any) => {
+                                const role = String(e.role || '').toLowerCase();
+                                return role === 'sales_executive' || role === 'site_visit';
+                              }).length === 0 ? (
+                                <Text style={{ color: colors.textMuted, fontSize: 12 }}>
+                                  No sales executives found. Add employees with sales_executive / site_visit role.
+                                </Text>
+                              ) : null}
+                            </View>
                           )}
                         </View>
                       )}

@@ -23,6 +23,7 @@ _leads_cache_loading = threading.Event()
 LEADS_CANONICAL_SELECT = (
     "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,"
     "priority,call_status,budget,location,property_type,assigned_to,assigned_at,last_employee_action_at,"
+    "site_visitor_id,site_visit_assigned_by,site_visit_assigned_at,"
     "follow_up_at,created_at,updated_at,starred,brokerage_amount"
 )
 
@@ -34,6 +35,7 @@ DASHBOARD_BUCKET_LEAD_SELECT = LEADS_CANONICAL_SELECT
 EMPLOYEE_WORKFLOW_LEAD_SELECT = (
     "lead_id,name,phone,email,source,assigned_to,status,stage,priority,call_status,"
     "follow_up_at,assigned_at,last_employee_action_at,created_at,updated_at,lead_type,"
+    "site_visitor_id,site_visit_assigned_by,site_visit_assigned_at,"
     "budget,location,property_type,raw_payload"
 )
 

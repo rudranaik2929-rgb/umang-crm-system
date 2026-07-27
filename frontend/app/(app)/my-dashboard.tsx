@@ -30,9 +30,9 @@ const ROLE_ACCENT: Record<string, string> = {
 };
 
 const ROLE_HIGHLIGHT: Record<string, string[]> = {
-  telecaller: ['missed_leads', 'hot', 'cold', 'today_follow_ups', 'follow_ups', 'ringing', 'today_activity', 'not_interested'],
-  site_visit: ['missed_leads', 'visited', 'hot', 'cold', 'follow_ups', 'today_activity'],
-  sales_executive: ['missed_leads', 'visited', 'hot', 'cold', 'booking_done', 'follow_ups', 'today_activity'],
+  telecaller: ['missed_leads', 'hot', 'cold', 'site_visit_assigned', 'today_follow_ups', 'follow_ups', 'ringing', 'today_activity', 'not_interested'],
+  site_visit: ['missed_leads', 'site_visit_assigned', 'visited', 'hot', 'cold', 'follow_ups', 'today_activity'],
+  sales_executive: ['missed_leads', 'site_visit_assigned', 'visited', 'hot', 'cold', 'booking_done', 'follow_ups', 'today_activity'],
   booking: ['missed_leads', 'booking_done', 'today_activity'],
   loan: ['missed_leads', 'booking_done', 'today_activity'],
   marketing: ['missed_leads', 'not_interested', 'today_activity'],
@@ -50,6 +50,7 @@ const MY_PERFORMANCE_KPIS: Array<{
   { label: 'Missed Lead', metric: 'missed_leads', icon: 'alert-circle', colorKey: 'negative', valueKey: 'emp_missed_leads' },
   { label: 'Hot', metric: 'hot', icon: 'flame', colorKey: 'warning', valueKey: 'emp_hot' },
   { label: 'Cold', metric: 'cold', icon: 'snow', colorKey: 'muted', valueKey: 'emp_cold' },
+  { label: 'Site Visit Assigned', metric: 'site_visit_assigned', icon: 'people', colorKey: 'info', valueKey: 'emp_site_visit_assigned' },
   { label: 'Visited', metric: 'visited', icon: 'location', colorKey: 'info', valueKey: 'emp_visited' },
   { label: 'Not Interested', metric: 'not_interested', icon: 'close-circle', colorKey: 'negative', valueKey: 'emp_not_interested' },
   { label: 'Booking Done', metric: 'booking_done', icon: 'checkmark-done', colorKey: 'positive', valueKey: 'emp_booking_done' },

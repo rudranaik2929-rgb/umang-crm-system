@@ -12,6 +12,8 @@ const METRIC_LABELS: Record<string, string> = {
   missed_leads: 'Missed Lead',
   hot: 'Hot',
   cold: 'Cold Leads',
+  site_visit_assigned: 'Site Visit Assigned',
+  assigned_for_visit: 'Site Visit Assigned',
   visited: 'Visited — Mark Visited Only',
   not_interested: 'Not Interested',
   booking_done: 'Booking Done',

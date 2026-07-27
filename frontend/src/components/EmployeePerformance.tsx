@@ -24,6 +24,7 @@ const WORKFLOW_METRICS = [
   { key: 'emp_missed_leads', apiKey: 'missed_leads', label: 'Missed Lead', icon: 'alert-circle' as const, colorKey: 'negative' },
   { key: 'emp_hot', apiKey: 'hot', label: 'Hot', icon: 'flame' as const, colorKey: 'warning' },
   { key: 'emp_cold', apiKey: 'cold', label: 'Cold', icon: 'snow' as const, colorKey: 'muted' },
+  { key: 'emp_site_visit_assigned', apiKey: 'site_visit_assigned', label: 'Site Visit Assigned', icon: 'people' as const, colorKey: 'info' },
   { key: 'emp_visited', apiKey: 'visited', label: 'Visited', icon: 'location' as const, colorKey: 'info' },
   { key: 'emp_not_interested', apiKey: 'not_interested', label: 'Not Interested', icon: 'close-circle' as const, colorKey: 'negative' },
   { key: 'emp_booking_done', apiKey: 'booking_done', label: 'Booking Done', icon: 'checkmark-done' as const, colorKey: 'positive' },

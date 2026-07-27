@@ -993,6 +993,14 @@ def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str
     }
 
 
+def compute_site_visit_assigned_count(
+    all_leads: List[Dict[str, Any]],
+    employee: Dict[str, Any],
+) -> int:
+    """Additive Site Visit Assigned box — not part of exclusive Total Leads sum."""
+    return len(filter_site_visit_assigned_leads(all_leads, employee))
+
+
 def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Optional[str] = None) -> Dict[str, int]:
     """Per-employee counts — New = untouched; Total = employee has updated status."""
     rows = normalize_employee_leads(emp_leads)
@@ -1454,6 +1462,28 @@ def lead_assigned_to_employee(lead: Dict[str, Any], employee: Dict[str, Any]) ->
     return False
 
 
+SITE_VISIT_ASSIGNABLE_ROLES = frozenset({"sales_executive", "site_visit"})
+
+
+def lead_is_site_visit_party(lead: Dict[str, Any], employee: Dict[str, Any]) -> bool:
+    """True when employee is the site visitor OR the assigner (telecaller). Additive metric only."""
+    match_values = set(employee_record_match_values(employee))
+    if not match_values:
+        return False
+    visitor = clean_text(lead.get("site_visitor_id"))
+    assigner = clean_text(lead.get("site_visit_assigned_by"))
+    return bool((visitor and visitor in match_values) or (assigner and assigner in match_values))
+
+
+def filter_site_visit_assigned_leads(
+    all_leads: List[Dict[str, Any]],
+    employee: Dict[str, Any],
+) -> List[Dict[str, Any]]:
+    """Site Visit Assigned box — common to assigner and assignee; does not touch exclusive buckets."""
+    rows = [l for l in (all_leads or []) if is_pipeline_lead(l) and lead_is_site_visit_party(l, employee)]
+    return dedupe_leads_by_external_id(rows)
+
+
 def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
     emp_id = resolve_employee_id(cu)
     if emp_id:
@@ -1608,6 +1638,10 @@ class BulkLeadManageRequest(BaseModel):
 
 class BulkLeadDeleteRequest(BaseModel):
     lead_ids: List[str]
+
+
+class SiteVisitorAssignRequest(BaseModel):
+    site_visitor_id: str
 
 
 ASSIGN_INQUIRY_STATUSES = [
@@ -1946,13 +1980,17 @@ class LeadRemarksUpdate(BaseModel):
 
 
 def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
-    """Employees may only edit leads assigned to them; managers/admins edit any."""
+    """Employees may only edit leads assigned to them; managers/admins edit any.
+    Site visitors may edit leads where they are site_visitor_id (Assign Site Visitor)."""
     if _can_manage_all_leads(cu):
         return
     if cu.role == "marketing" and lead.get("status") == "negative":
         return
     employee = _employee_record_for_user(cu)
     if employee and lead_assigned_to_employee(lead, employee):
+        return
+    if employee and lead_is_site_visit_party(lead, employee):
+        # Assignee or assigner of a site-visit handoff may update the lead.
         return
     assignee_ids = employee_assignee_ids(cu)
     assigned = clean_text(lead.get("assigned_to"))
@@ -6569,6 +6607,7 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
     lead_fields = (
         "lead_id,name,phone,email,source,stage,status,lead_type,priority,call_status,"
         "budget,location,property_type,notes,assigned_to,assigned_at,last_employee_action_at,follow_up_at,"
+        "site_visitor_id,site_visit_assigned_by,site_visit_assigned_at,"
         "created_at,updated_at,external_lead_id,external_created_at,integration_uuid,raw_payload,brokerage_amount"
     )
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": lead_fields})
@@ -6689,6 +6728,94 @@ async def get_lead_ai_summary(lead_id: str, cu: User=Depends(get_current_user)):
         if len(summary) > 100: summary = summary[:97] + "..."
 
     return {"summary": summary}
+
+@api_router.post("/leads/{lead_id}/assign-site-visitor")
+async def assign_site_visitor(
+    lead_id: str,
+    p: SiteVisitorAssignRequest,
+    cu: User = Depends(get_current_user),
+):
+    """Telecaller / manager assigns a sales executive (site visitor) for this lead.
+
+    Does NOT change assigned_to — exclusive Hot/Cold/etc. boxes stay with the owner.
+    Both assigner and assignee see the lead under Site Visit Assigned.
+    """
+    ensure_roles(cu, ["admin", "manager", "telecaller", "sales_executive", "site_visit"])
+    visitor_id = clean_text(p.site_visitor_id)
+    if not visitor_id:
+        raise HTTPException(400, detail="site_visitor_id is required")
+
+    leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
+    old_lead = leads[0] if leads else next(
+        (l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None
+    )
+    if not old_lead:
+        raise HTTPException(404, detail="Lead not found")
+    ensure_lead_edit_access(cu, old_lead)
+
+    visitors = sb_select(
+        "employees",
+        {
+            "employee_id": f"eq.{visitor_id}",
+            "select": "employee_id,name,role,active,user_id",
+            "limit": "1",
+        },
+    )
+    if not visitors:
+        raise HTTPException(404, detail="Employee not found")
+    visitor = visitors[0]
+    if visitor.get("active") is False:
+        raise HTTPException(400, detail="Cannot assign an inactive employee")
+    role = str(visitor.get("role") or "").strip().lower()
+    if role not in SITE_VISIT_ASSIGNABLE_ROLES and cu.role not in ("admin", "manager"):
+        raise HTTPException(
+            400,
+            detail="Site visitor must be a Sales Executive (sales_executive / site_visit role)",
+        )
+
+    assigner_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id or cu.user_id
+    now = now_utc().isoformat()
+    patch = {
+        "site_visitor_id": visitor_id,
+        "site_visit_assigned_by": assigner_id,
+        "site_visit_assigned_at": now,
+        "updated_at": now,
+        "status": "active",
+    }
+    # Mark workflow touch for the assigner without moving exclusive buckets.
+    if not _can_manage_all_leads(cu):
+        patch["last_employee_action_at"] = now
+
+    updated = sb_update("leads", "lead_id", lead_id, patch)
+    if updated is None:
+        verify = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*", "limit": "1"})
+        if not verify:
+            raise HTTPException(503, detail="Could not save site visitor assignment. Please try again.")
+        updated = verify[0]
+
+    new_lead = enrich_lead_display_fields({**old_lead, **patch, **(updated if isinstance(updated, dict) else {})})
+    update_cached_lead(lead_id, patch)
+    invalidate_leads_cache()
+
+    visitor_name = visitor.get("name") or visitor_id
+    log_activity(
+        cu,
+        "site_visit_assigned",
+        f"Assigned site visitor: {visitor_name}",
+        lead_id=lead_id,
+    )
+    try:
+        notify_svc.notify_lead_assigned(
+            visitor_id,
+            new_lead,
+            sender_id=assigner_id,
+            manager_name=cu.name,
+        )
+    except Exception:
+        logging.exception("Failed to notify site visitor assignment for %s", lead_id)
+
+    return {"status": "success", "lead": new_lead}
+
 
 @api_router.patch("/leads/{lead_id}")
 async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_user)):
@@ -8674,6 +8801,7 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
             "leads_total": assignment["assigned_total"],
             "last_activity": last_activity,
             "emp_today_activity": count_today_activity_leads(emp_acts, emp_leads),
+            "emp_site_visit_assigned": compute_site_visit_assigned_count(all_leads, e),
             **assignment,
             "positives": assignment["assigned_positive"],
             "negatives": assignment["assigned_not_interested"],
@@ -8883,27 +9011,38 @@ async def stats_me(cu: User=Depends(get_current_user)):
     emp_id = resolve_employee_id(cu)
     employee_row = None
     if emp_id:
-        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,email,role,department", "limit": "1"})
+        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,email,role,department,user_id", "limit": "1"})
         if emps:
             employee_row = emps[0]
     emp_role = (employee_row or {}).get("role") or cu.role
 
+    all_leads_for_metrics: List[Dict[str, Any]] = []
     if cu.role == "manager" and not emp_id:
         # Manager workspace uses team panels — not company-wide personal KPI totals.
         leads: List[Dict[str, Any]] = []
         my_queue_leads: List[Dict[str, Any]] = []
         platform_breakdown = {"total": 0, "housing": 0, "meta": 0, "manual": 0, "other": 0}
     elif cu.role != "admin" and emp_id:
-        leads = fetch_employee_assigned_leads(cu, EMPLOYEE_WORKFLOW_LEAD_SELECT)
+        all_leads_for_metrics = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
+        employee = employee_row or _employee_record_for_user(cu) or {"employee_id": emp_id}
+        leads = [l for l in all_leads_for_metrics if lead_assigned_to_employee(l, employee)]
+        leads.sort(key=lambda l: l.get("created_at") or "", reverse=True)
         new_lead_rows = filter_employee_new_leads(leads)
         platform_breakdown = compute_platform_breakdown(new_lead_rows)
     else:
-        leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
+        all_leads_for_metrics = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
+        leads = all_leads_for_metrics
         backlog_leads = filter_employee_backlog_leads(leads)
         platform_breakdown = compute_platform_breakdown(backlog_leads)
 
     assignment = compute_employee_assignment_stats(leads, emp_role)
-    metric_counts = build_personal_dashboard_counts(leads, emp_role, activities)
+    metric_counts = build_personal_dashboard_counts(
+        leads,
+        emp_role,
+        activities,
+        employee=employee_row or _employee_record_for_user(cu),
+        all_leads=all_leads_for_metrics or leads,
+    )
     positives = assignment["assigned_positive"]
     negative = assignment["assigned_not_interested"]
     followups = assignment["assigned_follow_ups"]
@@ -8949,6 +9088,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "emp_today_follow_ups": metric_counts["today_follow_ups"],
             "emp_follow_ups": metric_counts["follow_ups"],
             "emp_missed_leads": metric_counts["missed_leads"],
+            "emp_site_visit_assigned": metric_counts.get("site_visit_assigned", 0),
             "metric_counts": metric_counts,
             "positives": positives,
             "negatives": negative,
@@ -8972,18 +9112,20 @@ async def stats_me(cu: User=Depends(get_current_user)):
 EMPLOYEE_METRIC_KEYS = [
     "total", "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
     "ringing", "follow_ups", "today_follow_ups", "missed_leads", "new_leads", "today_activity",
+    "site_visit_assigned", "assigned_for_visit",
 ] + BOOKING_TASK_KEYS
 
 MY_DASHBOARD_METRICS = [
     "new_leads", "total", "missed_leads", "hot", "cold", "visited",
     "not_interested", "booking_done", "low_budget", "follow_ups", "today_follow_ups",
-    "ringing", "today_activity",
+    "ringing", "today_activity", "site_visit_assigned",
 ]
 
 PERSONAL_ACTIVITY_METRICS = list(dict.fromkeys(
     MY_DASHBOARD_METRICS + [
         "queue", "completed", "closed_deals", "positive", "negatives",
         "call_notes", "bookings_done", "loans_done", "active",
+        "assigned_for_visit",
     ]
 ))
 
@@ -9010,6 +9152,8 @@ PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
     "ringing": "Ringing",
     "missed_leads": "Missed Lead",
     "today_activity": "Today Activity — Last 24 Hours",
+    "site_visit_assigned": "Site Visit Assigned",
+    "assigned_for_visit": "Site Visit Assigned",
 }
 
 
@@ -9027,12 +9171,21 @@ def personal_dashboard_metric_items(
     emp_leads: List[Dict[str, Any]],
     role: Optional[str],
     activities: Optional[List[Dict[str, Any]]] = None,
+    *,
+    employee: Optional[Dict[str, Any]] = None,
+    all_leads: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Any]:
     """Single source of truth — My Dashboard KPI count and drill-down list always match."""
     key = (metric_key or "").strip().lower()
     rows = dedupe_leads(emp_leads)
     backlog = filter_employee_backlog_leads(rows)
 
+    if key in ("site_visit_assigned", "assigned_for_visit"):
+        # Additive metric — assigner and assignee both see the lead.
+        source = all_leads if all_leads is not None else emp_leads
+        if employee is not None:
+            return filter_site_visit_assigned_leads(source, employee)
+        return [l for l in dedupe_leads(source) if clean_text(l.get("site_visitor_id"))]
     if key in ("total", "all", "leads_total", "assigned_total"):
         return backlog
     if key in ("new_leads", "new", "assigned_new"):
@@ -9074,9 +9227,14 @@ def build_personal_dashboard_counts(
     emp_leads: List[Dict[str, Any]],
     role: Optional[str],
     activities: List[Dict[str, Any]],
+    *,
+    employee: Optional[Dict[str, Any]] = None,
+    all_leads: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, int]:
     return {
-        metric: len(personal_dashboard_metric_items(metric, emp_leads, role, activities))
+        metric: len(personal_dashboard_metric_items(
+            metric, emp_leads, role, activities, employee=employee, all_leads=all_leads,
+        ))
         for metric in MY_DASHBOARD_METRICS
     }
 
@@ -9093,10 +9251,15 @@ def filter_personal_activity(
     emp_leads: List[Dict[str, Any]],
     activities: List[Dict[str, Any]],
     role: Optional[str],
+    *,
+    employee: Optional[Dict[str, Any]] = None,
+    all_leads: Optional[List[Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """Drill-down lists for My Dashboard activity boxes — counts match stats_me."""
     key = (metric_key or "").strip().lower()
-    items = personal_dashboard_metric_items(key, emp_leads, role, activities)
+    items = personal_dashboard_metric_items(
+        key, emp_leads, role, activities, employee=employee, all_leads=all_leads,
+    )
     if not items and key not in PERSONAL_ACTIVITY_METRICS:
         raise HTTPException(400, detail=f"Unknown activity metric: {key}")
     return {"kind": personal_dashboard_metric_kind(key), "items": items}
@@ -9115,7 +9278,11 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
 
     employee_row = None
     if emp_id:
-        emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "role", "limit": "1"})
+        emps = sb_select("employees", {
+            "employee_id": f"eq.{emp_id}",
+            "select": "employee_id,name,user_id,role",
+            "limit": "1",
+        })
         if emps:
             employee_row = emps[0]
     emp_role = (employee_row or {}).get("role") or cu.role
@@ -9128,14 +9295,28 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
     })
     cache_act_ids = {a.get("activity_id") for a in SESSION_CACHE["activities"]}
     all_activities = SESSION_CACHE["activities"] + [a for a in db_activities if a.get("activity_id") not in cache_act_ids]
+    all_leads_for_metrics: List[Dict[str, Any]] = []
     if cu.role == "admin" and not emp_id:
         activities = all_activities
         emp_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
+        all_leads_for_metrics = emp_leads
     else:
         activities = [a for a in all_activities if a.get("user_id") in activity_keys]
-        emp_leads = fetch_employee_assigned_leads(cu, EMPLOYEE_WORKFLOW_LEAD_SELECT) if emp_id else []
+        all_leads_for_metrics = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT) if emp_id else []
+        employee = employee_row or _employee_record_for_user(cu)
+        emp_leads = (
+            [l for l in all_leads_for_metrics if employee and lead_assigned_to_employee(l, employee)]
+            if emp_id and employee else []
+        )
 
-    result = filter_personal_activity(key, emp_leads, activities, emp_role)
+    result = filter_personal_activity(
+        key,
+        emp_leads,
+        activities,
+        emp_role,
+        employee=employee_row or _employee_record_for_user(cu),
+        all_leads=all_leads_for_metrics or emp_leads,
+    )
     lead_map = {l.get("lead_id"): l for l in emp_leads if l.get("lead_id")}
     if result["kind"] == "today_report":
         items = result["items"][:limit]
@@ -9232,7 +9413,9 @@ async def list_employee_metric_leads(
             "report": report[:limit],
             "leads": [],
         }
-    if key in ("new_leads", "new", "assigned_new"):
+    if key in ("site_visit_assigned", "assigned_for_visit"):
+        filtered = filter_site_visit_assigned_leads(all_leads, employee)
+    elif key in ("new_leads", "new", "assigned_new"):
         filtered = filter_employee_new_leads(emp_leads)
     elif key in ("total", "backlog", "assigned_total"):
         filtered = filter_employee_backlog_leads(emp_leads)
@@ -9244,6 +9427,8 @@ async def list_employee_metric_leads(
         filtered = []
     if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):
         filtered.sort(key=lambda l: l.get("follow_up_at") or "")
+    elif key in ("site_visit_assigned", "assigned_for_visit"):
+        filtered.sort(key=lambda l: l.get("site_visit_assigned_at") or l.get("created_at") or "", reverse=True)
     else:
         filtered.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     return {
