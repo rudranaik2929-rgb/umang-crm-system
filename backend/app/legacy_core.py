@@ -2276,6 +2276,60 @@ async def auth_set_role(payload: RoleSet, cu: User = Depends(get_current_user)):
     merged = {**cu.model_dump(mode="json"), **updated}
     return User(**_finalize_user_session(merged)).model_dump(mode="json")
 
+def upsert_employee_location(employee_id: str, lat: float, lng: float, updated_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """Save latest GPS for one employee — upsert so we never create duplicate rows."""
+    ts = updated_at or now_utc().isoformat()
+    row = {
+        "employee_id": employee_id,
+        "latitude": float(lat),
+        "longitude": float(lng),
+        "updated_at": ts,
+    }
+    saved = sb_upsert("employee_locations", row, on_conflict="employee_id")
+    if saved:
+        return saved if isinstance(saved, dict) else row
+    # Fallback if employee_locations table is missing: keep legacy columns working.
+    return None
+
+
+def _parse_iso_ts(value: Any) -> float:
+    if not value:
+        return 0.0
+    try:
+        s = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(s).timestamp()
+    except Exception:
+        return 0.0
+
+
+def current_lead_for_employee(employee: Dict[str, Any], all_leads: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pick the lead this employee is actively working on.
+
+    Assumption: among leads assigned to the employee with status != 'negative',
+    choose the one with the newest updated_at (fallback: created_at). That is
+    typically the open deal they last touched — there is no dedicated
+    'currently_working_on' field in the schema.
+    """
+    candidates = [
+        l for l in all_leads
+        if lead_assigned_to_employee(l, employee)
+        and (l.get("status") or "active") != "negative"
+    ]
+    if not candidates:
+        return None
+    candidates.sort(
+        key=lambda l: max(_parse_iso_ts(l.get("updated_at")), _parse_iso_ts(l.get("created_at"))),
+        reverse=True,
+    )
+    top = candidates[0]
+    return {
+        "lead_id": top.get("lead_id"),
+        "name": top.get("name") or "Lead",
+        "stage": top.get("stage"),
+        "status": top.get("status"),
+    }
+
+
 @api_router.post("/auth/ping-location")
 async def ping_location(request: Request, cu: User = Depends(get_current_user)):
     body = await request.json()
@@ -2283,16 +2337,20 @@ async def ping_location(request: Request, cu: User = Depends(get_current_user)):
     if lat is None or lng is None:
         return {"ok": False, "reason": "missing_coordinates"}
 
-    emp_id = cu.acting_as_employee_id or cu.employee_id
+    emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
     if not emp_id:
         return {"ok": False, "reason": "no_employee_linked"}
 
+    now_iso = now_utc().isoformat()
     update: Dict[str, Any] = {
         "last_lat": float(lat),
         "last_lng": float(lng),
-        "last_seen_at": now_utc().isoformat(),
+        "last_seen_at": now_iso,
     }
 
+    # Primary store: one row per employee in employee_locations (upsert).
+    upsert_employee_location(emp_id, float(lat), float(lng), now_iso)
+    # Dual-write legacy columns so older clients/queries still see last seen.
     sb_update("employees", "employee_id", emp_id, update)
     invalidate_employees_cache()
     return {"ok": True, "employee_id": emp_id}
@@ -8169,6 +8227,75 @@ async def list_employees(cu: User=Depends(get_current_user)):
         {k: v for k, v in row.items() if k not in ("last_lat", "last_lng", "last_seen_at")}
         for row in rows
     ]
+
+
+@api_router.get("/employees/locations")
+async def list_employee_locations(cu: User = Depends(get_current_user)):
+    """Admin/manager map feed: latest GPS + employee name + current lead."""
+    ensure_roles(cu, ["admin", "manager"])
+
+    locations = sb_select("employee_locations", {
+        "select": "employee_id,latitude,longitude,updated_at",
+        "order": "updated_at.desc",
+    })
+    employees = sb_select("employees", {
+        "select": "employee_id,name,role,department,active,last_lat,last_lng,last_seen_at",
+        "order": "name.asc",
+    })
+    emp_by_id = {e.get("employee_id"): e for e in employees if e.get("employee_id")}
+
+    # Fallback: employees with legacy GPS but no employee_locations row yet.
+    loc_by_id: Dict[str, Dict[str, Any]] = {
+        r["employee_id"]: r for r in locations if r.get("employee_id")
+    }
+    for emp in employees:
+        eid = emp.get("employee_id")
+        if not eid or eid in loc_by_id:
+            continue
+        if emp.get("last_lat") is None or emp.get("last_lng") is None:
+            continue
+        loc_by_id[eid] = {
+            "employee_id": eid,
+            "latitude": emp.get("last_lat"),
+            "longitude": emp.get("last_lng"),
+            "updated_at": emp.get("last_seen_at"),
+        }
+
+    # Current lead = most recently updated active assigned lead (see helper docstring).
+    all_leads = fetch_all_leads_merged(
+        "lead_id,name,assigned_to,status,stage,updated_at,created_at"
+    )
+
+    out: List[Dict[str, Any]] = []
+    for eid, loc in loc_by_id.items():
+        emp = emp_by_id.get(eid) or {}
+        if emp.get("active") is False:
+            continue
+        current = current_lead_for_employee(emp, all_leads) if emp else None
+        updated_at = loc.get("updated_at")
+        age_ms = (time.time() - _parse_iso_ts(updated_at)) * 1000 if updated_at else None
+        online = bool(age_ms is not None and age_ms < 5 * 60 * 1000)
+        out.append({
+            "employee_id": eid,
+            "name": emp.get("name") or eid,
+            "role": emp.get("role"),
+            "department": emp.get("department"),
+            "latitude": loc.get("latitude"),
+            "longitude": loc.get("longitude"),
+            # Aliases for map/list components that still use last_* field names.
+            "last_lat": loc.get("latitude"),
+            "last_lng": loc.get("longitude"),
+            "last_seen_at": updated_at,
+            "updated_at": updated_at,
+            "current_lead": current,
+            "current_lead_name": (current or {}).get("name"),
+            "online": online,
+            "status": "Online" if online else "Offline",
+        })
+
+    out.sort(key=lambda r: _parse_iso_ts(r.get("updated_at")), reverse=True)
+    return out
+
 
 @api_router.patch("/employees/{eid}")
 async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_current_user)):

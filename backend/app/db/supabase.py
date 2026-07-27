@@ -105,6 +105,30 @@ def sb_update(table: str, pk_col: str, pk_val: Any, data: dict):
         return {pk_col: pk_val, **data}
 
 
+def sb_upsert(table: str, data: Dict[str, Any], on_conflict: str = "employee_id"):
+    """Insert or update a single row (PostgREST merge-duplicates on conflict key)."""
+    h = {
+        **sb_headers(),
+        "Prefer": "resolution=merge-duplicates,return=representation",
+    }
+    r = _http.post(
+        sb_url(table),
+        headers=h,
+        params={"on_conflict": on_conflict},
+        json=data,
+    )
+    if r.status_code >= 400:
+        logging.error(f"Supabase UPSERT {table}: {r.status_code} {r.text[:300]}")
+        return None
+    if not r.text or not r.text.strip():
+        return data
+    try:
+        rows = r.json()
+        return rows[0] if isinstance(rows, list) and rows else rows
+    except Exception:
+        return data
+
+
 def sb_delete(table: str, pk_col: str, pk_val: Any) -> bool:
     r = _http.delete(f"{sb_url(table)}?{pk_col}=eq.{pk_val}", headers=sb_headers())
     return r.status_code < 400
@@ -161,6 +185,7 @@ __all__ = [
     "sb_insert",
     "sb_insert_many",
     "sb_update",
+    "sb_upsert",
     "sb_delete",
     "sb_delete_filter",
     "sb_patch_filter",

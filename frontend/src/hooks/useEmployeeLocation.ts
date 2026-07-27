@@ -10,7 +10,7 @@ type TrackableUser = {
   acting_as_employee_id?: string | null;
 } | null;
 
-const PING_INTERVAL_MS = 3 * 60 * 1000;
+const PING_INTERVAL_MS = 60 * 1000; // every 60s while logged in on mobile/browser
 const MIN_PING_GAP_MS = 45 * 1000;
 
 export function shouldTrackEmployeeLocation(user: TrackableUser): boolean {
@@ -81,7 +81,7 @@ export function useEmployeeLocation(user: TrackableUser) {
         }
         watchIdRef.current = navigator.geolocation.watchPosition(onPosition, onError, {
           enableHighAccuracy: true,
-          maximumAge: 60_000,
+          maximumAge: 30_000,
           timeout: 20_000,
         });
       },
@@ -107,8 +107,8 @@ export function useEmployeeLocation(user: TrackableUser) {
     const interval = setInterval(() => {
       if (typeof navigator === 'undefined' || !navigator.geolocation) return;
       navigator.geolocation.getCurrentPosition(onPosition, () => {}, {
-        enableHighAccuracy: false,
-        maximumAge: 120_000,
+        enableHighAccuracy: true,
+        maximumAge: 30_000,
         timeout: 15_000,
       });
     }, PING_INTERVAL_MS);
