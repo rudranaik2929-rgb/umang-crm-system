@@ -28,6 +28,13 @@ function useWebPrivacyShield() {
         user-select: text !important;
         pointer-events: auto !important;
       }
+      /* Leaflet / map embeds — keep pan, zoom, and marker clicks interactive */
+      .crm-map, .crm-map *, .crm-map iframe,
+      .leaflet-container, .leaflet-container * {
+        pointer-events: auto !important;
+        -webkit-user-select: none !important;
+        user-select: none !important;
+      }
       @media print {
         body, html, #root, div {
           display: none !important;
@@ -48,6 +55,15 @@ function useWebPrivacyShield() {
           'input, textarea, input[type="date"], .crm-date-input, [contenteditable="true"], [role="textbox"], [data-editable="true"], .crm-text-input',
         ),
       );
+    };
+
+    /** True when focus moved into a CRM map embed (iframe / Leaflet), not away from the app. */
+    const isMapEmbedFocused = () => {
+      const active = document.activeElement;
+      if (!(active instanceof Element)) return false;
+      if (active.closest('.crm-map')) return true;
+      if (active instanceof HTMLIFrameElement && active.classList.contains('crm-map')) return true;
+      return false;
     };
 
     // 2. Prevent right-click context menu (allow in editable fields)
@@ -106,53 +122,63 @@ function useWebPrivacyShield() {
       }
     };
 
-    // 6. Blur screen on tab/window unfocus (Switcher Security Mask)
+    // 6. Blur screen on tab/window unfocus (Switcher Security Mask).
+    // Defer so activeElement updates after focus enters a map iframe.
+    // Clicking Leaflet/OSM embeds blurs the parent window but the user is still in-app;
+    // still lock when the tab is actually hidden (visibilityState).
     const handleBlur = () => {
-      const existing = document.getElementById('privacy-shield-blur-mask');
-      if (existing) return;
+      window.setTimeout(() => {
+        const tabVisible = document.visibilityState === 'visible';
+        if (document.hasFocus()) return;
+        // Map iframe stole focus within this visible tab — do not lock the CRM.
+        if (tabVisible && isMapEmbedFocused()) return;
 
-      const mask = document.createElement('div');
-      mask.id = 'privacy-shield-blur-mask';
-      mask.style.position = 'fixed';
-      mask.style.top = '0';
-      mask.style.left = '0';
-      mask.style.width = '100vw';
-      mask.style.height = '100vh';
-      mask.style.backdropFilter = 'blur(30px)';
-      mask.style.setProperty('-webkit-backdrop-filter', 'blur(30px)');
-      mask.style.backgroundColor = 'rgba(15, 10, 8, 0.75)';
-      mask.style.zIndex = '999999';
-      mask.style.display = 'flex';
-      mask.style.flexDirection = 'column';
-      mask.style.alignItems = 'center';
-      mask.style.justifyContent = 'center';
-      mask.style.gap = '16px';
+        const existing = document.getElementById('privacy-shield-blur-mask');
+        if (existing) return;
 
-      const title = document.createElement('h2');
-      title.innerText = '🔒 Privacy Shield Active';
-      title.style.color = '#FDFBF9';
-      title.style.fontFamily = 'sans-serif';
-      title.style.margin = '0';
-      title.style.fontSize = '24px';
-      title.style.fontWeight = 'bold';
-      
-      const sub = document.createElement('p');
-      sub.innerText = 'Click anywhere on this screen to refocus and unlock the CRM';
-      sub.style.color = '#A38B7D';
-      sub.style.fontFamily = 'sans-serif';
-      sub.style.margin = '0';
-      sub.style.fontSize = '13px';
+        const mask = document.createElement('div');
+        mask.id = 'privacy-shield-blur-mask';
+        mask.style.position = 'fixed';
+        mask.style.top = '0';
+        mask.style.left = '0';
+        mask.style.width = '100vw';
+        mask.style.height = '100vh';
+        mask.style.backdropFilter = 'blur(30px)';
+        mask.style.setProperty('-webkit-backdrop-filter', 'blur(30px)');
+        mask.style.backgroundColor = 'rgba(15, 10, 8, 0.75)';
+        mask.style.zIndex = '999999';
+        mask.style.display = 'flex';
+        mask.style.flexDirection = 'column';
+        mask.style.alignItems = 'center';
+        mask.style.justifyContent = 'center';
+        mask.style.gap = '16px';
 
-      mask.appendChild(title);
-      mask.appendChild(sub);
-      
-      // Unlock on click
-      mask.addEventListener('click', () => {
-        mask.remove();
-        window.focus();
-      });
+        const title = document.createElement('h2');
+        title.innerText = '🔒 Privacy Shield Active';
+        title.style.color = '#FDFBF9';
+        title.style.fontFamily = 'sans-serif';
+        title.style.margin = '0';
+        title.style.fontSize = '24px';
+        title.style.fontWeight = 'bold';
 
-      document.body.appendChild(mask);
+        const sub = document.createElement('p');
+        sub.innerText = 'Click anywhere on this screen to refocus and unlock the CRM';
+        sub.style.color = '#A38B7D';
+        sub.style.fontFamily = 'sans-serif';
+        sub.style.margin = '0';
+        sub.style.fontSize = '13px';
+
+        mask.appendChild(title);
+        mask.appendChild(sub);
+
+        // Unlock on click
+        mask.addEventListener('click', () => {
+          mask.remove();
+          window.focus();
+        });
+
+        document.body.appendChild(mask);
+      }, 0);
     };
 
     const handleFocus = () => {

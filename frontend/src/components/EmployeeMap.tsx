@@ -167,6 +167,7 @@ export function EmployeeMap({ employees, selectedId }: Props) {
     return (
       <View style={[styles.container, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
         <iframe
+          className="crm-map"
           srcDoc={html}
           style={{ width: '100%', height: '100%', border: 'none', borderRadius: 12 }}
           title="Employee Map"
