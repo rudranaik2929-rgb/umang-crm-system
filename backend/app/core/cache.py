@@ -7,9 +7,10 @@ LEADS_CACHE_TTL_SEC = int(os.environ.get("LEADS_CACHE_TTL_SEC", "60"))
 _USER_CACHE_TTL_SEC = int(os.environ.get("USER_CACHE_TTL_SEC", "300"))
 _USER_PROFILE_CACHE_MAX = int(os.environ.get("USER_PROFILE_CACHE_MAX", "150"))
 _SESSION_CACHE_MAX_ITEMS = int(os.environ.get("SESSION_CACHE_MAX_ITEMS", "400"))
-_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "60"))
+_STATS_CACHE_TTL_SEC = int(os.environ.get("STATS_CACHE_TTL_SEC", "90"))
 
 _leads_cache: Dict[str, Any] = {"ts": 0.0, "select": "", "data": []}
+_LEADS_WIPE_PROBE_INTERVAL_SEC = float(os.environ.get("LEADS_WIPE_PROBE_INTERVAL_SEC", "90"))
 _user_profile_cache: Dict[str, Dict[str, Any]] = {}
 _employees_cache: Dict[str, Any] = {"ts": 0.0, "data": []}
 _EMPLOYEES_CACHE_TTL = 120
@@ -46,6 +47,7 @@ __all__ = [
     "_SESSION_CACHE_MAX_ITEMS",
     "_STATS_CACHE_TTL_SEC",
     "_leads_cache",
+    "_LEADS_WIPE_PROBE_INTERVAL_SEC",
     "_user_profile_cache",
     "_employees_cache",
     "_EMPLOYEES_CACHE_TTL",

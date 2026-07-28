@@ -558,8 +558,11 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
 
     hit = _from_cache()
     if hit is not None:
-        # Detect external SQL wipe: RAM still has leads but Supabase is empty.
-        if hit:
+        # Rare empty-DB wipe check — throttled so warm cache hits stay free of DB RTT.
+        last_probe = float(_leads_cache.get("_wipe_probe_at") or 0.0)
+        should_probe = hit and (now - last_probe) >= _LEADS_WIPE_PROBE_INTERVAL_SEC
+        if should_probe:
+            _leads_cache["_wipe_probe_at"] = now
             probe = sb_select("leads", {"select": "lead_id", "limit": "1"})
             if not probe:
                 logging.warning("leads cache wiped: DB empty but RAM had %s rows — flushing", len(hit))
@@ -8910,6 +8913,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
         "activities": ("activities", {"select": "activity_id,type"}),
         "employees": ("employees", {"select": "employee_id"}),
         "campaigns": ("campaigns", {"select": "campaign_id"}),
+        "followups": ("visit_followups", {"select": "followup_id,status", "limit": "2000", "order": "follow_up_at.desc"}),
     })
     leads = fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
     bookings = fetched["bookings"]
@@ -8923,8 +8927,7 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
 
     visits = prune_session_list_against_db("visits", fetched["visits"], "visit_id")
 
-    followups = sb_select("visit_followups", {"select": "followup_id,status", "limit": "2000", "order": "follow_up_at.desc"})
-    followups = prune_session_list_against_db("followups", followups, "followup_id")
+    followups = prune_session_list_against_db("followups", fetched["followups"], "followup_id")
 
     activities = prune_session_list_against_db("activities", fetched["activities"], "activity_id")
     loans = prune_session_list_against_db("loans", fetched["loans"], "loan_id")
@@ -9146,13 +9149,13 @@ async def admin_flush_caches(cu: User = Depends(get_current_user)):
 async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
     """One round-trip for main Dashboard — admin (full) + manager (team, no revenue UI)."""
     ensure_main_dashboard(cu)
-    stats, graph, employees, leads_page = await asyncio.gather(
+    stats, graph, employees, leads_page, recent = await asyncio.gather(
         asyncio.to_thread(_get_dashboard_stats_cached),
         asyncio.to_thread(_compute_dashboard_graph_sync),
         asyncio.to_thread(_stats_employees_sync),
         list_leads(limit=80, offset=0, cu=cu),
+        list_recent_leads(20, cu),
     )
-    recent = await list_recent_leads(20, cu)
     return {
         "stats": stats,
         "graph": graph,

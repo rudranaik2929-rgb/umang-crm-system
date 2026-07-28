@@ -90,19 +90,29 @@ export default function MyDashboard() {
   const [sourceModalVisible, setSourceModalVisible] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const load = useCallback(async () => {
-    try {
-      const res = await api.get('/stats/me-bundle');
-      const bundle = res.data || {};
-      setData(bundle.me);
-      setSnapshot('my-dashboard', { data: bundle.me });
-      setRefreshKey((k) => k + 1);
-    } catch {
-      // Keep cached dashboard if refresh fails.
-    } finally { setLoading(false); }
+  const loadInFlight = React.useRef<Promise<void> | null>(null);
+  const load = useCallback(async (opts?: { force?: boolean }) => {
+    const force = !!opts?.force;
+    if (loadInFlight.current && !force) return loadInFlight.current;
+    const run = (async () => {
+      try {
+        const res = await api.get('/stats/me-bundle', { bypassCache: force });
+        const bundle = res.data || {};
+        setData(bundle.me);
+        setSnapshot('my-dashboard', { data: bundle.me });
+        setRefreshKey((k) => k + 1);
+      } catch {
+        // Keep cached dashboard if refresh fails.
+      } finally {
+        setLoading(false);
+        loadInFlight.current = null;
+      }
+    })();
+    loadInFlight.current = run;
+    return run;
   }, []);
   useEffect(() => {
-    load();
+    void load({ force: false });
   }, [load]);
 
   useEffect(() => {
@@ -110,7 +120,7 @@ export default function MyDashboard() {
   }, [refreshNotifications]);
 
   useLiveRefresh(() => {
-    load();
+    void load({ force: false });
     refreshNotifications();
   });
 
@@ -129,7 +139,7 @@ export default function MyDashboard() {
         <TopBar title="My Dashboard" />
         <View style={{ padding: 48, alignItems: 'center', gap: 12 }}>
           <Text style={{ color: colors.textMuted }}>Could not load your dashboard.</Text>
-          <Pressable onPress={load} style={[styles.ctaBtn, { backgroundColor: colors.primary }]}>
+          <Pressable onPress={() => void load({ force: true })} style={[styles.ctaBtn, { backgroundColor: colors.primary }]}>
             <Text style={styles.ctaText}>Retry</Text>
           </Pressable>
         </View>
@@ -164,7 +174,7 @@ export default function MyDashboard() {
         rightAction={
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingRight: isCompact ? 8 : 12 }}>
             <Pressable
-              onPress={() => { load(); refreshNotifications(); }}
+              onPress={() => { void load({ force: true }); refreshNotifications(); }}
               disabled={loading}
               style={[styles.refreshBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: loading ? 0.6 : 1, marginRight: 0 }]}
             >

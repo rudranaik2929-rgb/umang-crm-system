@@ -13,6 +13,8 @@ const AUTH_TIMEOUT_MS = 90000;
 export const IMPORT_TIMEOUT_MS = 300000;
 /** Short TTL for non-live endpoints only (auth, static config). */
 const GET_CACHE_MS = 15000;
+/** Dashboard bundles are expensive — allow short stale-while-revalidate window. */
+const BUNDLE_CACHE_MS = 45000;
 const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
 const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v1';
 const GET_STORAGE_KEY = 'umang_get_cache_v1';
@@ -49,11 +51,19 @@ function writePersistedMap(key: string, value: Record<string, { ts: number; data
     } catch {}
 }
 
+function ttlForCacheKey(key: string) {
+    // Cache keys are `${url}?${params}` — match bundle paths at the start.
+    if (key.startsWith('/stats/dashboard-bundle?') || key.startsWith('/stats/me-bundle?')) {
+        return BUNDLE_CACHE_MS;
+    }
+    return GET_CACHE_MS;
+}
+
 function hydrateGetCacheFromStorage() {
     const stored = readPersistedMap(GET_STORAGE_KEY);
     const now = Date.now();
     for (const [k, v] of Object.entries(stored)) {
-        if (v?.ts && now - v.ts < GET_CACHE_MS) {
+        if (v?.ts && now - v.ts < ttlForCacheKey(k)) {
             _getCache.set(k, v);
         }
     }
@@ -64,7 +74,7 @@ function persistGetCacheEntry(key: string, entry: { ts: number; data: unknown })
     stored[key] = entry;
     const now = Date.now();
     for (const k of Object.keys(stored)) {
-        if (!stored[k]?.ts || now - stored[k].ts >= GET_CACHE_MS) delete stored[k];
+        if (!stored[k]?.ts || now - stored[k].ts >= ttlForCacheKey(k)) delete stored[k];
     }
     writePersistedMap(GET_STORAGE_KEY, stored);
 }
@@ -88,37 +98,53 @@ export function broadcastDataChanged() {
 }
 
 const LIVE_GET_PREFIXES = ['/stats', '/leads', '/employees', '/activities', '/bookings', '/loans', '/visits', '/notifications'];
+const BUNDLE_GET_PATHS = new Set(['/stats/dashboard-bundle', '/stats/me-bundle']);
 
 function isLiveGetUrl(url: string) {
     const path = String(url || '').split('?')[0];
     if (path === '/notifications/unread-count') return false;
-    if (path === '/stats/dashboard-bundle' || path === '/stats/me-bundle') return true;
+    // Bundles use a dedicated short TTL below — not treated as always-live.
+    if (BUNDLE_GET_PATHS.has(path)) return false;
     return LIVE_GET_PREFIXES.some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
+}
+
+function cacheTtlForUrl(url: string) {
+    const path = String(url || '').split('?')[0];
+    if (BUNDLE_GET_PATHS.has(path)) return BUNDLE_CACHE_MS;
+    return GET_CACHE_MS;
 }
 
 const _axiosGet = api.get.bind(api);
 api.get = function getWithCache(url: string, config?: any) {
-    if (config?.bypassCache || isLiveGetUrl(url)) {
-        return _axiosGet(url, config);
-    }
     const key = getCacheKey(url, config?.params);
-    const hit = _getCache.get(key);
-    if (hit && Date.now() - hit.ts < GET_CACHE_MS) {
-        return Promise.resolve({
-            data: hit.data,
-            status: 200,
-            statusText: 'OK',
-            headers: {},
-            config: { ...(config || {}), url, method: 'get' },
-        });
-    }
+    const ttl = cacheTtlForUrl(url);
+    const bypass = !!config?.bypassCache || isLiveGetUrl(url);
+
+    // Always coalesce identical in-flight GETs (even live/bypass) to avoid
+    // duplicate dashboard / panel storms on mount + live refresh.
     const pending = _inflightGets.get(key);
     if (pending) return pending;
+
+    if (!bypass) {
+        const hit = _getCache.get(key);
+        if (hit && Date.now() - hit.ts < ttl) {
+            return Promise.resolve({
+                data: hit.data,
+                status: 200,
+                statusText: 'OK',
+                headers: {},
+                config: { ...(config || {}), url, method: 'get' },
+            });
+        }
+    }
+
     const promise = _axiosGet(url, config)
         .then((res) => {
-            const entry = { ts: Date.now(), data: res.data };
-            _getCache.set(key, entry);
-            persistGetCacheEntry(key, entry);
+            if (!bypass || BUNDLE_GET_PATHS.has(String(url || '').split('?')[0])) {
+                const entry = { ts: Date.now(), data: res.data };
+                _getCache.set(key, entry);
+                persistGetCacheEntry(key, entry);
+            }
             _inflightGets.delete(key);
             return res;
         })

@@ -18,7 +18,8 @@ export function AssignLeadsPanel({ compact = false }: Props) {
   const load = useCallback(async (silent = false) => {
     if (!silent && !stats) setLoading(true);
     try {
-      const res = await api.get('/stats/assignment', { bypassCache: true });
+      // Soft load uses GET cache when fresh; mutations already clear via broadcastDataChanged.
+      const res = await api.get('/stats/assignment');
       setStats(res.data);
       setSnapshot('assign-leads-panel', res.data);
     } finally {

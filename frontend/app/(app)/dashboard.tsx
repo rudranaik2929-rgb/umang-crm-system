@@ -52,43 +52,57 @@ export default function Dashboard() {
   const [openLead, setOpenLead] = useState<string | null>(null);
   const [empMetric, setEmpMetric] = useState<{ employeeId: string; employeeName: string; metric: string } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [panelsReady, setPanelsReady] = useState(!!cached);
+  const loadInFlight = React.useRef<Promise<void> | null>(null);
   const isManager = user?.role === 'manager';
   const canLoadDashboard = canAccessMainDashboard(user?.role, user?.email);
-  const load = useCallback(async () => {
+  /** Soft = SWR (keep UI, use short GET cache). Force = explicit Refresh (bypass + optional server flush). */
+  const load = useCallback(async (opts?: { force?: boolean }) => {
+    const force = !!opts?.force;
+    if (loadInFlight.current && !force) return loadInFlight.current;
     setLoadError(null);
-    try {
-      clearGetCache();
-      const res = await api.get('/stats/dashboard-bundle', { bypassCache: true, timeout: 90000 });
-      const bundle = res.data || {};
-      const nextStats = bundle.stats || {};
-      const nextGraph = bundle.graph || {};
-      const nextLeads = Array.isArray(bundle.leads) ? bundle.leads : [];
-      const nextEmployees = Array.isArray(bundle.employees) ? bundle.employees : [];
-      const nextBuckets = nextStats.lead_buckets || {};
-      setStats(nextStats);
-      setGraphData(nextGraph);
-      setLeads(nextLeads);
-      setEmployees(nextEmployees);
-      setBuckets(nextBuckets);
-      setSnapshot('dashboard', { stats: nextStats, graphData: nextGraph, leads: nextLeads, employees: nextEmployees, buckets: nextBuckets });
-    } catch (err: any) {
-      const status = err?.response?.status;
-      const detail = err?.response?.data?.detail;
-      const msg =
-        status === 401
-          ? 'Session expired. Please log in again.'
-          : status === 500
-            ? 'Dashboard API error on server. Wait for backend redeploy, then tap Retry.'
-          : typeof detail === 'string'
-            ? detail
-            : err?.message === 'Network Error'
-              ? 'Could not reach dashboard API (server error or still deploying). Tap Retry in a minute.'
-              : err?.message || 'Could not load dashboard. Check your connection and try again.';
-      setLoadError(msg);
-      console.warn('Dashboard load failed', err?.response?.status, err?.message);
-    } finally {
-      setLoading(false);
-    }
+    const run = (async () => {
+      try {
+        if (force) clearGetCache();
+        const res = await api.get('/stats/dashboard-bundle', {
+          bypassCache: force,
+          timeout: 90000,
+        });
+        const bundle = res.data || {};
+        const nextStats = bundle.stats || {};
+        const nextGraph = bundle.graph || {};
+        const nextLeads = Array.isArray(bundle.leads) ? bundle.leads : [];
+        const nextEmployees = Array.isArray(bundle.employees) ? bundle.employees : [];
+        const nextBuckets = nextStats.lead_buckets || {};
+        setStats(nextStats);
+        setGraphData(nextGraph);
+        setLeads(nextLeads);
+        setEmployees(nextEmployees);
+        setBuckets(nextBuckets);
+        setSnapshot('dashboard', { stats: nextStats, graphData: nextGraph, leads: nextLeads, employees: nextEmployees, buckets: nextBuckets });
+        setPanelsReady(true);
+      } catch (err: any) {
+        const status = err?.response?.status;
+        const detail = err?.response?.data?.detail;
+        const msg =
+          status === 401
+            ? 'Session expired. Please log in again.'
+            : status === 500
+              ? 'Dashboard API error on server. Wait for backend redeploy, then tap Retry.'
+            : typeof detail === 'string'
+              ? detail
+              : err?.message === 'Network Error'
+                ? 'Could not reach dashboard API (server error or still deploying). Tap Retry in a minute.'
+                : err?.message || 'Could not load dashboard. Check your connection and try again.';
+        setLoadError(msg);
+        console.warn('Dashboard load failed', err?.response?.status, err?.message);
+      } finally {
+        setLoading(false);
+        loadInFlight.current = null;
+      }
+    })();
+    loadInFlight.current = run;
+    return run;
   }, []);
 
   useEffect(() => {
@@ -100,7 +114,8 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (!canLoadDashboard) return;
-    load();
+    // Snapshot paints immediately; soft refresh fills gaps without blocking UI.
+    load({ force: false });
   }, [load, canLoadDashboard]);
 
   const refreshDashboard = useCallback(async () => {
@@ -112,11 +127,11 @@ export default function Dashboard() {
     } catch {
       // Safe if route not deployed yet.
     }
-    await load();
+    await load({ force: true });
   }, [load]);
 
   useLiveRefresh(() => {
-    if (canLoadDashboard) load();
+    if (canLoadDashboard) void load({ force: false });
   });
 
   const model = useMemo(() => {
@@ -346,7 +361,11 @@ export default function Dashboard() {
             </View>
             <Ionicons name="calendar-outline" size={20} color="#F97316" />
           </View>
-          <FollowUpsPanel compact maxItems={12} showEmployeeName onOpenLead={setOpenLead} />
+          {panelsReady ? (
+            <FollowUpsPanel compact maxItems={12} showEmployeeName onOpenLead={setOpenLead} />
+          ) : (
+            <ActivityIndicator color={colors.primary} style={{ marginVertical: 12 }} />
+          )}
         </Pressable>
 
         <EmployeePerformance
@@ -371,7 +390,7 @@ export default function Dashboard() {
                 <Ionicons name="person-add-outline" size={20} color={colors.primary} />
               </Pressable>
             </View>
-            <AssignLeadsPanel compact />
+            {panelsReady ? <AssignLeadsPanel compact /> : null}
           </View>
         )}
 
@@ -452,14 +471,14 @@ export default function Dashboard() {
         bucket={leadsBucket || 'all'}
         onClose={() => setLeadsBucket(null)}
         userRole={user?.role}
-        onChanged={load}
+        onChanged={() => load({ force: true })}
         employees={employees}
       />
       <LeadDetailModal
         leadId={openLead}
         visible={openLead !== null}
         onClose={() => setOpenLead(null)}
-        onChanged={load}
+        onChanged={() => load({ force: true })}
         userRole={user?.role}
         overlayZIndex={12000}
       />
@@ -470,7 +489,7 @@ export default function Dashboard() {
         metric={empMetric?.metric ?? null}
         onClose={() => setEmpMetric(null)}
         userRole={user?.role}
-        onChanged={load}
+        onChanged={() => load({ force: true })}
         onOpenLead={(leadId) => {
           setEmpMetric(null);
           setOpenLead(leadId);
