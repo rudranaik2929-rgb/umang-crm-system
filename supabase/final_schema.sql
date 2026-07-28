@@ -186,6 +186,7 @@ create table if not exists bookings (
   tower text,
   booking_amount numeric not null default 0,
   brokerage_amount numeric not null default 0,
+  brokerage_status text not null default 'pending',
   flat_cost numeric,
   agreement_value numeric,
   stamp_duty numeric,
@@ -352,6 +353,7 @@ alter table visit_followups add column if not exists updated_at timestamptz not 
 alter table visit_followups alter column visit_id drop not null;
 
 alter table bookings add column if not exists brokerage_amount numeric not null default 0;
+alter table bookings add column if not exists brokerage_status text not null default 'pending';
 alter table bookings add column if not exists flat_cost numeric;
 alter table bookings add column if not exists agreement_value numeric;
 alter table bookings add column if not exists stamp_duty numeric;

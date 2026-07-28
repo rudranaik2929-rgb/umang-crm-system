@@ -67,7 +67,8 @@ export const NAV_ITEMS = [
 // Which sidebar items each role can access
 export const ROLE_ACCESS: Record<string, string[]> = {
   admin: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'telecaller', 'sales-executive', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
-  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'bookings', 'loans', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
+  // Manager: no Bookings / Loan Department sidebar items (dashboard access unchanged).
+  manager: ['dashboard', 'my-dashboard', 'pipeline', 'assign-leads', 'integrations', 'broker', 'tracking', 'employees', 'negative'],
   telecaller: ['my-dashboard', 'telecaller', 'pipeline', 'negative'],
   site_visit: ['my-dashboard', 'sales-executive', 'pipeline'],
   sales_executive: ['my-dashboard', 'sales-executive', 'telecaller', 'pipeline'],
@@ -134,11 +135,13 @@ export function effectivePages(role?: string | null, email?: string | null, allo
     pages = strip(ROLE_ACCESS[normalizedRole] || ROLE_ACCESS.admin);
   }
   // Manager gets main Dashboard + My Dashboard + Employee Tracking + Not Interested.
+  // Bookings / Loan Department stay hidden from manager sidebar (role-only).
   if (normalizedRole === 'manager') {
     if (!pages.includes('dashboard')) pages = ['dashboard', ...pages];
     if (!pages.includes('my-dashboard')) pages = ['my-dashboard', ...pages];
     if (!pages.includes('tracking')) pages = [...pages, 'tracking'];
     if (!pages.includes('negative')) pages = [...pages, 'negative'];
+    pages = pages.filter((p) => p !== 'bookings' && p !== 'loans');
   }
   // Booking employees always need the Bookings page for manual leads & new bookings.
   if (normalizedRole === 'booking' && !pages.includes('bookings')) {

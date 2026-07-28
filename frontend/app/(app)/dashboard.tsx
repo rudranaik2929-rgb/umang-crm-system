@@ -175,6 +175,8 @@ export default function Dashboard() {
       employees: Number(stats?.employees || 0),
       campaigns: Number(stats?.campaigns || 0),
       revenue: Number(stats?.revenue_pipeline || 0),
+      brokerageReceived: Number(stats?.brokerage_received || 0),
+      brokeragePending: Number(stats?.brokerage_pending || 0),
       bookingTaskBuckets: stats?.booking_task_buckets || {},
       activeBookings: Number(stats?.active_bookings || stats?.bookings || 0),
     };
@@ -257,6 +259,8 @@ export default function Dashboard() {
           {canSeeRevenue(user?.role, user?.email) && (
             <RevenuePanel
               revenue={model.revenue}
+              brokerageReceived={model.brokerageReceived}
+              brokeragePending={model.brokeragePending}
               bookings={model.bookings}
               confirmedBookings={model.confirmedBookings}
               disbursedLoans={model.disbursedLoans}
@@ -498,7 +502,21 @@ function ScorePanel({ score, hot, cold }: { score: number; hot: number; cold: nu
   );
 }
 
-function RevenuePanel({ revenue, bookings, confirmedBookings, disbursedLoans }: { revenue: number; bookings: number; confirmedBookings: number; disbursedLoans: number }) {
+function RevenuePanel({
+  revenue,
+  brokerageReceived,
+  brokeragePending,
+  bookings,
+  confirmedBookings,
+  disbursedLoans,
+}: {
+  revenue: number;
+  brokerageReceived: number;
+  brokeragePending: number;
+  bookings: number;
+  confirmedBookings: number;
+  disbursedLoans: number;
+}) {
   const { colors } = useTheme();
   return (
     <View style={[styles.panel, styles.heroPanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
@@ -512,6 +530,22 @@ function RevenuePanel({ revenue, bookings, confirmedBookings, disbursedLoans }: 
       <Text style={[styles.revenueValue, { color: colors.text }]} numberOfLines={1} adjustsFontSizeToFit>
         {formatCurrency(revenue)}
       </Text>
+      <View style={[styles.revenueStats, { marginBottom: 10 }]}>
+        <View style={styles.tinyStat}>
+          <View style={[styles.tinyDot, { backgroundColor: colors.positive }]} />
+          <View>
+            <Text style={[styles.tinyValue, { color: colors.text }]}>{formatCurrency(brokerageReceived)}</Text>
+            <Text style={[styles.tinyLabel, { color: colors.textMuted }]}>Received</Text>
+          </View>
+        </View>
+        <View style={styles.tinyStat}>
+          <View style={[styles.tinyDot, { backgroundColor: colors.warning }]} />
+          <View>
+            <Text style={[styles.tinyValue, { color: colors.text }]}>{formatCurrency(brokeragePending)}</Text>
+            <Text style={[styles.tinyLabel, { color: colors.textMuted }]}>Pending</Text>
+          </View>
+        </View>
+      </View>
       <View style={styles.revenueStats}>
         <TinyStat label="Bookings" value={bookings} color={colors.warning} />
         <TinyStat label="Confirmed" value={confirmedBookings} color={colors.positive} />

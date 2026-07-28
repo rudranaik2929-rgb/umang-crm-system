@@ -80,6 +80,7 @@ export default function Bookings() {
   const [editingBooking, setEditingBooking] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [localBrokerage, setLocalBrokerage] = useState<Record<string, string>>({});
+  const [localBrokerageStatus, setLocalBrokerageStatus] = useState<Record<string, 'pending' | 'received'>>({});
   const [localCharges, setLocalCharges] = useState<Record<string, Record<string, string>>>({});
   const [openChargesId, setOpenChargesId] = useState<string | null>(null);
   const [registrationReceiptBooking, setRegistrationReceiptBooking] = useState<any | null>(null);
@@ -202,6 +203,9 @@ export default function Bookings() {
       const m = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
       return m ? parseFloat(m[1]) : 0;
     })();
+    const brokerageStatus: 'pending' | 'received' =
+      localBrokerageStatus[b.booking_id]
+      ?? (String(b.brokerage_status || 'pending').toLowerCase() === 'received' ? 'received' : 'pending');
     const completed = completedTasksFor(b);
     const completedSet = new Set(completed);
     const completedLabels = BOOKING_TASKS.filter((task) => completedSet.has(task.key));
@@ -381,6 +385,41 @@ export default function Bookings() {
                 ({(((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) / b.booking_amount) * 100).toFixed(2)}%)
               </Text>
             ) : null}
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
+              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>STATUS</Text>
+              {([
+                { key: 'pending' as const, label: 'Pending', color: colors.warning },
+                { key: 'received' as const, label: 'Received', color: colors.positive },
+              ]).map((opt) => {
+                const active = brokerageStatus === opt.key;
+                return (
+                  <Pressable
+                    key={opt.key}
+                    testID={`brokerage-status-${opt.key}-${b.booking_id}`}
+                    onPress={() => {
+                      setLocalBrokerageStatus((prev) => ({ ...prev, [b.booking_id]: opt.key }));
+                      update(b.booking_id, { brokerage_status: opt.key }, 'brokerage-status');
+                    }}
+                    disabled={busy !== null}
+                    style={{
+                      height: 28,
+                      paddingHorizontal: 10,
+                      borderRadius: 6,
+                      borderWidth: 1,
+                      borderColor: active ? opt.color : colors.border,
+                      backgroundColor: active ? opt.color + '18' : colors.surfaceAlt,
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      opacity: busy !== null ? 0.65 : 1,
+                    }}
+                  >
+                    <Text style={{ color: active ? opt.color : colors.textSecondary, fontSize: 11, fontWeight: '700' }}>
+                      {opt.label}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
         ) : null}
 

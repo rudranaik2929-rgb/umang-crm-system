@@ -1674,6 +1674,8 @@ class BookingCreate(BaseModel):
     flat_cost: Optional[float]=None; agreement_value: Optional[float]=None
     stamp_duty: Optional[float]=None; registration_fees: Optional[float]=None
     gst: Optional[float]=None; society_charges: Optional[float]=None
+    brokerage_amount: Optional[float]=None
+    brokerage_status: Optional[str]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
     registration_receipt: Optional[Dict[str, Any]]=None
@@ -1685,6 +1687,7 @@ class BookingUpdate(BaseModel):
     stamp_duty: Optional[float]=None; registration_fees: Optional[float]=None
     gst: Optional[float]=None; society_charges: Optional[float]=None
     brokerage_amount: Optional[float]=None
+    brokerage_status: Optional[str]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
     registration_receipt: Optional[Dict[str, Any]]=None
@@ -3184,6 +3187,31 @@ def booking_brokerage_amount(booking: Dict[str, Any]) -> float:
     raw = str(booking.get("agreement_status") or "")
     m = re.search(r"Brokerage:\s*([0-9.]+)", raw)
     return float(m.group(1)) if m else 0.0
+
+
+def normalize_brokerage_status(value: Any) -> str:
+    """Normalize brokerage payment status to pending | received (default pending)."""
+    status = str(value or "pending").strip().lower()
+    return "received" if status == "received" else "pending"
+
+
+def booking_brokerage_by_status(bookings: List[Dict[str, Any]]) -> Dict[str, float]:
+    """Split total brokerage into received vs pending amounts."""
+    received = 0.0
+    pending = 0.0
+    for booking in bookings:
+        amount = booking_brokerage_amount(booking)
+        if amount <= 0:
+            continue
+        if normalize_brokerage_status(booking.get("brokerage_status")) == "received":
+            received += amount
+        else:
+            pending += amount
+    return {
+        "received": received,
+        "pending": pending,
+        "total": received + pending,
+    }
 
 def is_legacy_skeleton_booking(booking: Dict[str, Any]) -> bool:
     """Auto-created placeholder rows (site-visit sync) — hidden from the booking list."""
@@ -7749,12 +7777,14 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
         "token_received": token, "agreement_status": "pending",
         "payment_progress": p.payment_progress if p.payment_progress is not None else (int((token / amount) * 100) if amount else 0),
         "status": "active", "created_at": now_utc().isoformat(),
+        "brokerage_status": normalize_brokerage_status(p.brokerage_status),
     }
     optional_costs = {
         "unit_number": p.unit_number, "tower": p.tower,
         "flat_cost": p.flat_cost, "agreement_value": p.agreement_value,
         "stamp_duty": p.stamp_duty, "registration_fees": p.registration_fees,
         "gst": p.gst, "society_charges": p.society_charges,
+        "brokerage_amount": p.brokerage_amount,
         "payment_status": p.payment_status,
         "booking_date": p.booking_date.isoformat() if p.booking_date else now_utc().isoformat(),
         "starred": p.starred, "completed_tasks": p.completed_tasks,
@@ -7810,6 +7840,8 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
             booking_before = cache_before[0]
 
     data = model_payload(p)
+    if "brokerage_status" in data:
+        data["brokerage_status"] = normalize_brokerage_status(data.get("brokerage_status"))
     officer_id = resolve_employee_id(cu)
     if officer_id and not (booking_before or {}).get("booking_officer_id"):
         data["booking_officer_id"] = officer_id
@@ -7821,8 +7853,8 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
         elif "payment_progress" not in data:
             data["payment_progress"] = 0
     updated = sb_update("bookings", "booking_id", booking_id, data)
-    if not updated and any(key in data for key in ["completed_tasks", "starred"]):
-        compatible_data = {k: v for k, v in data.items() if k not in ["completed_tasks", "starred"]}
+    if not updated and any(key in data for key in ["completed_tasks", "starred", "brokerage_status"]):
+        compatible_data = {k: v for k, v in data.items() if k not in ["completed_tasks", "starred", "brokerage_status"]}
         if compatible_data:
             updated = sb_update("bookings", "booking_id", booking_id, compatible_data)
     # Update cache
@@ -7873,6 +7905,11 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
             )
         else:
             sync_lead_stage(lead_id, "booking", force=True)
+    if any(k in data for k in ("brokerage_amount", "brokerage_status")):
+        _dashboard_stats_cache["ts"] = 0.0
+        _dashboard_stats_cache["data"] = None
+        _graph_cache["ts"] = 0.0
+        _graph_cache["data"] = None
     return updated
 
 @api_router.delete("/bookings/{booking_id}")
@@ -8866,7 +8903,7 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
 def _compute_dashboard_stats() -> Dict[str, Any]:
     """Shared pipeline stats for admin + manager main Dashboard."""
     fetched = sb_select_parallel({
-        "bookings": ("bookings", {"select": "booking_id,lead_id,status,completed_tasks,booking_officer_id,agreement_status,booking_amount"}),
+        "bookings": ("bookings", {"select": "booking_id,lead_id,status,completed_tasks,booking_officer_id,agreement_status,booking_amount,brokerage_amount,brokerage_status"}),
         "visits": ("visits", {"select": "visit_id,status"}),
         "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage"}),
         "customers": ("customers", {"select": "customer_id,lead_id"}),
@@ -8909,7 +8946,8 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
 
     employees = fetched["employees"]
     campaigns = fetched["campaigns"]
-    rev = sum(booking_brokerage_amount(b) for b in bookings)
+    brokerage_split = booking_brokerage_by_status(bookings)
+    rev = brokerage_split["total"]
     today = now_utc().date().isoformat()
     lead_buckets = compute_lead_bucket_counts(leads, today)
     follow_up_total = lead_buckets.get("follow_up", 0)
@@ -8941,6 +8979,8 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
         "employees": len(employees),
         "campaigns": len(campaigns),
         "revenue_pipeline": rev,
+        "brokerage_received": brokerage_split["received"],
+        "brokerage_pending": brokerage_split["pending"],
         "stage_distribution": stage_dist,
         "lead_buckets": lead_buckets,
         "booking_task_buckets": booking_task_buckets,
@@ -8964,7 +9004,7 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
     now = now_utc()
     graph_data = sb_select_parallel({
         "leads": ("leads", {"select": "lead_id,created_at,source,status,stage", "created_at": f"gte.{(now - timedelta(days=400)).isoformat()}"}),
-        "bookings": ("bookings", {"select": "booking_id,brokerage_amount,agreement_status,created_at"}),
+        "bookings": ("bookings", {"select": "booking_id,brokerage_amount,brokerage_status,agreement_status,created_at"}),
         "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
     })
     leads = prune_session_list_against_db("leads", graph_data["leads"], "lead_id")
