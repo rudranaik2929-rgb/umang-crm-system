@@ -16,6 +16,11 @@ export interface User {
   dashboard_type?: string | null;
 }
 
+export type ExchangeResult =
+  | { status: 'ok'; user: User }
+  | { status: 'invalid' }
+  | { status: 'shift_required'; active_device?: string; message?: string };
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
@@ -23,7 +28,12 @@ interface AuthContextType {
   requestLocationAccess: () => void;
   refresh: () => Promise<void>;
   logout: () => Promise<void>;
-  exchangeSession: (credentials: any) => Promise<User | null>;
+  exchangeSession: (credentials: {
+    email: string;
+    password: string;
+    force_shift?: boolean;
+    device_label?: string;
+  }) => Promise<ExchangeResult>;
   setRole: (role: string) => Promise<void>;
   actAs: (employeeId: string | null) => Promise<void>;
 }
@@ -35,10 +45,21 @@ const AuthContext = createContext<AuthContextType>({
   requestLocationAccess: () => {},
   refresh: async () => {},
   logout: async () => {},
-  exchangeSession: async () => null,
+  exchangeSession: async () => ({ status: 'invalid' }),
   setRole: async () => {},
   actAs: async () => {},
 });
+
+function parseShiftDetail(detail: any): { active_device?: string; message?: string } | null {
+  if (!detail) return null;
+  if (typeof detail === 'object' && detail.requires_shift) {
+    return {
+      active_device: typeof detail.active_device === 'string' ? detail.active_device : undefined,
+      message: typeof detail.message === 'string' ? detail.message : undefined,
+    };
+  }
+  return null;
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const cachedUser = getSnapshot<User>(USER_SNAPSHOT_KEY);
@@ -58,8 +79,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Keep cached session when Render is waking up — do not force logout on slow cold start.
         return;
       }
+      const detail = e?.response?.data?.detail;
+      const moved =
+        e?.response?.status === 401 &&
+        typeof detail === 'string' &&
+        /session moved|another device/i.test(detail);
       setUser(null);
       setSnapshot(USER_SNAPSHOT_KEY, null);
+      if (moved) {
+        await setToken(null);
+        clearSnapshots();
+      }
     } finally {
       setLoading(false);
     }
@@ -97,6 +127,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [user?.user_id, refresh]);
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const onMoved = () => {
+      setUser(null);
+      setSnapshot(USER_SNAPSHOT_KEY, null);
+    };
+    window.addEventListener('umang:session-moved', onMoved);
+    return () => window.removeEventListener('umang:session-moved', onMoved);
+  }, []);
+
   const logout = useCallback(async () => {
     try {
       await api.post('/auth/logout');
@@ -107,7 +147,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setSnapshot(USER_SNAPSHOT_KEY, null);
   }, []);
 
-  const exchangeSession = useCallback(async (credentials: { email: string; password: string }): Promise<User | null> => {
+  const exchangeSession = useCallback(async (credentials: {
+    email: string;
+    password: string;
+    force_shift?: boolean;
+    device_label?: string;
+  }): Promise<ExchangeResult> => {
+    if (!credentials || typeof credentials !== 'object' || !credentials.email) {
+      return { status: 'invalid' };
+    }
     const maxAttempts = 4;
     let lastError: any = null;
 
@@ -120,20 +168,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         }
         setUser(r.data.user);
         setSnapshot(USER_SNAPSHOT_KEY, r.data.user);
-        return r.data.user as User;
+        return { status: 'ok', user: r.data.user as User };
       } catch (e: any) {
         lastError = e;
-        const detail = e?.response?.data?.detail;
+        const shift = parseShiftDetail(e?.response?.data?.detail);
+        if (e?.response?.status === 409 && shift) {
+          return {
+            status: 'shift_required',
+            active_device: shift.active_device,
+            message: shift.message,
+          };
+        }
         if (e?.response?.status === 401) {
           console.warn('exchangeSession failed: invalid credentials');
-          return null;
+          return { status: 'invalid' };
         }
         if (attempt < maxAttempts && isTransientApiError(e)) {
           console.warn(`exchangeSession attempt ${attempt}/${maxAttempts} — server not ready, retrying…`, BACKEND);
           await new Promise((r) => setTimeout(r, 3000 * attempt));
           continue;
         }
-        console.warn('exchangeSession failed', detail || e);
+        console.warn('exchangeSession failed', e?.response?.data?.detail || e);
         break;
       }
     }
@@ -146,7 +201,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         'Cannot reach the CRM server. Check your internet connection and try again.',
       );
     }
-    if (e?.response?.status === 401) return null;
+    if (e?.response?.status === 401) return { status: 'invalid' };
     const detail = e?.response?.data?.detail;
     throw new Error(typeof detail === 'string' ? detail : 'Could not sign in. Check email/password and try again.');
   }, []);

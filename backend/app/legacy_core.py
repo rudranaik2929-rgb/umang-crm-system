@@ -1763,6 +1763,179 @@ async def get_session_token(request: Request):
     if auth and auth.startswith("Bearer "): return auth[7:]
     return None
 
+
+# ---- Single-device session lock (all employees; admin exempt) ----
+# Non-admin roles may hold one active_session_id. Second login returns 409
+# requires_shift; Shift issues a new sid and invalidates the prior session.
+SINGLE_DEVICE_ROLES = frozenset({
+    "telecaller", "site_visit", "sales_executive",
+    "booking", "loan", "marketing", "manager",
+})
+# In-memory mirrors of users.active_session_id (DB is source of truth across workers)
+USER_ACTIVE_SIDS: Dict[str, str] = {}
+USER_ACTIVE_DEVICES: Dict[str, str] = {}
+_SID_CACHE_AT: Dict[str, float] = {}
+_SID_CACHE_TTL_SEC = 15.0
+SESSION_MOVED_DETAIL = "Session moved to another device. Please log in again."
+
+
+def role_requires_single_device(role: Optional[str]) -> bool:
+    """True for CRM employees; admins may use multiple devices."""
+    r = (role or "").strip().lower()
+    if not r or r == "admin":
+        return False
+    # Named employee roles + any future non-admin role
+    return True
+
+
+def device_label_from_request(request: Optional[Request], override: Optional[str] = None) -> str:
+    if override and str(override).strip():
+        return str(override).strip()[:120]
+    if request is None:
+        return "Unknown device"
+    ua = (request.headers.get("user-agent") or "").lower()
+    if "mobile" in ua or "android" in ua or "iphone" in ua:
+        platform = "Mobile"
+    elif "ipad" in ua or "tablet" in ua:
+        platform = "Tablet"
+    else:
+        platform = "Desktop"
+    if "edg/" in ua or "edg " in ua:
+        browser = "Edge"
+    elif "chrome" in ua and "chromium" not in ua:
+        browser = "Chrome"
+    elif "firefox" in ua:
+        browser = "Firefox"
+    elif "safari" in ua:
+        browser = "Safari"
+    else:
+        browser = "Browser"
+    return f"{platform} · {browser}"
+
+
+def _cache_active_session(user_id: str, session_id: Optional[str], device_label: Optional[str] = None) -> None:
+    if not user_id:
+        return
+    if session_id:
+        USER_ACTIVE_SIDS[user_id] = session_id
+        if device_label:
+            USER_ACTIVE_DEVICES[user_id] = device_label
+    else:
+        USER_ACTIVE_SIDS.pop(user_id, None)
+        USER_ACTIVE_DEVICES.pop(user_id, None)
+    _SID_CACHE_AT[user_id] = time.time()
+
+
+def load_active_session(user_id: str, *, force_db: bool = False) -> Tuple[Optional[str], Optional[str]]:
+    """Return (active_session_id, active_device_label) from cache or users row."""
+    if not user_id:
+        return None, None
+    cached_at = _SID_CACHE_AT.get(user_id, 0)
+    if not force_db and user_id in _SID_CACHE_AT and (time.time() - cached_at) < _SID_CACHE_TTL_SEC:
+        return USER_ACTIVE_SIDS.get(user_id), USER_ACTIVE_DEVICES.get(user_id)
+    if user_id in HARDCODED_USERS:
+        return USER_ACTIVE_SIDS.get(user_id), USER_ACTIVE_DEVICES.get(user_id)
+    try:
+        rows = sb_select(
+            "users",
+            {
+                "user_id": f"eq.{user_id}",
+                "select": "active_session_id,active_device_label",
+                "limit": "1",
+            },
+        )
+    except Exception as exc:
+        logging.warning("load_active_session failed for %s: %s", user_id, exc)
+        return USER_ACTIVE_SIDS.get(user_id), USER_ACTIVE_DEVICES.get(user_id)
+    if not rows:
+        _cache_active_session(user_id, USER_ACTIVE_SIDS.get(user_id), USER_ACTIVE_DEVICES.get(user_id))
+        return USER_ACTIVE_SIDS.get(user_id), USER_ACTIVE_DEVICES.get(user_id)
+    sid = rows[0].get("active_session_id") or None
+    label = rows[0].get("active_device_label") or None
+    _cache_active_session(user_id, sid, label)
+    return sid, label
+
+
+def persist_active_session(user_id: str, session_id: str, device_label: str) -> None:
+    """Write active session to memory + users table (best-effort if columns missing)."""
+    _cache_active_session(user_id, session_id, device_label)
+    if user_id in HARDCODED_USERS:
+        return
+    try:
+        sb_update(
+            "users",
+            "user_id",
+            user_id,
+            {
+                "active_session_id": session_id,
+                "active_device_label": device_label,
+                "session_updated_at": now_utc().isoformat(),
+            },
+        )
+    except Exception as exc:
+        logging.warning("persist_active_session failed for %s: %s", user_id, exc)
+
+
+def clear_active_session(user_id: str, only_if_sid: Optional[str] = None) -> None:
+    current, _ = load_active_session(user_id)
+    if only_if_sid and current and current != only_if_sid:
+        return
+    _cache_active_session(user_id, None)
+
+    def _clear() -> None:
+        if user_id in HARDCODED_USERS:
+            return
+        try:
+            sb_update(
+                "users",
+                "user_id",
+                user_id,
+                {
+                    "active_session_id": None,
+                    "active_device_label": None,
+                    "session_updated_at": now_utc().isoformat(),
+                },
+            )
+        except Exception as exc:
+            logging.warning("clear_active_session failed for %s: %s", user_id, exc)
+
+    threading.Thread(target=_clear, daemon=True).start()
+
+
+def session_conflict_payload(active_device: Optional[str] = None) -> Dict[str, Any]:
+    return {
+        "requires_shift": True,
+        "active_device": active_device or "another device",
+        "message": "Already logged in on another device. Shift to move your session here?",
+    }
+
+
+def raise_if_session_conflict(
+    user: Dict[str, Any],
+    *,
+    force_shift: bool,
+) -> None:
+    """Raise 409 when a non-admin already has a different active session."""
+    if force_shift or not role_requires_single_device(user.get("role")):
+        return
+    uid = user.get("user_id") or ""
+    active_sid, active_device = load_active_session(uid, force_db=True)
+    if active_sid:
+        raise HTTPException(status_code=409, detail=session_conflict_payload(active_device))
+
+
+def validate_jwt_session_id(user_id: str, role: Optional[str], jwt_sid: Optional[str]) -> None:
+    """Reject requests whose JWT sid no longer matches the user's active session."""
+    if not role_requires_single_device(role):
+        return
+    active_sid, _ = load_active_session(user_id)
+    if not active_sid:
+        # Pre-migration / no lock yet — allow.
+        return
+    if not jwt_sid or jwt_sid != active_sid:
+        raise HTTPException(status_code=401, detail=SESSION_MOVED_DETAIL)
+
+
 # Hardcoded user registry — map user_id to their user object for cold-start recovery
 HARDCODED_USERS = {
     "user_admin001": {
@@ -1861,25 +2034,45 @@ def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
     u["allowed_pages"] = pages
     return u
 
-def issue_session(user: Dict[str, Any], response: Response):
+def issue_session(
+    user: Dict[str, Any],
+    response: Response,
+    *,
+    request: Optional[Request] = None,
+    device_label: Optional[str] = None,
+    force_shift: bool = False,
+):
     user = _finalize_user_session(dict(user))
     user["_session_ready"] = True
+    uid = user["user_id"]
+    label = device_label_from_request(request, device_label)
+    session_id = str(uuid.uuid4())
+
+    if role_requires_single_device(user.get("role")):
+        # Drop prior JWTs so the previous device is forced out immediately.
+        # Keep DB lock until we overwrite it below (avoid a conflict gap).
+        invalidate_sessions_for_user(uid, clear_device_lock=False)
+        persist_active_session(uid, session_id, label)
+    elif force_shift:
+        persist_active_session(uid, session_id, label)
+
     token, expires = create_jwt({
-        "sub": user["user_id"],
+        "sub": uid,
         "email": user.get("email"),
         "role": user.get("role"),
         "name": user.get("name"),
         "employee_id": user.get("employee_id"),
         "allowed_pages": user.get("allowed_pages"),
         "dashboard_type": user.get("dashboard_type"),
+        "sid": session_id,
     })
-    LOCAL_SESSIONS[token] = {"user": user, "expires_at": expires}
+    LOCAL_SESSIONS[token] = {"user": user, "expires_at": expires, "sid": session_id}
     # Persist session in background — login response returns immediately (JWT is authoritative).
     def _persist_session():
         try:
             sb_insert("sessions", {
                 "session_token": token,
-                "user_id": user["user_id"],
+                "user_id": uid,
                 "created_at": now_utc().isoformat(),
                 "expires_at": expires,
             })
@@ -1901,6 +2094,7 @@ def issue_session(user: Dict[str, Any], response: Response):
         "access_token": token,
         "token_type": "bearer",
         "expires_at": expires,
+        "session_id": session_id,
     }
 
 def ensure_roles(cu: User, allowed: Iterable[str]):
@@ -2118,13 +2312,32 @@ def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
     _user_profile_cache_set(uid, u)
     return _finalize_user_session(_hydrate_allowed_pages_from_employee(u))
 
-def invalidate_sessions_for_user(user_id: str):
+def invalidate_sessions_for_user(user_id: str, *, clear_device_lock: bool = True):
     """Force re-login for one user (e.g. after password reset). Never clears all sessions."""
     _user_profile_cache.pop(user_id, None)
     sb_delete("sessions", "user_id", user_id)
     for tok, sess in list(LOCAL_SESSIONS.items()):
         if (sess.get("user") or {}).get("user_id") == user_id:
             LOCAL_SESSIONS.pop(tok, None)
+    if clear_device_lock:
+        # Password reset / disable — drop lock so next login is not treated as a conflict.
+        USER_ACTIVE_SIDS.pop(user_id, None)
+        USER_ACTIVE_DEVICES.pop(user_id, None)
+        _SID_CACHE_AT.pop(user_id, None)
+        if user_id not in HARDCODED_USERS:
+            try:
+                sb_update(
+                    "users",
+                    "user_id",
+                    user_id,
+                    {
+                        "active_session_id": None,
+                        "active_device_label": None,
+                        "session_updated_at": now_utc().isoformat(),
+                    },
+                )
+            except Exception as exc:
+                logging.warning("clear device lock on invalidate failed for %s: %s", user_id, exc)
 
 def user_from_jwt_payload(jwt_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Build session user from JWT claims — no Supabase round-trip."""
@@ -2159,6 +2372,8 @@ async def get_current_user(request: Request) -> User:
     jwt_payload = decode_jwt(token) if token.count(".") == 2 else None
     if token.count(".") == 2 and not jwt_payload:
         raise HTTPException(401, "Invalid token")
+
+    jwt_sid = (jwt_payload or {}).get("sid") if jwt_payload else None
     
     # 1. Check in-memory cache first (fastest)
     if token in LOCAL_SESSIONS:
@@ -2171,6 +2386,8 @@ async def get_current_user(request: Request) -> User:
             u = _hydrate_allowed_pages_from_employee(_finalize_user_session(u))
             u["_session_ready"] = True
             sess["user"] = u
+        sid = jwt_sid or sess.get("sid")
+        validate_jwt_session_id(u.get("user_id") or "", u.get("role"), sid)
         act_as = request.headers.get("X-Acting-As")
         if act_as:
             u = {**u, "acting_as_employee_id": act_as}
@@ -2182,15 +2399,17 @@ async def get_current_user(request: Request) -> User:
         exp = datetime.fromtimestamp(int(jwt_payload["exp"]), tz=timezone.utc).isoformat()
         u = user_from_jwt_payload(jwt_payload)
         if u:
+            validate_jwt_session_id(u.get("user_id") or "", u.get("role"), jwt_sid)
             u["_session_ready"] = True
-            LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
+            LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": jwt_sid}
             act_as = request.headers.get("X-Acting-As")
             if act_as:
                 u = {**u, "acting_as_employee_id": act_as}
             return User(**u)
         uid = jwt_payload["sub"]
         u = _resolve_user_by_id(uid, exp)
-        LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
+        validate_jwt_session_id(uid, u.get("role"), jwt_sid)
+        LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": jwt_sid}
         act_as = request.headers.get("X-Acting-As")
         if act_as:
             u["acting_as_employee_id"] = act_as
@@ -2208,33 +2427,28 @@ async def get_current_user(request: Request) -> User:
         raise HTTPException(401, "Invalid session")
 
     u = _resolve_user_by_id(uid, exp)
-    LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp}
+    # Legacy tokens have no sid — if an active lock exists, treat as moved.
+    validate_jwt_session_id(uid, u.get("role"), None)
+    LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": None}
     act_as = request.headers.get("X-Acting-As")
     if act_as:
         u["acting_as_employee_id"] = act_as
     return User(**u)
 
 # ---- Auth Endpoints ----
-@api_router.post("/auth/session")
-async def auth_session(request: Request, response: Response):
-    body = await request.json()
-    email = normalize_email(body.get("email"))
-    password = body.get("password") or ""
-    
-    # Hardcoded fallback for demo
+def _authenticate_credentials(email: str, password: str) -> Dict[str, Any]:
+    """Resolve email/password to a user dict or raise 401."""
     if email in ["umang@admin", "htshpatil13@gmail.com"] and password == "umang@admin":
-        u = {
+        return {
             "user_id": "user_admin001",
             "email": email,
             "name": "Umang Admin",
             "role": "admin",
             "created_at": now_utc().isoformat(),
         }
-        return issue_session(u, response)
 
-    # Hardcoded sample employee: Mukesh Sharma (telecaller)
     if email == "mukesh@umang.com" and password == "mukesh@123":
-        u = {
+        return {
             "user_id": "user_mukesh001",
             "email": email,
             "name": "Mukesh Sharma",
@@ -2243,35 +2457,41 @@ async def auth_session(request: Request, response: Response):
             "acting_as_employee_id": "emp_1b7760567ae6",
             "created_at": now_utc().isoformat(),
         }
-        return issue_session(u, response)
 
-    # Hardcoded manager: Rohit Singh
     if email == "rohitsingh241993@gmail.com" and password == "umang@manager":
-        u = {
+        return {
             "user_id": "user_manager001",
             "email": email,
             "name": "Rohit Singh",
             "role": "manager",
             "created_at": now_utc().isoformat(),
         }
-        return issue_session(u, response)
 
-    # Alias mapping: allow shorthand "umang@admin" to resolve to the real admin email
-    EMAIL_ALIASES = {
-        "umang@admin": "htshpatil13@gmail.com",
-    }
+    EMAIL_ALIASES = {"umang@admin": "htshpatil13@gmail.com"}
     lookup_email = EMAIL_ALIASES.get(email, email)
-    
-    # Query real users table
-    users = sb_select("users", {"email": f"eq.{lookup_email}", "select": "user_id,email,name,role,employee_id,acting_as_employee_id,password_hash,password,allowed_pages,dashboard_type,created_at"})
+
+    select_with_session = (
+        "user_id,email,name,role,employee_id,acting_as_employee_id,"
+        "password_hash,password,allowed_pages,dashboard_type,created_at,"
+        "active_session_id,active_device_label"
+    )
+    select_basic = (
+        "user_id,email,name,role,employee_id,acting_as_employee_id,"
+        "password_hash,password,allowed_pages,dashboard_type,created_at"
+    )
+    users = sb_select("users", {"email": f"eq.{lookup_email}", "select": select_with_session})
+    if not users:
+        # Columns may be missing before SINGLE_DEVICE_LOGIN.sql — retry without them.
+        users = sb_select("users", {"email": f"eq.{lookup_email}", "select": select_basic})
     if not users:
         raise HTTPException(401, "Invalid email or password")
-    
+
     u = users[0]
-    # Robust check for both column names (password_hash is the new standard)
+    if u.get("active_session_id"):
+        _cache_active_session(u["user_id"], u.get("active_session_id"), u.get("active_device_label"))
+
     db_password = u.get("password_hash") or u.get("password")
-    
-    if not db_password or not verify_password(password, db_password): 
+    if not db_password or not verify_password(password, db_password):
         raise HTTPException(401, "Invalid email or password")
 
     if u.get("employee_id"):
@@ -2283,12 +2503,44 @@ async def auth_session(request: Request, response: Response):
         if emps and emps[0].get("active") is False:
             raise HTTPException(401, "Account is disabled. Contact your manager.")
 
-    # Employees act as their own employee record so personal stats / lead
-    # assignment resolve correctly without an explicit X-Acting-As header.
     if u.get("employee_id") and not u.get("acting_as_employee_id") and u.get("role") != "admin":
         u["acting_as_employee_id"] = u["employee_id"]
+    return u
 
-    return issue_session(u, response)
+
+@api_router.post("/auth/session")
+async def auth_session(request: Request, response: Response):
+    body = await request.json()
+    email = normalize_email(body.get("email"))
+    password = body.get("password") or ""
+    force_shift = bool(body.get("force_shift") or body.get("shift"))
+    device_label = body.get("device_label")
+    u = _authenticate_credentials(email, password)
+    raise_if_session_conflict(u, force_shift=force_shift)
+    return issue_session(
+        u,
+        response,
+        request=request,
+        device_label=device_label,
+        force_shift=force_shift,
+    )
+
+
+@api_router.post("/auth/shift-session")
+async def auth_shift_session(request: Request, response: Response):
+    """Transfer the active session to this device (login with force_shift)."""
+    body = await request.json()
+    email = normalize_email(body.get("email"))
+    password = body.get("password") or ""
+    device_label = body.get("device_label")
+    u = _authenticate_credentials(email, password)
+    return issue_session(
+        u,
+        response,
+        request=request,
+        device_label=device_label,
+        force_shift=True,
+    )
 
 @api_router.get("/auth/me")
 async def auth_me(cu: User = Depends(get_current_user)):
@@ -2298,8 +2550,17 @@ async def auth_me(cu: User = Depends(get_current_user)):
 async def auth_logout(request: Request, response: Response):
     t = await get_session_token(request)
     if t:
+        jwt_payload = decode_jwt(t) if t.count(".") == 2 else None
+        cached = LOCAL_SESSIONS.get(t) or {}
+        uid = (jwt_payload or {}).get("sub") or (cached.get("user") or {}).get("user_id")
+        sid = (jwt_payload or {}).get("sid") or cached.get("sid")
+        role = (jwt_payload or {}).get("role") or (cached.get("user") or {}).get("role")
+        if not role and uid:
+            role = (HARDCODED_USERS.get(uid) or {}).get("role")
         sb_delete("sessions", "session_token", t)
-        LOCAL_SESSIONS.pop(t, None)  # Clear in-memory cache
+        LOCAL_SESSIONS.pop(t, None)
+        if uid and role_requires_single_device(role):
+            clear_active_session(uid, only_if_sid=sid)
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
 

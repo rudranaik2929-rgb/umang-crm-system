@@ -218,7 +218,7 @@ function useWebPrivacyShield() {
 }
 
 function SessionBootstrap({ children }: { children: React.ReactNode }) {
-  const { exchangeSession, refresh } = useAuth();
+  const { refresh } = useAuth();
   const [bootstrapping, setBootstrapping] = useState(true);
   const { colors } = useTheme();
 
@@ -235,15 +235,14 @@ function SessionBootstrap({ children }: { children: React.ReactNode }) {
         }
         if (!sid) sid = url.searchParams.get('session_id');
         if (sid) {
-          await exchangeSession(sid);
-          // clean URL
+          // Legacy Emergent session_id URL handshake — ignored by email/password auth.
           window.history.replaceState({}, '', url.pathname);
           await refresh();
         }
       }
       setBootstrapping(false);
     })();
-  }, [exchangeSession, refresh]);
+  }, [refresh]);
 
   if (bootstrapping) {
     return (

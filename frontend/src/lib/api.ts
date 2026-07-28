@@ -297,7 +297,7 @@ api.interceptors.request.use(async (config) => {
     const actAs = await getActAsId();
     config.headers = config.headers || {};
     const url = String(config.url || '');
-    if (url.includes('/auth/session') || url.includes('/auth/me')) {
+    if (url.includes('/auth/session') || url.includes('/auth/me') || url.includes('/auth/shift-session')) {
         config.timeout = Math.max(Number(config.timeout) || 0, AUTH_TIMEOUT_MS);
     }
     if (url.includes('/stats/dashboard-bundle') || url.includes('/stats/me-bundle') || url.includes('/stats/dashboard')) {
@@ -331,6 +331,30 @@ api.interceptors.request.use(async (config) => {
     }
     return config;
 });
+
+api.interceptors.response.use(
+    (response) => response,
+    async (error) => {
+        const detail = error?.response?.data?.detail;
+        const msg = typeof detail === 'string' ? detail : '';
+        if (
+            error?.response?.status === 401 &&
+            msg &&
+            /session moved|another device/i.test(msg)
+        ) {
+            try {
+                await setToken(null);
+                clearSnapshots();
+            } catch {}
+            try {
+                if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('umang:session-moved'));
+                }
+            } catch {}
+        }
+        return Promise.reject(error);
+    },
+);
 
 export const BACKEND = BACKEND_URL;
 

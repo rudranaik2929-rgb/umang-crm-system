@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Image, ScrollView, Platform, Dimensions, TextInput, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Image, ScrollView, Platform, Dimensions, TextInput, ActivityIndicator, Modal } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../src/theme/ThemeContext';
@@ -21,6 +21,9 @@ export default function Index() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
   const [loginStatus, setLoginStatus] = useState<string | null>(null);
+  const [shiftVisible, setShiftVisible] = useState(false);
+  const [shiftDevice, setShiftDevice] = useState<string | undefined>();
+  const [isShifting, setIsShifting] = useState(false);
 
   useEffect(() => {
     setLoginStatus('Connecting…');
@@ -36,6 +39,13 @@ export default function Index() {
     else router.replace(defaultRouteFor(user.role, user.email, user.allowed_pages) as any);
   }, [user, loading, router]);
 
+  const completeLogin = (loggedInUser: { role?: string | null; email: string; allowed_pages?: string[] | null }) => {
+    setLoginStatus(null);
+    setShiftVisible(false);
+    if (!loggedInUser.role) router.replace('/select-role' as any);
+    else router.replace(defaultRouteFor(loggedInUser.role, loggedInUser.email, loggedInUser.allowed_pages) as any);
+  };
+
   const onLogin = async () => {
     const trimmedEmail = email.trim().toLowerCase();
     const trimmedPassword = password.trim();
@@ -48,14 +58,16 @@ export default function Index() {
     setLoginStatus('Signing in…');
     try {
       await warmUpBackend(true);
-      const loggedInUser = await exchangeSession({
+      const result = await exchangeSession({
         email: trimmedEmail,
         password: trimmedPassword,
       });
-      if (loggedInUser) {
+      if (result.status === 'ok') {
+        completeLogin(result.user);
+      } else if (result.status === 'shift_required') {
         setLoginStatus(null);
-        if (!loggedInUser.role) router.replace('/select-role' as any);
-        else router.replace(defaultRouteFor(loggedInUser.role, loggedInUser.email, loggedInUser.allowed_pages) as any);
+        setShiftDevice(result.active_device);
+        setShiftVisible(true);
       } else {
         setLoginStatus(null);
         alert('Invalid email or password. Use the login created by your manager.');
@@ -64,6 +76,32 @@ export default function Index() {
       setLoginStatus(e?.message || 'Could not sign in. Try again in a minute.');
     } finally {
       setIsLoggingIn(false);
+    }
+  };
+
+  const onShift = async () => {
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+    setIsShifting(true);
+    setLoginStatus('Shifting session…');
+    try {
+      const result = await exchangeSession({
+        email: trimmedEmail,
+        password: trimmedPassword,
+        force_shift: true,
+      });
+      if (result.status === 'ok') {
+        completeLogin(result.user);
+      } else if (result.status === 'invalid') {
+        setShiftVisible(false);
+        alert('Invalid email or password. Use the login created by your manager.');
+      } else {
+        alert(result.message || 'Could not shift session. Try again.');
+      }
+    } catch (e: any) {
+      setLoginStatus(e?.message || 'Could not shift session.');
+    } finally {
+      setIsShifting(false);
     }
   };
 
@@ -213,6 +251,44 @@ export default function Index() {
           </Text>
         </View>
       </ScrollView>
+
+      <Modal
+        visible={shiftVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !isShifting && setShiftVisible(false)}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={[styles.modalCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Already logged in elsewhere</Text>
+            <Text style={[styles.modalBody, { color: colors.textSecondary }]}>
+              This account is active on {shiftDevice || 'another device'}. Shift moves your session here and signs out the other device.
+            </Text>
+            <View style={styles.modalActions}>
+              <Pressable
+                testID="shift-cancel-btn"
+                disabled={isShifting}
+                onPress={() => setShiftVisible(false)}
+                style={[styles.modalBtn, styles.modalCancel, { borderColor: colors.border }]}
+              >
+                <Text style={{ color: colors.text, fontWeight: '600' }}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                testID="shift-confirm-btn"
+                disabled={isShifting}
+                onPress={onShift}
+                style={[styles.modalBtn, { backgroundColor: colors.primary, opacity: isShifting ? 0.7 : 1 }]}
+              >
+                {isShifting ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={{ color: '#fff', fontWeight: '600' }}>Shift</Text>
+                )}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -270,4 +346,31 @@ const styles = StyleSheet.create({
   },
   outlineText: { fontSize: 13, fontWeight: '600' },
   footer: { fontSize: 11, marginTop: 24, textAlign: 'left' },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.55)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  modalCard: {
+    width: '100%',
+    maxWidth: 400,
+    borderRadius: 12,
+    borderWidth: 1,
+    padding: 22,
+    gap: 12,
+  },
+  modalTitle: { fontSize: 18, fontWeight: '700' },
+  modalBody: { fontSize: 14, lineHeight: 21 },
+  modalActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
+  modalBtn: {
+    flex: 1,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalCancel: { borderWidth: 1 },
 });
