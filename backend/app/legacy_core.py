@@ -1722,8 +1722,10 @@ class HousingSyncRequest(BaseModel):
 class FacebookImportRequest(BaseModel):
     page_id: Optional[str] = None
     form_id: Optional[str] = None
-    days: int = 90
+    # Kept for API compat; ignored unless allow_historical (which is rejected).
+    days: int = 1
     limit: int = 500
+    allow_historical: bool = False
 
 # ---- Auth Helpers ----
 LOCAL_SESSIONS = {}
@@ -4830,7 +4832,7 @@ async def facebook_verify(cu: User = Depends(get_current_user)):
             "Permissions: leads_retrieval, pages_show_list, pages_read_engagement, pages_manage_metadata",
             "Paste token in Render FACEBOOK_PAGE_ACCESS_TOKEN + set FACEBOOK_PAGE_ID → redeploy",
             "Do NOT use Graph API Explorer for production — those tokens expire in ~1 hour",
-            "After deploy: CRM Integrations → Import Past Meta Leads (90 days)",
+            "After deploy: CRM Integrations → Sync New Meta Leads (recent window only; no historical backfill)",
         ],
     }
 
@@ -4887,30 +4889,66 @@ async def facebook_poll(cu: User = Depends(get_current_user)):
 
 @api_router.post("/integrations/facebook/import")
 async def facebook_import(payload: FacebookImportRequest, cu: User = Depends(get_current_user)):
-    """Pull previously submitted Meta Lead Ad forms via Graph API and import into CRM."""
+    """Import only recent Meta Lead Ad submissions (no historical backfill).
+
+    New inbound leads should arrive via webhook. This endpoint only covers the
+    recent Graph window (FACEBOOK_AUTO_SYNC_WINDOW_SEC) as a safety net.
+    """
     ensure_roles(cu, ["admin", "manager", "marketing"])
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         raise HTTPException(status_code=400, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured on the server")
-    return _facebook_import_impl(payload.page_id, payload.form_id, payload.days, payload.limit)
+    if payload.allow_historical:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Historical Meta lead import is disabled. "
+                "New leads arrive via webhook or Sync New Meta Leads (recent window only)."
+            ),
+        )
+    return _facebook_import_impl(
+        payload.page_id,
+        payload.form_id,
+        payload.days,
+        payload.limit,
+        allow_historical=False,
+    )
 
 
 def _facebook_import_impl(
     page_id: Optional[str] = None,
     form_id: Optional[str] = None,
-    days: int = 90,
+    days: int = 1,
     limit: int = 500,
     max_age_hours: Optional[int] = None,
+    allow_historical: bool = False,
 ) -> Dict[str, Any]:
+    """Pull Meta form leads from Graph API within a time window.
+
+    Historical/backfill import is disabled by default. Without allow_historical,
+    only the recent auto-sync window is used (ignores large ``days`` values).
+    """
+    if allow_historical:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Historical Meta lead import is disabled. "
+                "Only webhook-driven and recent-window sync are allowed."
+            ),
+        )
     page_id, page_token = resolve_facebook_page_context(page_id)
-    days = min(max(days, 1), 365)
     limit = min(max(limit, 1), 1000)
+    recent_hours = max(FACEBOOK_AUTO_SYNC_WINDOW_SEC // 3600, 1)
     if max_age_hours is not None:
-        hours = min(max(max_age_hours, 1), 168)
+        hours = min(max(max_age_hours, 1), recent_hours)
         since_ts = int((now_utc() - timedelta(hours=hours)).timestamp())
         window_label = f"{hours}h"
+        days = 0
     else:
-        since_ts = int((now_utc() - timedelta(days=days)).timestamp())
-        window_label = f"{days}d"
+        # Ignore client ``days`` for backfill — recent window only.
+        hours = recent_hours
+        since_ts = int((now_utc() - timedelta(hours=hours)).timestamp())
+        window_label = f"{hours}h"
+        days = 0
 
     form_ids: List[str] = []
     forms_meta: List[Dict[str, Any]] = []

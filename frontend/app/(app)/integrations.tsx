@@ -167,9 +167,9 @@ export default function Integrations() {
       if (created > 0) {
         setMessage(`Meta resync: ${created} new lead(s) imported from ${retried} webhook event(s).`);
       } else if (failed > 0 && retried > 0) {
-        setMessage('Meta resync: only test webhook IDs found. Use Import Past Meta Leads for real submissions.');
+        setMessage('Meta resync: only test webhook IDs found. Submit a real Lead Ad form — historical import is disabled.');
       } else {
-        setMessage('Meta resync: no pending webhook leads. Use Import Past Meta Leads to pull from Facebook forms.');
+        setMessage('Meta resync: no pending webhook leads. New Meta leads arrive via webhook or Sync New Meta Leads.');
       }
       await load();
     } catch (e: any) {
@@ -179,59 +179,27 @@ export default function Integrations() {
     }
   };
 
-  const runMetaImport = async () => {
+  const runMetaSync = async () => {
     setMetaSyncing(true);
-    setMessage('Starting Meta import…');
+    setMessage(null);
     try {
-      let verifyData = fbVerify;
-      if (!verifyData?.forms?.length) {
-        const v = await api.get('/integrations/facebook/verify', { timeout: 60000 });
-        verifyData = v.data || null;
-        setFbVerify(verifyData);
-      }
-      const forms = Array.isArray(verifyData?.forms) ? verifyData.forms.filter((f) => f?.id) : [];
-      const chunks: Array<{ form_id?: string; label: string }> = forms.length
-        ? forms.map((f) => ({ form_id: f.id, label: f.name || f.id }))
-        : [{ label: 'all forms' }];
-
-      let fetched = 0;
-      let created = 0;
-      let duplicates = 0;
-      let ignored = 0;
-      let failed = 0;
-
-      for (let i = 0; i < chunks.length; i += 1) {
-        const chunk = chunks[i];
-        setMessage(`Importing Meta form ${i + 1}/${chunks.length}: ${chunk.label}…`);
-        const r = await api.post(
-          '/integrations/facebook/import',
-          { days: 90, limit: 300, form_id: chunk.form_id },
-          { timeout: META_INTEGRATION_TIMEOUT_MS },
-        );
-        fetched += Number(r.data?.fetched || 0);
-        created += Number(r.data?.created || 0);
-        duplicates += Number(r.data?.duplicates || 0);
-        ignored += Number(r.data?.ignored || 0);
-        failed += Number(r.data?.failed || 0);
-      }
-
-      const formWord = chunks.length === 1 ? '1 form' : `${chunks.length} forms`;
-      if (fetched === 0) {
-        setMessage(
-          `Meta import: 0 leads found in the last 90 days across ${formWord}. Submit a test lead on Facebook or check Lead Ad forms on Page ${verifyData?.page_id || '—'}.`,
-        );
-      } else if (created === 0 && ignored > 0) {
-        setMessage(
-          `Meta import: ${fetched} fetched from ${formWord}, but ${ignored} had no phone/email in the form. Edit your Lead Ad form to require phone number.`,
-        );
+      const r = await api.post('/integrations/facebook/poll', {}, { timeout: META_INTEGRATION_TIMEOUT_MS });
+      const resyncCreated = Number(r.data?.resync?.created || 0);
+      const recent = r.data?.import_recent || {};
+      const fetched = Number(recent.fetched || 0);
+      const created = Number(recent.created || 0);
+      const duplicates = Number(recent.duplicates || 0);
+      const err = recent.error ? String(recent.error) : null;
+      if (err) {
+        setMessage(`Meta sync: webhook retry done (${resyncCreated} new); recent Graph sync error: ${err}`);
       } else {
         setMessage(
-          `Meta import: ${fetched} fetched from ${formWord}, ${created} new, ${duplicates} already in CRM${ignored ? `, ${ignored} missing phone/email` : ''}${failed ? `, ${failed} failed` : ''} (last 90 days).`,
+          `Meta sync: ${fetched} recent fetched, ${created + resyncCreated} new, ${duplicates} already in CRM (recent window only — no historical backfill).`,
         );
       }
       await load();
     } catch (e: any) {
-      setMessage(integrationErrorMessage(e, 'Meta import failed.'));
+      setMessage(integrationErrorMessage(e, 'Meta sync failed.'));
     } finally {
       setMetaSyncing(false);
     }
@@ -255,16 +223,16 @@ export default function Integrations() {
       return 'User token detected — Lead Ads need a Page token. Graph API Explorer → select your Facebook Page → leads_retrieval → Generate token → paste in Render.';
     }
     if (fbVerify?.token_type === 'system_user' && fbVerify?.lead_api_ready) {
-      return `System User token OK · Page ${fbVerify?.page_id || '—'} · ${fbVerify?.forms_count ?? 0} form(s). Click Import Past Meta Leads.`;
+      return `System User token OK · Page ${fbVerify?.page_id || '—'} · ${fbVerify?.forms_count ?? 0} form(s). New leads via webhook; Sync New for recent only.`;
     }
     if ((fbVerify?.pending_webhook_events || 0) > 0) {
       return `${fbVerify?.pending_webhook_events} webhook lead(s) waiting — click Resync Webhooks after token is set.`;
     }
     if (metaLeads.length > 0) {
-      return `${metaLeads.length} in CRM · ${fbVerify?.forms_count ?? 0} form(s) · Page ${fbVerify?.page_id || '—'}`;
+      return `${metaLeads.length} in CRM · ${fbVerify?.forms_count ?? 0} form(s) · Page ${fbVerify?.page_id || '—'} · historical import off`;
     }
     if (fbVerify?.lead_api_ready) {
-      return `Token OK · ${fbVerify?.forms_count ?? 0} Lead Ad form(s). Click Import Past Meta Leads for older submissions.`;
+      return `Token OK · ${fbVerify?.forms_count ?? 0} Lead Ad form(s). New submissions arrive via webhook; Sync New Meta Leads covers the recent window only.`;
     }
     if (fbVerify?.token_authenticated) {
       return 'Token connects to Meta but cannot read Lead Ads — use a Page access token (see error above).';
@@ -272,7 +240,7 @@ export default function Integrations() {
     if (fbEvents.length) {
       return `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'}`;
     }
-    return 'Submit a real lead via your Facebook Lead Ad form, then Import or Resync.';
+    return 'Submit a real lead via your Facebook Lead Ad form — historical Meta import is disabled.';
   }, [fbEvents, fbVerify, metaLeads.length]);
 
   return (
@@ -320,9 +288,9 @@ export default function Integrations() {
                 ['Recent webhooks', fbEvents.length > 0],
               ]}
               extraNote={metaExtraNote}
-              actionLabel={metaSyncing ? 'Importing…' : 'Import Past Meta Leads (90 days)'}
-              actionIcon="cloud-download-outline"
-              onAction={runMetaImport}
+              actionLabel={metaSyncing ? 'Syncing…' : 'Sync New Meta Leads (2h)'}
+              actionIcon="sync-outline"
+              onAction={runMetaSync}
               actionDisabled={metaSyncing || !fbVerify?.lead_api_ready}
               secondaryActionLabel={metaSyncing ? undefined : 'Resync Webhooks'}
               onSecondaryAction={metaSyncing ? undefined : runMetaResync}
@@ -375,7 +343,7 @@ export default function Integrations() {
             <View style={[styles.notice, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
               <Ionicons name="information-circle-outline" size={18} color={colors.info} />
               <Text style={[styles.noticeText, { color: colors.textSecondary }]}>
-                Meta shows 0 leads until you import. Click Import Past Meta Leads on the Facebook panel above — this pulls previously submitted Lead Ad forms from Meta (last 90 days).
+                Meta shows 0 leads until a new Lead Ad submission arrives. Historical Meta import is disabled — new leads come via webhook or Sync New Meta Leads (recent window only).
               </Text>
             </View>
           )}

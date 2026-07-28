@@ -351,7 +351,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
                         <Text style={[st.hint, { color: colors.warning }]}>Pulls latest from Housing.com</Text>
                       ) : !isMine && platform.count === 0 && platform.platform === 'meta' ? (
                         <Text style={[st.hint, { color: colors.negative, textAlign: 'center' }]}>
-                          {metaStatus || 'Re-imports from Meta webhook events'}
+                          {metaStatus || 'New Meta leads via webhook only'}
                         </Text>
                       ) : null}
                     </Pressable>

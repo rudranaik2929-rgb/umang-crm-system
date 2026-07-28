@@ -433,3 +433,83 @@ def test_facebook_verify_and_direct_payload(monkeypatch):
     assert response.status_code == 200, response.text
     assert inserted["leads"][0]["source"] == "Facebook"
     assert inserted["leads"][0]["external_lead_id"] == "fb-123"
+
+
+def test_facebook_import_rejects_historical_flag(monkeypatch):
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "page-token")
+
+    class FakeUser:
+        user_id = "u1"
+        employee_id = None
+        email = "admin@test.com"
+        role = "admin"
+        name = "Admin"
+        acting_as_employee_id = None
+
+    main.app.dependency_overrides[main.get_current_user] = lambda: FakeUser()
+    try:
+        response = TestClient(main.app).post(
+            "/api/integrations/facebook/import",
+            json={"days": 90, "allow_historical": True},
+        )
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 400
+    assert "Historical Meta lead import is disabled" in response.json()["detail"]
+
+
+def test_facebook_import_ignores_days_uses_recent_window(monkeypatch):
+    """days=90 must not backfill — Graph fetch uses FACEBOOK_AUTO_SYNC_WINDOW_SEC only."""
+    _install_fake_supabase(monkeypatch)
+    monkeypatch.setattr(main, "FACEBOOK_PAGE_ACCESS_TOKEN", "page-token")
+    monkeypatch.setattr(main, "FACEBOOK_FORM_ID", "FORM_1")
+    monkeypatch.setattr(main, "FACEBOOK_AUTO_SYNC_WINDOW_SEC", 7200)
+    monkeypatch.setattr(main, "resolve_facebook_page_context", lambda page_id=None: ("PAGE_1", "page-token"))
+    monkeypatch.setattr(main, "_load_facebook_external_ids", lambda: set())
+    monkeypatch.setattr(main, "_load_facebook_suppressed_ids", lambda: set())
+
+    captured = {}
+
+    def fake_list_leads(form_id, limit=500, since_ts=None, access_token=None):
+        captured["form_id"] = form_id
+        captured["since_ts"] = since_ts
+        captured["limit"] = limit
+        return []
+
+    monkeypatch.setattr(main, "list_facebook_form_leads", fake_list_leads)
+
+    class FakeUser:
+        user_id = "u1"
+        employee_id = None
+        email = "admin@test.com"
+        role = "admin"
+        name = "Admin"
+        acting_as_employee_id = None
+
+    main.app.dependency_overrides[main.get_current_user] = lambda: FakeUser()
+    try:
+        response = TestClient(main.app).post(
+            "/api/integrations/facebook/import",
+            json={"days": 90, "limit": 300},
+        )
+    finally:
+        main.app.dependency_overrides.clear()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["window"] == "2h"
+    assert body["days"] == 0
+    assert captured["form_id"] == "FORM_1"
+    assert captured["since_ts"] is not None
+    age = int(time.time()) - int(captured["since_ts"])
+    assert 7000 <= age <= 7400
+
+
+def test_facebook_import_impl_rejects_allow_historical():
+    try:
+        main._facebook_import_impl(allow_historical=True)
+        assert False, "expected HTTPException"
+    except main.HTTPException as exc:
+        assert exc.status_code == 400
+        assert "Historical Meta lead import is disabled" in str(exc.detail)
