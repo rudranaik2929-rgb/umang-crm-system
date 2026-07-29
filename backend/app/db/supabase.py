@@ -152,6 +152,100 @@ def sb_patch_filter(table: str, match_params: str, data: Dict[str, Any]) -> Opti
     return None
 
 
+def sb_storage_url(bucket: str, path: str) -> str:
+    clean_path = path.lstrip("/")
+    return f"{SUPABASE_URL}/storage/v1/object/{bucket}/{clean_path}"
+
+
+def sb_storage_upload(bucket: str, path: str, content: bytes, content_type: str, upsert: bool = True) -> bool:
+    """Upload a file to Supabase Storage using the service role key."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        logging.error("Supabase storage upload skipped — URL or key not configured")
+        return False
+    clean_path = path.lstrip("/")
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": content_type or "application/octet-stream",
+    }
+    if upsert:
+        headers["x-upsert"] = "true"
+    r = _http.post(
+        f"{SUPABASE_URL}/storage/v1/object/{bucket}/{clean_path}",
+        headers=headers,
+        content=content,
+    )
+    if r.status_code >= 400:
+        logging.error(f"Supabase storage upload {bucket}/{clean_path}: {r.status_code} {r.text[:300]}")
+        return False
+    return True
+
+
+def sb_storage_download(bucket: str, path: str) -> Optional[Tuple[bytes, str]]:
+    """Download a file from Supabase Storage. Returns (bytes, content_type) or None."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    clean_path = path.lstrip("/")
+    r = _http.get(
+        f"{SUPABASE_URL}/storage/v1/object/{bucket}/{clean_path}",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        },
+    )
+    if r.status_code >= 400:
+        logging.error(f"Supabase storage download {bucket}/{clean_path}: {r.status_code} {r.text[:300]}")
+        return None
+    content_type = r.headers.get("content-type") or "application/octet-stream"
+    return r.content, content_type
+
+
+def sb_storage_delete(bucket: str, path: str) -> bool:
+    """Remove a file from Supabase Storage."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    clean_path = path.lstrip("/")
+    r = _http.delete(
+        f"{SUPABASE_URL}/storage/v1/object/{bucket}/{clean_path}",
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+        },
+    )
+    if r.status_code >= 400:
+        logging.error(f"Supabase storage delete {bucket}/{clean_path}: {r.status_code} {r.text[:300]}")
+        return False
+    return True
+
+
+def sb_storage_signed_url(bucket: str, path: str, expires_in: int = 3600) -> Optional[str]:
+    """Create a short-lived signed URL for private bucket objects."""
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return None
+    clean_path = path.lstrip("/")
+    r = _http.post(
+        f"{SUPABASE_URL}/storage/v1/object/sign/{bucket}/{clean_path}",
+        headers={
+            **sb_headers(),
+            "Content-Type": "application/json",
+        },
+        json={"expiresIn": expires_in},
+    )
+    if r.status_code >= 400:
+        logging.error(f"Supabase storage sign {bucket}/{clean_path}: {r.status_code} {r.text[:300]}")
+        return None
+    try:
+        payload = r.json()
+    except Exception:
+        return None
+    signed = payload.get("signedURL") or payload.get("signedUrl")
+    if not signed:
+        return None
+    if signed.startswith("http"):
+        return signed
+    return f"{SUPABASE_URL}{signed}" if signed.startswith("/") else f"{SUPABASE_URL}/storage/v1{signed}"
+
+
 def sb_select_in(
     table: str,
     col: str,
@@ -190,4 +284,9 @@ __all__ = [
     "sb_delete_filter",
     "sb_patch_filter",
     "sb_select_in",
+    "sb_storage_url",
+    "sb_storage_upload",
+    "sb_storage_download",
+    "sb_storage_delete",
+    "sb_storage_signed_url",
 ]

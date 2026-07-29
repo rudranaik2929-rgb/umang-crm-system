@@ -9,12 +9,11 @@
 alter table bookings
   add column if not exists brokerage_received numeric not null default 0;
 
--- Backfill: legacy rows marked fully received get full brokerage amount.
+-- Backfill: set received = 0 for all existing rows (no legacy status column).
+-- You can manually update individual rows in Supabase if needed.
 update bookings
-set brokerage_received = brokerage_amount
-where brokerage_received = 0
-  and lower(trim(coalesce(brokerage_status, 'pending'))) = 'received'
-  and coalesce(brokerage_amount, 0) > 0;
+set brokerage_received = 0
+where brokerage_received = 0;
 
 comment on column bookings.brokerage_received is
   'Amount of brokerage actually received for this booking. Balance = brokerage_amount - brokerage_received.';

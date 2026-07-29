@@ -383,6 +383,7 @@ api.interceptors.response.use(
 );
 
 export const BACKEND = BACKEND_URL;
+export const getBackendOrigin = () => BACKEND_URL.replace(/\/$/, '');
 
 const _snapshotCache = new Map<string, any>();
 

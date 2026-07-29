@@ -12,6 +12,8 @@ import { canViewBookingFinance, canAddBookingManualLead } from '../../src/lib/co
 import { SearchableSelect } from '../../src/components/SearchableSelect';
 import { RegistrationReceiptModal } from '../../src/components/RegistrationReceiptModal';
 import { AddBookingLeadModal } from '../../src/components/AddBookingLeadModal';
+import { BookingDocumentActions } from '../../src/components/BookingDocumentActions';
+import { BookingDocumentPreviewModal } from '../../src/components/BookingDocumentPreviewModal';
 import { BOOKING_TASKS, bookingMatchesTask, countBookingTasks, normalizeCompletedTasks, type BookingTaskKey } from '../../src/lib/bookingTasks';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { createPortal } from 'react-dom';
@@ -85,6 +87,7 @@ export default function Bookings() {
   const [openChargesId, setOpenChargesId] = useState<string | null>(null);
   const [registrationReceiptBooking, setRegistrationReceiptBooking] = useState<any | null>(null);
   const [registrationMarkComplete, setRegistrationMarkComplete] = useState(false);
+  const [documentPreviewBooking, setDocumentPreviewBooking] = useState<any | null>(null);
   const canFinance = canViewBookingFinance(user?.role, user?.email);
 
   const load = useCallback(async () => {
@@ -257,14 +260,28 @@ export default function Bookings() {
               {cancelled ? <Badge text="NOT INTERESTED" color={colors.negative} /> : null}
             </View>
           </View>
-          <CardActionMenu
-            colors={colors}
-            isStarred={!!b.starred}
-            onEdit={() => setEditingBooking(b)}
-            onToggleStar={() => toggleStar(b)}
-            onDelete={() => deleteBooking(b)}
-            testIDPrefix={`booking-${b.booking_id}`}
-          />
+          <View style={{ alignItems: 'flex-end', gap: 6 }}>
+            <BookingDocumentActions
+              booking={b}
+              colors={colors}
+              testIDPrefix={`booking-${b.booking_id}`}
+              onPreview={() => setDocumentPreviewBooking(b)}
+              onUploaded={async (updated) => {
+                setBookings((items) => items.map((item) => (
+                  item.booking_id === b.booking_id ? { ...item, ...updated } : item
+                )));
+                await load();
+              }}
+            />
+            <CardActionMenu
+              colors={colors}
+              isStarred={!!b.starred}
+              onEdit={() => setEditingBooking(b)}
+              onToggleStar={() => toggleStar(b)}
+              onDelete={() => deleteBooking(b)}
+              testIDPrefix={`booking-${b.booking_id}`}
+            />
+          </View>
         </View>
 
         {canFinance ? (
@@ -658,6 +675,12 @@ export default function Bookings() {
           }
           await load();
         }}
+      />
+      <BookingDocumentPreviewModal
+        visible={documentPreviewBooking !== null}
+        booking={documentPreviewBooking}
+        colors={colors}
+        onClose={() => setDocumentPreviewBooking(null)}
       />
     </View>
   );

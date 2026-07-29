@@ -1,6 +1,6 @@
 """Umang Hometech LLP – Real Estate CRM Backend (Supabase Production)"""
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from concurrent.futures import ThreadPoolExecutor
@@ -1683,6 +1683,7 @@ class BookingCreate(BaseModel):
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
     registration_receipt: Optional[Dict[str, Any]]=None
+    booking_document: Optional[Dict[str, Any]]=None
 class BookingUpdate(BaseModel):
     token_received: Optional[float]=None; agreement_status: Optional[str]=None; status: Optional[str]=None
     property_name: Optional[str]=None; booking_amount: Optional[float]=None
@@ -1696,6 +1697,7 @@ class BookingUpdate(BaseModel):
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
     registration_receipt: Optional[Dict[str, Any]]=None
+    booking_document: Optional[Dict[str, Any]]=None
 class LoanCreate(BaseModel):
     lead_id: str; amount: float; bank_name: Optional[str]=None
     documents_status: Optional[str]=None; pending_documents: Optional[List[str]]=None
@@ -7980,6 +7982,164 @@ async def delete_booking(booking_id: str, cu: User=Depends(get_current_user)):
     if booking and booking.get("lead_id"):
         log_activity(cu, "booking_deleted", "Booking record deleted.", lead_id=booking.get("lead_id"))
     return {"ok": True, "booking_id": booking_id}
+
+BOOKING_DOCUMENT_BUCKET = os.environ.get("BOOKING_DOCUMENT_BUCKET", "booking-documents")
+BOOKING_DOCUMENT_MAX_BYTES = int(os.environ.get("BOOKING_DOCUMENT_MAX_BYTES", str(15 * 1024 * 1024)))
+BOOKING_DOCUMENT_ALLOWED = {
+    "application/pdf": "pdf",
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/pjpeg": "jpg",
+}
+
+
+def _fetch_booking_record(booking_id: str) -> Optional[Dict[str, Any]]:
+    rows = sb_select("bookings", {"booking_id": f"eq.{booking_id}", "select": "*", "limit": "1"})
+    if rows:
+        return rows[0]
+    cache_match = [b for b in SESSION_CACHE["bookings"] if b.get("booking_id") == booking_id]
+    return cache_match[0] if cache_match else None
+
+
+def _sync_booking_cache(booking_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    booking_record = None
+    for i, b in enumerate(SESSION_CACHE["bookings"]):
+        if b.get("booking_id") == booking_id:
+            SESSION_CACHE["bookings"][i] = {**b, **patch}
+            booking_record = SESSION_CACHE["bookings"][i]
+            break
+    if not booking_record:
+        existing = _fetch_booking_record(booking_id)
+        if existing:
+            booking_record = {**existing, **patch}
+            SESSION_CACHE["bookings"] = [b for b in SESSION_CACHE["bookings"] if b.get("booking_id") != booking_id]
+            SESSION_CACHE["bookings"].insert(0, booking_record)
+    return booking_record
+
+
+def _normalize_booking_document_meta(raw: Any) -> Optional[Dict[str, Any]]:
+    if not raw or not isinstance(raw, dict):
+        return None
+    storage_path = clean_text(raw.get("storage_path"))
+    if not storage_path:
+        return None
+    return {
+        "file_name": clean_text(raw.get("file_name")) or "document",
+        "content_type": clean_text(raw.get("content_type")) or "application/octet-stream",
+        "storage_path": storage_path,
+        "uploaded_at": raw.get("uploaded_at"),
+        "uploaded_by": clean_text(raw.get("uploaded_by")),
+        "size_bytes": int(raw.get("size_bytes") or 0),
+    }
+
+
+def _detect_booking_document_type(filename: Optional[str], content_type: Optional[str], contents: bytes) -> Tuple[str, str]:
+    ct = (content_type or "").split(";")[0].strip().lower()
+    ext = BOOKING_DOCUMENT_ALLOWED.get(ct)
+    if ext:
+        return ct, ext
+    name = (filename or "").lower()
+    if name.endswith(".pdf") or contents[:4] == b"%PDF":
+        return "application/pdf", "pdf"
+    if name.endswith((".jpg", ".jpeg")) or contents[:3] == b"\xff\xd8\xff":
+        return "image/jpeg", "jpg"
+    raise HTTPException(
+        status_code=400,
+        detail="Only PDF and JPEG files are allowed.",
+    )
+
+
+def _ensure_booking_document_access(cu: User) -> None:
+    ensure_roles(cu, ["admin", "manager", "booking"])
+
+
+@api_router.get("/bookings/{booking_id}/document")
+async def get_booking_document(booking_id: str, cu: User = Depends(get_current_user)):
+    _ensure_booking_document_access(cu)
+    booking = _fetch_booking_record(booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    meta = _normalize_booking_document_meta(booking.get("booking_document"))
+    if not meta:
+        return {"has_document": False, "booking_id": booking_id}
+    preview_url = f"/api/bookings/{booking_id}/document/preview"
+    return {
+        "has_document": True,
+        "booking_id": booking_id,
+        "document": meta,
+        "preview_url": preview_url,
+    }
+
+
+@api_router.get("/bookings/{booking_id}/document/preview")
+async def preview_booking_document(booking_id: str, cu: User = Depends(get_current_user)):
+    _ensure_booking_document_access(cu)
+    booking = _fetch_booking_record(booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    meta = _normalize_booking_document_meta(booking.get("booking_document"))
+    if not meta:
+        raise HTTPException(404, "No document uploaded for this booking")
+    downloaded = sb_storage_download(BOOKING_DOCUMENT_BUCKET, meta["storage_path"])
+    if not downloaded:
+        raise HTTPException(404, "Document file not found in storage")
+    content, storage_type = downloaded
+    content_type = meta.get("content_type") or storage_type or "application/octet-stream"
+    filename = meta.get("file_name") or f"{booking_id}.pdf"
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    return StreamingResponse(BytesIO(content), media_type=content_type, headers=headers)
+
+
+@api_router.post("/bookings/{booking_id}/document")
+async def upload_booking_document(
+    booking_id: str,
+    file: UploadFile = File(...),
+    cu: User = Depends(get_current_user),
+):
+    _ensure_booking_document_access(cu)
+    booking = _fetch_booking_record(booking_id)
+    if not booking:
+        raise HTTPException(404, "Booking not found")
+    contents = await file.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+    if len(contents) > BOOKING_DOCUMENT_MAX_BYTES:
+        raise HTTPException(status_code=413, detail="File is too large (max 15 MB).")
+    content_type, ext = _detect_booking_document_type(file.filename, file.content_type, contents)
+    doc_id = gen_id("doc")
+    storage_path = f"{booking_id}/{doc_id}.{ext}"
+    if not sb_storage_upload(BOOKING_DOCUMENT_BUCKET, storage_path, contents, content_type, upsert=True):
+        raise HTTPException(status_code=503, detail="Could not upload document to storage. Check Supabase bucket setup.")
+    previous = _normalize_booking_document_meta(booking.get("booking_document"))
+    if previous and previous.get("storage_path") and previous["storage_path"] != storage_path:
+        sb_storage_delete(BOOKING_DOCUMENT_BUCKET, previous["storage_path"])
+    uploaded_at = now_utc().isoformat()
+    document_meta = {
+        "file_name": clean_text(file.filename) or f"booking-{booking_id}.{ext}",
+        "content_type": content_type,
+        "storage_path": storage_path,
+        "uploaded_at": uploaded_at,
+        "uploaded_by": cu.name or cu.email or cu.user_id,
+        "size_bytes": len(contents),
+    }
+    updated = sb_update("bookings", "booking_id", booking_id, {"booking_document": document_meta})
+    if not updated:
+        sb_storage_delete(BOOKING_DOCUMENT_BUCKET, storage_path)
+        raise HTTPException(status_code=503, detail="Could not save document metadata. Run supabase/BOOKING_DOCUMENTS.sql.")
+    booking_record = _sync_booking_cache(booking_id, {"booking_document": document_meta}) or {**booking, **updated, "booking_document": document_meta}
+    log_activity(
+        cu,
+        "booking_document_uploaded",
+        f"Uploaded booking document for {booking_record.get('lead_name') or booking_id}.",
+        lead_id=booking_record.get("lead_id"),
+    )
+    return {
+        "ok": True,
+        "booking_id": booking_id,
+        "document": document_meta,
+        "preview_url": f"/api/bookings/{booking_id}/document/preview",
+        "booking": booking_record,
+    }
 
 # ---- Loans ----
 @api_router.post("/loans")
