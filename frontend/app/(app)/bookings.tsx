@@ -80,7 +80,7 @@ export default function Bookings() {
   const [editingBooking, setEditingBooking] = useState<any | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [localBrokerage, setLocalBrokerage] = useState<Record<string, string>>({});
-  const [localBrokerageStatus, setLocalBrokerageStatus] = useState<Record<string, 'pending' | 'received'>>({});
+  const [localBrokerageReceived, setLocalBrokerageReceived] = useState<Record<string, string>>({});
   const [localCharges, setLocalCharges] = useState<Record<string, Record<string, string>>>({});
   const [openChargesId, setOpenChargesId] = useState<string | null>(null);
   const [registrationReceiptBooking, setRegistrationReceiptBooking] = useState<any | null>(null);
@@ -203,9 +203,14 @@ export default function Bookings() {
       const m = rawAgreement.match(/Brokerage:\s*([0-9.]+)/);
       return m ? parseFloat(m[1]) : 0;
     })();
-    const brokerageStatus: 'pending' | 'received' =
-      localBrokerageStatus[b.booking_id]
-      ?? (String(b.brokerage_status || 'pending').toLowerCase() === 'received' ? 'received' : 'pending');
+    const brokerageReceivedAmount = Number(b.brokerage_received || 0);
+    const brokerageVal = localBrokerage[b.booking_id] !== undefined
+      ? parseFloat(localBrokerage[b.booking_id]) || 0
+      : brokerageAmount;
+    const receivedVal = localBrokerageReceived[b.booking_id] !== undefined
+      ? parseFloat(localBrokerageReceived[b.booking_id]) || 0
+      : brokerageReceivedAmount;
+    const balanceVal = brokerageVal - receivedVal;
     const completed = completedTasksFor(b);
     const completedSet = new Set(completed);
     const completedLabels = BOOKING_TASKS.filter((task) => completedSet.has(task.key));
@@ -363,63 +368,71 @@ export default function Bookings() {
         ) : null}
 
         {canFinance ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 12, gap: 12, flexWrap: 'wrap' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>BROKERAGE (₹)</Text>
-              <TextInput
-                value={localBrokerage[b.booking_id] !== undefined ? localBrokerage[b.booking_id] : (brokerageAmount > 0 ? String(brokerageAmount) : '')}
-                placeholder="Enter Brokerage"
-                placeholderTextColor={colors.textMuted}
-                keyboardType="numeric"
-                onChangeText={(text) => setLocalBrokerage((prev) => ({ ...prev, [b.booking_id]: text }))}
-                onBlur={() => {
-                  const val = localBrokerage[b.booking_id];
-                  if (val === undefined) return;
-                  update(b.booking_id, { brokerage_amount: parseFloat(val) || 0 }, 'brokerage');
-                }}
-                style={{ height: 28, width: 140, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
-              />
+          <View style={{ marginTop: 12, gap: 6 }}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 10 }}>
+              <View style={{ flex: 1, minWidth: 100 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>BROKERAGE (₹)</Text>
+                <TextInput
+                  testID={`brokerage-amount-${b.booking_id}`}
+                  value={localBrokerage[b.booking_id] !== undefined ? localBrokerage[b.booking_id] : (brokerageAmount > 0 ? String(brokerageAmount) : '')}
+                  placeholder="0"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="numeric"
+                  onChangeText={(text) => setLocalBrokerage((prev) => ({ ...prev, [b.booking_id]: text }))}
+                  onBlur={() => {
+                    const val = localBrokerage[b.booking_id];
+                    if (val === undefined) return;
+                    update(b.booking_id, { brokerage_amount: parseFloat(val) || 0 }, 'brokerage');
+                  }}
+                  style={{ height: 32, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
+                />
+              </View>
+              <View style={{ flex: 1, minWidth: 100 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>RECEIVED (₹)</Text>
+                <TextInput
+                  testID={`brokerage-received-${b.booking_id}`}
+                  value={localBrokerageReceived[b.booking_id] !== undefined ? localBrokerageReceived[b.booking_id] : (brokerageReceivedAmount > 0 ? String(brokerageReceivedAmount) : '')}
+                  placeholder="0"
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="numeric"
+                  onChangeText={(text) => setLocalBrokerageReceived((prev) => ({ ...prev, [b.booking_id]: text }))}
+                  onBlur={() => {
+                    const val = localBrokerageReceived[b.booking_id];
+                    if (val === undefined) return;
+                    update(b.booking_id, { brokerage_received: parseFloat(val) || 0 }, 'brokerage-received');
+                  }}
+                  style={{ height: 32, borderWidth: 1, borderColor: colors.border, borderRadius: 6, paddingHorizontal: 8, fontSize: 12, color: colors.text, backgroundColor: colors.surfaceAlt }}
+                />
+              </View>
+              <View style={{ flex: 1, minWidth: 100 }}>
+                <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600', marginBottom: 4 }}>BALANCE (₹)</Text>
+                <View
+                  testID={`brokerage-balance-${b.booking_id}`}
+                  style={{
+                    height: 32,
+                    borderWidth: 1,
+                    borderColor: colors.border,
+                    borderRadius: 6,
+                    paddingHorizontal: 8,
+                    justifyContent: 'center',
+                    backgroundColor: colors.surface,
+                  }}
+                >
+                  <Text style={{
+                    fontSize: 12,
+                    fontWeight: '700',
+                    color: balanceVal > 0 ? colors.warning : balanceVal < 0 ? colors.negative : colors.positive,
+                  }}>
+                    {formatRupee(balanceVal)}
+                  </Text>
+                </View>
+              </View>
             </View>
-            {((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) > 0) && b.booking_amount > 0 ? (
+            {brokerageVal > 0 && b.booking_amount > 0 ? (
               <Text style={{ color: colors.positive, fontSize: 12, fontWeight: '600' }}>
-                ({(((localBrokerage[b.booking_id] !== undefined ? parseFloat(localBrokerage[b.booking_id]) || 0 : brokerageAmount) / b.booking_amount) * 100).toFixed(2)}%)
+                ({((brokerageVal / b.booking_amount) * 100).toFixed(2)}% of booking amount)
               </Text>
             ) : null}
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginLeft: 'auto' }}>
-              <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>STATUS</Text>
-              {([
-                { key: 'pending' as const, label: 'Pending', color: colors.warning },
-                { key: 'received' as const, label: 'Received', color: colors.positive },
-              ]).map((opt) => {
-                const active = brokerageStatus === opt.key;
-                return (
-                  <Pressable
-                    key={opt.key}
-                    testID={`brokerage-status-${opt.key}-${b.booking_id}`}
-                    onPress={() => {
-                      setLocalBrokerageStatus((prev) => ({ ...prev, [b.booking_id]: opt.key }));
-                      update(b.booking_id, { brokerage_status: opt.key }, 'brokerage-status');
-                    }}
-                    disabled={busy !== null}
-                    style={{
-                      height: 28,
-                      paddingHorizontal: 10,
-                      borderRadius: 6,
-                      borderWidth: 1,
-                      borderColor: active ? opt.color : colors.border,
-                      backgroundColor: active ? opt.color + '18' : colors.surfaceAlt,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      opacity: busy !== null ? 0.65 : 1,
-                    }}
-                  >
-                    <Text style={{ color: active ? opt.color : colors.textSecondary, fontSize: 11, fontWeight: '700' }}>
-                      {opt.label}
-                    </Text>
-                  </Pressable>
-                );
-              })}
-            </View>
           </View>
         ) : null}
 

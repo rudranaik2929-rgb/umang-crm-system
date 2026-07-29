@@ -1678,6 +1678,7 @@ class BookingCreate(BaseModel):
     stamp_duty: Optional[float]=None; registration_fees: Optional[float]=None
     gst: Optional[float]=None; society_charges: Optional[float]=None
     brokerage_amount: Optional[float]=None
+    brokerage_received: Optional[float]=None
     brokerage_status: Optional[str]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
@@ -1690,6 +1691,7 @@ class BookingUpdate(BaseModel):
     stamp_duty: Optional[float]=None; registration_fees: Optional[float]=None
     gst: Optional[float]=None; society_charges: Optional[float]=None
     brokerage_amount: Optional[float]=None
+    brokerage_received: Optional[float]=None
     brokerage_status: Optional[str]=None
     payment_status: Optional[str]=None; payment_progress: Optional[int]=None; booking_date: Optional[datetime]=None
     starred: Optional[bool]=None; completed_tasks: Optional[List[str]]=None
@@ -3200,6 +3202,15 @@ def normalize_brokerage_status(value: Any) -> str:
     return "received" if status == "received" else "pending"
 
 
+def booking_brokerage_received_amount(booking: Dict[str, Any]) -> float:
+    """Amount of brokerage actually received for this booking."""
+    if booking.get("brokerage_received") is not None:
+        return max(0.0, float(booking.get("brokerage_received") or 0))
+    if normalize_brokerage_status(booking.get("brokerage_status")) == "received":
+        return booking_brokerage_amount(booking)
+    return 0.0
+
+
 def booking_brokerage_by_status(bookings: List[Dict[str, Any]]) -> Dict[str, float]:
     """Split total brokerage into received vs pending amounts."""
     received = 0.0
@@ -3208,10 +3219,9 @@ def booking_brokerage_by_status(bookings: List[Dict[str, Any]]) -> Dict[str, flo
         amount = booking_brokerage_amount(booking)
         if amount <= 0:
             continue
-        if normalize_brokerage_status(booking.get("brokerage_status")) == "received":
-            received += amount
-        else:
-            pending += amount
+        rec = min(booking_brokerage_received_amount(booking), amount)
+        received += rec
+        pending += max(0.0, amount - rec)
     return {
         "received": received,
         "pending": pending,
@@ -7826,6 +7836,7 @@ async def create_booking(p: BookingCreate, cu: User=Depends(get_current_user)):
         "stamp_duty": p.stamp_duty, "registration_fees": p.registration_fees,
         "gst": p.gst, "society_charges": p.society_charges,
         "brokerage_amount": p.brokerage_amount,
+        "brokerage_received": p.brokerage_received,
         "payment_status": p.payment_status,
         "booking_date": p.booking_date.isoformat() if p.booking_date else now_utc().isoformat(),
         "starred": p.starred, "completed_tasks": p.completed_tasks,
@@ -7946,7 +7957,7 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
             )
         else:
             sync_lead_stage(lead_id, "booking", force=True)
-    if any(k in data for k in ("brokerage_amount", "brokerage_status")):
+    if any(k in data for k in ("brokerage_amount", "brokerage_received", "brokerage_status")):
         _dashboard_stats_cache["ts"] = 0.0
         _dashboard_stats_cache["data"] = None
         _graph_cache["ts"] = 0.0
@@ -8944,7 +8955,7 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
 def _compute_dashboard_stats() -> Dict[str, Any]:
     """Shared pipeline stats for admin + manager main Dashboard."""
     fetched = sb_select_parallel({
-        "bookings": ("bookings", {"select": "booking_id,lead_id,status,completed_tasks,booking_officer_id,agreement_status,booking_amount,brokerage_amount,brokerage_status"}),
+        "bookings": ("bookings", {"select": "booking_id,lead_id,status,completed_tasks,booking_officer_id,agreement_status,booking_amount,brokerage_amount,brokerage_received,brokerage_status"}),
         "visits": ("visits", {"select": "visit_id,status"}),
         "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage"}),
         "customers": ("customers", {"select": "customer_id,lead_id"}),

@@ -20,16 +20,23 @@ def test_normalize_brokerage_status_defaults_pending():
 
 def test_booking_brokerage_by_status_splits_amounts():
     bookings = [
-        {"brokerage_amount": 10000, "brokerage_status": "received"},
-        {"brokerage_amount": 5000, "brokerage_status": "pending"},
-        {"brokerage_amount": 2500},  # missing status → pending
-        {"brokerage_amount": 0, "brokerage_status": "received"},  # ignored
-        {"agreement_status": "pending | Brokerage: 1500", "brokerage_status": "received"},
+        {"brokerage_amount": 10000, "brokerage_received": 10000},
+        {"brokerage_amount": 5000, "brokerage_received": 2000},
+        {"brokerage_amount": 2500},  # missing received → pending
+        {"brokerage_amount": 0, "brokerage_received": 100},  # ignored
+        {"agreement_status": "pending | Brokerage: 1500", "brokerage_received": 500},
+        {"brokerage_amount": 8000, "brokerage_status": "received"},  # legacy full received
     ]
     split = main.booking_brokerage_by_status(bookings)
-    assert split["received"] == 11500.0  # 10000 + 1500
-    assert split["pending"] == 7500.0  # 5000 + 2500
-    assert split["total"] == 19000.0
+    assert split["received"] == 20500.0  # 10000 + 2000 + 500 + 8000
+    assert split["pending"] == 6500.0  # 3000 + 2500 + 1000
+    assert split["total"] == 27000.0
+
+
+def test_booking_brokerage_received_amount_prefers_column():
+    assert main.booking_brokerage_received_amount({"brokerage_amount": 10000, "brokerage_received": 3000}) == 3000.0
+    assert main.booking_brokerage_received_amount({"brokerage_amount": 10000, "brokerage_status": "received"}) == 10000.0
+    assert main.booking_brokerage_received_amount({"brokerage_amount": 10000}) == 0.0
 
 
 def test_booking_brokerage_by_status_empty():
