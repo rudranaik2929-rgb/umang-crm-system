@@ -338,7 +338,7 @@ export default function MyDashboard() {
                   : kpi.metric === 'total'
                     ? 'Leads you already updated · tap for list'
                     : kpi.metric === 'today_activity'
-                    ? 'Last 24h work report · tap to open'
+                    ? 'Today\'s work report · resets at midnight · tap to open'
                     : kpi.metric === 'today_follow_ups'
                     ? 'Due today only · tap for list'
                     : kpi.metric === 'visited'

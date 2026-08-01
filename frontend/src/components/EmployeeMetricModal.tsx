@@ -21,7 +21,7 @@ const METRIC_LABELS: Record<string, string> = {
   ringing: 'Ringing',
   follow_ups: 'Follow Up',
   today_follow_ups: 'Due Today (subset of Follow Up)',
-  today_activity: 'Today Activity — Last 24 Hours',
+  today_activity: 'Today Activity',
   login_file: 'Login File',
   sanctioned: 'Sanctioned',
   registration: 'Registration',

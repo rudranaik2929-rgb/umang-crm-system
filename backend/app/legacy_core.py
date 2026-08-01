@@ -626,7 +626,11 @@ def workspace_queue_stages(role: Optional[str]) -> List[str]:
 
 
 MISSED_LEAD_HOURS = 24
-TODAY_ACTIVITY_HOURS = 24
+
+
+def today_activity_cutoff_utc() -> datetime:
+    """Start of calendar today (IST) — Today Activity shows only today's work, resets at midnight."""
+    return datetime.combine(app_today(), datetime.min.time(), tzinfo=APP_TZ)
 
 NON_WORK_ACTIVITY_TYPES = frozenset({
     "lead_assigned", "bulk_import", "bulk_import_assign", "integration_duplicate",
@@ -707,9 +711,10 @@ def is_employee_work_activity(act: Dict[str, Any]) -> bool:
 
 def filter_employee_work_activities(
     activities: List[Dict[str, Any]],
-    hours: int = TODAY_ACTIVITY_HOURS,
+    hours: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    cutoff = now_utc() - timedelta(hours=hours)
+    """Employee work actions since start of today (IST) — hours kept only for tests/back-compat."""
+    cutoff = (now_utc() - timedelta(hours=hours)) if hours else today_activity_cutoff_utc()
     rows = []
     for act in activities:
         if not is_employee_work_activity(act):
@@ -743,9 +748,9 @@ def activity_report_label(act: Dict[str, Any]) -> str:
 def build_today_activity_report(
     activities: List[Dict[str, Any]],
     emp_leads: List[Dict[str, Any]],
-    hours: int = TODAY_ACTIVITY_HOURS,
+    hours: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
-    """Per-lead daily work report — last N hours of employee actions."""
+    """Per-lead daily work report — today's employee actions (calendar day, IST)."""
     work = filter_employee_work_activities(activities, hours=hours)
     lead_map = {l.get("lead_id"): l for l in emp_leads if l.get("lead_id")}
     grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -784,7 +789,7 @@ def build_today_activity_report(
 def count_today_activity_leads(
     activities: List[Dict[str, Any]],
     emp_leads: List[Dict[str, Any]],
-    hours: int = TODAY_ACTIVITY_HOURS,
+    hours: Optional[int] = None,
 ) -> int:
     return len(build_today_activity_report(activities, emp_leads, hours=hours))
 
@@ -9664,7 +9669,7 @@ PERSONAL_ACTIVITY_LABELS: Dict[str, str] = {
     "low_budget": "Low Budget",
     "ringing": "Ringing",
     "missed_leads": "Missed Lead",
-    "today_activity": "Today Activity — Last 24 Hours",
+    "today_activity": "Today Activity",
     "site_visit_assigned": "Site Visit Assigned",
     "assigned_for_visit": "Site Visit Assigned",
 }
@@ -9857,7 +9862,7 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
     }
     if result["kind"] == "today_report":
         payload["action_total"] = action_total
-        payload["period_hours"] = TODAY_ACTIVITY_HOURS
+        payload["period"] = "today"
     return payload
 
 
@@ -9922,7 +9927,7 @@ async def list_employee_metric_leads(
             "kind": "today_report",
             "total": len(report),
             "action_total": sum(int(r.get("action_count") or 0) for r in report),
-            "period_hours": TODAY_ACTIVITY_HOURS,
+            "period": "today",
             "report": report[:limit],
             "leads": [],
         }

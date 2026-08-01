@@ -31,7 +31,6 @@ export function MyActivityModal({ visible, metric, onClose, onChanged, onOpenLea
   const [items, setItems] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
   const [actionTotal, setActionTotal] = useState(0);
-  const [periodHours, setPeriodHours] = useState(24);
   const [loading, setLoading] = useState(false);
 
   const load = useCallback(async () => {
@@ -45,7 +44,6 @@ export function MyActivityModal({ visible, metric, onClose, onChanged, onOpenLea
       setItems(res.data?.items || []);
       setTotal(Number(res.data?.total || 0));
       setActionTotal(Number(res.data?.action_total || 0));
-      setPeriodHours(Number(res.data?.period_hours || 24));
     } finally {
       setLoading(false);
     }
@@ -60,7 +58,7 @@ export function MyActivityModal({ visible, metric, onClose, onChanged, onOpenLea
   };
 
   const subtitle = kind === 'today_report'
-    ? `${total} lead${total === 1 ? '' : 's'} · ${actionTotal} action${actionTotal === 1 ? '' : 's'} in last ${periodHours}h`
+    ? `${total} lead${total === 1 ? '' : 's'} · ${actionTotal} action${actionTotal === 1 ? '' : 's'} today`
     : `${total} lead${total === 1 ? '' : 's'} · tap to open`;
 
   if (!visible) return null;
@@ -94,7 +92,7 @@ export function MyActivityModal({ visible, metric, onClose, onChanged, onOpenLea
           <ActivityIndicator color={colors.primary} style={{ marginVertical: 40 }} />
         ) : items.length === 0 ? (
           <Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 32, fontSize: 13 }}>
-            {kind === 'today_report' ? 'No work logged in the last 24 hours yet.' : 'No items in this category yet.'}
+            {kind === 'today_report' ? 'No work logged today yet.' : 'No items in this category yet.'}
           </Text>
         ) : (
           <ScrollView style={{ maxHeight: 520 }} keyboardShouldPersistTaps="handled">
