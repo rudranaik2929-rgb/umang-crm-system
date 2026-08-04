@@ -205,6 +205,70 @@ def test_housing_webhook_accepts_valid_hmac(monkeypatch):
     assert inserted["leads"][0]["source"] == "Housing.com"
 
 
+def test_integration_lead_before_start_date_is_ignored(monkeypatch):
+    """Housing/Facebook leads dated before INTEGRATION_LEAD_START must never be re-stored."""
+    inserted = _install_fake_supabase(monkeypatch)
+    result = main.create_integrated_lead(
+        {
+            "lead_id": "old-housing-1",
+            "lead_name": "Old Buyer",
+            "lead_phone": "9876500101",
+            "lead_date": "2026-07-31T20:00:00+05:30",
+        },
+        "Housing.com",
+        quiet=True,
+    )
+    assert result["status"] == "ignored"
+    assert result["reason"] == "before_start_date"
+    assert len(inserted["leads"]) == 0
+
+
+def test_facebook_lead_before_start_date_is_ignored(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    result = main.create_integrated_lead(
+        {
+            "id": "fb-leadgen-101",
+            "full_name": "Old FB Lead",
+            "phone_number": "9876500102",
+            "created_time": "2026-07-25T09:00:00+00:00",
+        },
+        "Facebook",
+        quiet=True,
+    )
+    assert result["status"] == "ignored"
+    assert result["reason"] == "before_start_date"
+    assert len(inserted["leads"]) == 0
+
+
+def test_integration_lead_on_or_after_start_date_created(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    result = main.create_integrated_lead(
+        {
+            "lead_id": "new-housing-2",
+            "lead_name": "New Buyer",
+            "lead_phone": "9876500103",
+            "lead_date": "2026-08-02T11:00:00+05:30",
+        },
+        "Housing.com",
+        quiet=True,
+    )
+    assert result["status"] == "created"
+    assert len(inserted["leads"]) == 1
+    assert inserted["leads"][0]["external_lead_id"] == "new-housing-2"
+
+
+def test_integration_lead_without_date_is_imported(monkeypatch):
+    """No external date info = treated as current, must still import."""
+    inserted = _install_fake_supabase(monkeypatch)
+    result = main.create_integrated_lead(
+        {"lead_id": "no-date-2", "lead_name": "No Date", "lead_phone": "9876500104"},
+        "Housing.com",
+        quiet=True,
+    )
+    assert result["status"] == "created"
+    assert len(inserted["leads"]) == 1
+
+
 def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
     monkeypatch.setattr(main, "SESSION_CACHE", {"leads": [
         {"lead_id": "l1", "source": "manual_entry", "status": "active", "phone": "+919000000001"},
@@ -286,20 +350,21 @@ def test_facebook_leadgen_webhook_payload(monkeypatch):
     monkeypatch.setattr(main, "fetch_facebook_lead", fake_fetch)
 
     client = TestClient(main.app)
+    now_ts = int(time.time()) - 60
     response = client.post(
         "/api/facebook/webhook",
         json={
             "object": "page",
             "entry": [{
                 "id": "PAGE_123",
-                "time": 1710000000,
+                "time": now_ts,
                 "changes": [{
                     "field": "leadgen",
                     "value": {
                         "leadgen_id": "LEADGEN_999",
                         "page_id": "PAGE_123",
                         "form_id": "FORM_456",
-                        "created_time": 1710000001,
+                        "created_time": now_ts,
                     },
                 }],
             }],

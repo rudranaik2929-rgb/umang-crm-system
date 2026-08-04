@@ -3829,6 +3829,20 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
             record_integration_event(source, payload, "ignored", external_id=normalized.get("external_lead_id"), error="Missing phone/email")
         return {"status": "ignored", "reason": "missing_phone_or_email", "payload": normalized}
 
+    if source in ("Facebook", "Housing.com"):
+        lead_ts = parse_lead_ts(normalized.get("external_created_at"))
+        start_ts = parse_lead_ts(INTEGRATION_LEAD_START)
+        if lead_ts and start_ts and lead_ts < start_ts:
+            if not quiet:
+                record_integration_event(
+                    source,
+                    payload,
+                    "ignored",
+                    external_id=normalized.get("external_lead_id"),
+                    error="before_start_date",
+                )
+            return {"status": "ignored", "reason": "before_start_date", "payload": normalized}
+
     existing = find_existing_integrated_lead(
         normalized["phone"],
         normalized.get("email"),
