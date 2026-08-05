@@ -3253,6 +3253,15 @@ def booking_brokerage_by_status(bookings: List[Dict[str, Any]]) -> Dict[str, flo
         "total": received + pending,
     }
 
+
+def bookings_stats_select() -> str:
+    """Bookings select for dashboard stats — omits brokerage columns if the DB lacks them,
+    so a missing column never blanks the whole dashboard."""
+    base = "booking_id,lead_id,status,completed_tasks,booking_officer_id,agreement_status,booking_amount"
+    if sb_columns_exist("bookings", ["brokerage_amount", "brokerage_received", "brokerage_status"]):
+        return f"{base},brokerage_amount,brokerage_received,brokerage_status"
+    return base
+
 def is_legacy_skeleton_booking(booking: Dict[str, Any]) -> bool:
     """Auto-created placeholder rows (site-visit sync) — hidden from the booking list."""
     return (
@@ -6114,10 +6123,10 @@ async def list_leads(
     if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
     if source: params["source"] = f"ilike.*{source}*"
 
-    # Paginate at the database — never pull the entire leads table for a list view.
-    db_fetch = min(limit + offset + 50, 500)
-    params["limit"] = str(db_fetch)
-    leads = sb_select("leads", params)
+    # Pull every matching row (paginated) — a hard cap here silently drops
+    # leads once the table grows past the cap, so never truncate before
+    # Python-side filtering and page slicing happen.
+    leads = sb_select_all("leads", params)
     
     # Filter session cache to match the query parameters
     filtered_cache = []
@@ -7950,10 +7959,17 @@ async def update_booking(booking_id: str, p: BookingUpdate, cu: User=Depends(get
         elif "payment_progress" not in data:
             data["payment_progress"] = 0
     updated = sb_update("bookings", "booking_id", booking_id, data)
-    if not updated and any(key in data for key in ["completed_tasks", "starred", "brokerage_status"]):
-        compatible_data = {k: v for k, v in data.items() if k not in ["completed_tasks", "starred", "brokerage_status"]}
-        if compatible_data:
-            updated = sb_update("bookings", "booking_id", booking_id, compatible_data)
+    if not updated:
+        # Older DBs may lack the optional brokerage columns — retry without them
+        # so the remaining fields still save (brokerage will appear after SQL fix).
+        optional_ok = sb_columns_exist("bookings", ["brokerage_amount", "brokerage_received", "brokerage_status"])
+        retry_keys = ["completed_tasks", "starred", "brokerage_status"]
+        if not optional_ok:
+            retry_keys += ["brokerage_amount", "brokerage_received"]
+        if any(key in data for key in retry_keys):
+            compatible_data = {k: v for k, v in data.items() if k not in retry_keys}
+            if compatible_data:
+                updated = sb_update("bookings", "booking_id", booking_id, compatible_data)
     # Update cache
     booking_record = None
     for i, b in enumerate(SESSION_CACHE["bookings"]):
@@ -9158,7 +9174,7 @@ async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
 def _compute_dashboard_stats() -> Dict[str, Any]:
     """Shared pipeline stats for admin + manager main Dashboard."""
     fetched = sb_select_parallel({
-        "bookings": ("bookings", {"select": "booking_id,lead_id,status,completed_tasks,booking_officer_id,agreement_status,booking_amount,brokerage_amount,brokerage_received,brokerage_status"}),
+        "bookings": ("bookings", {"select": bookings_stats_select()}),
         "visits": ("visits", {"select": "visit_id,status"}),
         "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage"}),
         "customers": ("customers", {"select": "customer_id,lead_id"}),
@@ -9259,7 +9275,7 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
     now = now_utc()
     graph_data = sb_select_parallel({
         "leads": ("leads", {"select": "lead_id,created_at,source,status,stage", "created_at": f"gte.{(now - timedelta(days=400)).isoformat()}"}),
-        "bookings": ("bookings", {"select": "booking_id,brokerage_amount,brokerage_status,agreement_status,created_at"}),
+        "bookings": ("bookings", {"select": "booking_id,created_at,brokerage_amount,brokerage_status,agreement_status" if sb_columns_exist("bookings", ["brokerage_status"]) else "booking_id,created_at,brokerage_amount,agreement_status"}),
         "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
     })
     leads = prune_session_list_against_db("leads", graph_data["leads"], "lead_id")

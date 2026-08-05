@@ -1,5 +1,6 @@
 """Supabase PostgREST client helpers."""
 import logging
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -28,6 +29,27 @@ def sb_select(table: str, params: Optional[dict] = None) -> list:
     if r.status_code >= 400:
         logging.error(f"Supabase SELECT {table}: {r.status_code} {r.text[:300]}")
     return r.json() if r.status_code < 400 else []
+
+
+_sb_columns_cache: Dict[str, bool] = {}
+
+
+def sb_columns_exist(table: str, columns: List[str], ttl_sec: int = 300) -> bool:
+    """Check (cached) that every column exists on the table via a probe SELECT."""
+    key = f"{table}:{','.join(sorted(columns))}"
+    cached = _sb_columns_cache.get(key)
+    if cached and time.time() - cached[0] < ttl_sec:
+        return cached[1]
+    r = _http.get(
+        sb_url(table),
+        headers=sb_headers(),
+        params={"select": ",".join(columns), "limit": "1"},
+    )
+    ok = r.status_code < 400
+    _sb_columns_cache[key] = (time.time(), ok)
+    if not ok:
+        logging.warning(f"Supabase columns missing on {table} {columns}: {r.status_code} {r.text[:200]}")
+    return ok
 
 
 def sb_select_parallel(specs: Dict[str, Tuple[str, Optional[dict]]]) -> Dict[str, list]:
