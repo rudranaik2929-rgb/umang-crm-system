@@ -587,6 +587,7 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
     try:
         db_leads = sb_select_all("leads", {"select": LEADS_CANONICAL_SELECT, "order": "created_at.desc"})
         merged = merge_leads_with_cache(db_leads)
+        merged = [l for l in merged if lead_is_since_start(l)]
         with _leads_cache_lock:
             _leads_cache.update({"ts": time.time(), "select": LEADS_CANONICAL_SELECT, "data": merged})
             _leads_cache.pop("_loading", None)
@@ -654,6 +655,23 @@ def parse_lead_ts(value: Any) -> Optional[datetime]:
         return dt
     except ValueError:
         return None
+
+
+def lead_enquiry_ts(lead: Dict[str, Any]) -> Optional[datetime]:
+    """Real enquiry date — external_created_at first, else created_at (same rule as SQL)."""
+    return parse_lead_ts(lead.get("external_created_at")) or parse_lead_ts(lead.get("created_at"))
+
+
+def lead_is_since_start(lead: Dict[str, Any], start_iso: str = INTEGRATION_LEAD_START) -> bool:
+    """Only leads on/after INTEGRATION_LEAD_START (default 2026-08-01) are shown/stored.
+
+    Leads without any date are treated as new (kept), matching the SQL trigger rule.
+    """
+    ts = lead_enquiry_ts(lead)
+    if not ts:
+        return True
+    start = parse_lead_ts(start_iso)
+    return not start or ts >= start
 
 
 def effective_assigned_at(lead: Dict[str, Any]) -> Optional[datetime]:
@@ -3849,6 +3867,10 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
         source,
         normalized.get("external_lead_id"),
     )
+    # A pre-Aug-1 lead (or stale cache ghost of a deleted one) must never be
+    # refreshed/resurrected — treat it as non-existent so a fresh lead is created.
+    if existing and not lead_is_since_start(existing):
+        existing = None
     if existing:
         update_data = {"updated_at": now_utc().isoformat()}
         for key in ("email", "budget", "location", "property_type", "notes"):
@@ -6112,6 +6134,7 @@ async def list_leads(
     cache_ids = {l.get("lead_id") for l in filtered_cache}
     db_only = [l for l in leads if l.get("lead_id") not in cache_ids]
     all_leads = filtered_cache + db_only
+    all_leads = [l for l in all_leads if lead_is_since_start(l)]
 
     if q:
         needle = q.lower().strip()
@@ -6942,6 +6965,7 @@ async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user
         "limit": str(limit * 3),
     })
     leads = merge_leads_with_cache(db_leads)
+    leads = [l for l in leads if lead_is_since_start(l)]
     leads.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     out = []
     for l in leads:
@@ -9239,6 +9263,7 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
         "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
     })
     leads = prune_session_list_against_db("leads", graph_data["leads"], "lead_id")
+    leads = [l for l in leads if lead_is_since_start(l)]
     pipeline_leads = clean_leads_for_platform_stats(leads)
 
     days_map = {(now - timedelta(days=29 - i)).strftime("%Y-%m-%d"): 0 for i in range(30)}
