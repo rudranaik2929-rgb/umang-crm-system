@@ -10078,11 +10078,11 @@ async def _facebook_background_sync_loop() -> None:
             break
         except Exception:
             logging.exception("Facebook background sync loop error")
-        await asyncio.sleep(max(FACEBOOK_AUTO_SYNC_INTERVAL_SEC, 120))
+        await asyncio.sleep(max(FACEBOOK_AUTO_SYNC_INTERVAL_SEC, 30))
 
 
 async def _housing_background_sync_loop() -> None:
-    """Pull new Housing.com leads every HOUSING_AUTO_SYNC_INTERVAL_SEC (default 5 min)."""
+    """Pull new Housing.com leads every HOUSING_AUTO_SYNC_INTERVAL_SEC (default 30 sec)."""
     await asyncio.sleep(30)
     while True:
         try:
@@ -10097,7 +10097,7 @@ async def _housing_background_sync_loop() -> None:
             break
         except Exception:
             logging.exception("Housing background sync loop error")
-        await asyncio.sleep(max(HOUSING_AUTO_SYNC_INTERVAL_SEC, 60))
+        await asyncio.sleep(max(HOUSING_AUTO_SYNC_INTERVAL_SEC, 30))
 
 
 async def _notification_purge_loop() -> None:

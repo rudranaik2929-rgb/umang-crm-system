@@ -35,7 +35,9 @@ services:
       - key: HOUSING_AUTO_SYNC_ENABLED
         value: "true"
       - key: HOUSING_AUTO_SYNC_INTERVAL_SEC
-        value: "300"
+        value: "30"
+      - key: FACEBOOK_AUTO_SYNC_INTERVAL_SEC
+        value: "30"
       - key: LEADS_CACHE_TTL_SEC
         value: "300"
       - key: STATS_CACHE_TTL_SEC
