@@ -313,7 +313,7 @@ export default function Dashboard() {
         <View style={styles.metricSection}>
           <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Booking Overview</Text>
           <View style={styles.metricGrid}>
-            <MetricCard icon="document-text-outline" label="Bookings" value={model.bookingLeads} accent={colors.warning} helper="Booking department · not in Total Leads" onPress={() => setLeadsBucket('booking')} />
+            <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper="Booking records in system · not part of Total Leads" onPress={() => router.push('/(app)/bookings' as any)} />
             <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Booking department · not in Total Leads" onPress={() => setLeadsBucket('registration')} />
             {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
               const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
