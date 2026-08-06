@@ -298,6 +298,7 @@ __all__ = [
     "sb_url",
     "sb_select",
     "sb_select_parallel",
+    "sb_columns_exist",
     "sb_insert",
     "sb_insert_many",
     "sb_update",
