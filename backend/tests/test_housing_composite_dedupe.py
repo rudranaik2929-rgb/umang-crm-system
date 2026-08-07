@@ -135,3 +135,48 @@ def test_housing_insert_includes_extra_columns_when_available(monkeypatch):
     stored = inserted["leads"][0]
     assert stored["property_project_id"] == "P9"
     assert stored["lead_received_at"] is not None
+
+
+def _masked_housing_payload(project_id, lead_date):
+    """Simulates the reach Housing.com pull API: lead_phone/lead_email are null."""
+    return {
+        "lead_name": "Bhawar Singh Solanki",
+        "lead_phone": None,
+        "lead_email": None,
+        "lead_date": str(lead_date),
+        "project_id": project_id,
+        "project_name": f"Project {project_id}",
+        "locality_name": "Vasai East",
+        "city_name": "Mumbai",
+    }
+
+
+def test_masked_phone_lead_is_imported(monkeypatch):
+    """Housing.com pull payloads with masked phone/email must not be dropped."""
+    inserted = _install_fake_supabase(monkeypatch)
+    r = _import(_masked_housing_payload("312389", int(time.time()) - 60))
+    assert r["status"] == "created"
+    assert inserted["leads"][0]["source"] == "Housing.com"
+    assert inserted["leads"][0]["phone"] == ""
+
+
+def test_masked_phone_lead_dedupes_across_polls(monkeypatch):
+    """Re-polling the same masked lead must yield a duplicate, not a new row."""
+    inserted = _install_fake_supabase(monkeypatch)
+    ts = int(time.time()) - 60
+    r1 = _import(_masked_housing_payload("312389", ts))
+    r2 = _import(_masked_housing_payload("312389", ts))
+    assert r1["status"] == "created"
+    assert r2["status"] == "duplicate"
+    assert r2.get("updated") is False
+    assert len(inserted["leads"]) == 1
+
+
+def test_masked_phone_lead_different_project_is_separate(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    ts = int(time.time()) - 60
+    r1 = _import(_masked_housing_payload("312389", ts))
+    r2 = _import(_masked_housing_payload("299101", ts))
+    assert r1["status"] == "created"
+    assert r2["status"] == "created"
+    assert len(inserted["leads"]) == 2

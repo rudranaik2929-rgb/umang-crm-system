@@ -3632,12 +3632,12 @@ def system_integration_actor():
     return _SystemUser()
 
 
-def run_housing_sync_background(mode: str = "auto") -> Dict[str, Any]:
+def run_housing_sync_background(mode: str = "auto", req: Optional["HousingSyncRequest"] = None) -> Dict[str, Any]:
     """Run Housing pull sync on a worker thread (server cron / background loop)."""
     if not HOUSING_PROFILE_ID or not HOUSING_ENCRYPTION_KEY:
         return {"status": "skipped", "reason": "credentials_not_configured"}
     try:
-        return asyncio.run(_housing_sync_impl(HousingSyncRequest(), system_integration_actor(), mode=mode))
+        return asyncio.run(_housing_sync_impl(req or HousingSyncRequest(), system_integration_actor(), mode=mode))
     except HTTPException as exc:
         logging.error("Housing background sync failed: %s", exc.detail)
         return {"status": "error", "detail": exc.detail}
@@ -3765,9 +3765,19 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
         project_id = clean_text(pick_first(payload, ["project_id", "property_project_id", "project"]))
         lead_date = clean_text(payload.get("lead_date"))
         phone_key = normalize_phone(pick_first(payload, ["lead_phone", "phone", "mobile", "phone_number"]))
-        parts = [p for p in [project_id, phone_key, lead_date] if p]
-        if len(parts) >= 2:
-            external_id = ":".join(parts)
+        name_key = re.sub(r"[^A-Za-z0-9]+", "-", clean_text(pick_first(payload, [
+            "customer_name", "full_name", "name", "lead_name", "first_name",
+        ]))).strip("-").lower()
+        if phone_key:
+            parts = [p for p in [project_id, phone_key, lead_date] if p]
+            if len(parts) >= 2:
+                external_id = ":".join(parts)
+        else:
+            # Pull API masks phone/email; build a stable key from the fields it
+            # does provide (project + calendar day + name) so re-polls dedupe.
+            parts = [p for p in [project_id, lead_date, name_key] if p]
+            if len(parts) >= 2:
+                external_id = f"housing-pull:{':'.join(parts)}"
     notes = clean_text(pick_first(payload, ["notes", "comment", "message", "remarks", "query"]))
     note_parts = []
     if project_name:
@@ -3996,9 +4006,16 @@ def housing_extra_columns_available() -> bool:
 def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, quiet: bool = False) -> Dict[str, Any]:
     normalized = lead_from_payload(payload, source)
     if not normalized["phone"] and not normalized.get("email"):
-        if not quiet:
-            record_integration_event(source, payload, "ignored", external_id=normalized.get("external_lead_id"), error="Missing phone/email")
-        return {"status": "ignored", "reason": "missing_phone_or_email", "payload": normalized}
+        if source == "Housing.com" and (normalized.get("project_id") or normalized.get("project_name")):
+            # Housing.com's pull API masks phone/email (lead_phone=null), so a
+            # valid enquiry would otherwise be silently dropped and never show
+            # in the CRM. Import it anyway — the lead is still visible with
+            # name/project/locality, and dedupe uses the stable external id.
+            pass
+        else:
+            if not quiet:
+                record_integration_event(source, payload, "ignored", external_id=normalized.get("external_lead_id"), error="Missing phone/email")
+            return {"status": "ignored", "reason": "missing_phone_or_email", "payload": normalized}
 
     if source in ("Facebook", "Housing.com"):
         lead_ts = parse_lead_ts(normalized.get("external_created_at"))
@@ -5393,7 +5410,13 @@ async def housing_poll(cu: User=Depends(get_current_user)):
 
 @api_router.post("/integrations/housing/cron")
 async def housing_cron_sync(request: Request):
-    """External cron hook — same as background auto-sync (optional CRON_SECRET header)."""
+    """External cron hook — same as background auto-sync (optional CRON_SECRET header).
+
+    Extra (optional) query params to trigger a one-shot backfill from an external
+    tool (e.g. after a data-loss incident):
+        ?start=<epoch_seconds>&end=<epoch_seconds>
+    The window is still capped by HOUSING_API_MAX_RANGE_SEC (2 days).
+    """
     if CRON_SECRET:
         provided = (
             request.headers.get("x-cron-secret")
@@ -5402,7 +5425,24 @@ async def housing_cron_sync(request: Request):
         )
         if provided != CRON_SECRET:
             raise HTTPException(status_code=401, detail="Invalid cron secret")
-    result = await asyncio.to_thread(run_housing_sync_background, "cron")
+    start_param = request.query_params.get("start")
+    end_param = request.query_params.get("end")
+    if start_param or end_param:
+        def _parse_epoch(val: Optional[str]) -> Optional[int]:
+            if not val:
+                return None
+            try:
+                return int(float(val))
+            except ValueError:
+                return None
+        req = HousingSyncRequest(
+            start_date=_parse_epoch(start_param),
+            end_date=_parse_epoch(end_param),
+            allow_historical=True,
+        )
+        result = await asyncio.to_thread(run_housing_sync_background, "cron", req)
+    else:
+        result = await asyncio.to_thread(run_housing_sync_background, "cron")
     logging.info("Housing cron sync: %s", result.get("status"))
     return result
 
