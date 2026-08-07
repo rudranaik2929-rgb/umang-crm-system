@@ -3606,11 +3606,15 @@ def should_import_housing_lead_on_sync(
     end_date: int,
     mode: str = "manual",
 ) -> bool:
-    """Skip old Housing API leads — only import when lead_date is inside the sync window."""
+    """Skip old Housing API leads — only import when lead_date is inside the sync window.
+
+    Live-only rule: pull syncs must never backfill history. A payload with no
+    parsable lead_date cannot be proven new, so it is skipped too — otherwise
+    stale/dateless leads can be re-imported as if they were fresh.
+    """
     lead_ts = get_housing_lead_epoch(payload)
     if lead_ts is None:
-        # Auto/poll: Housing API already scoped by start_date/end_date — don't drop new leads.
-        return mode in ("poll", "auto", "cron")
+        return False
     margin = HOUSING_POLL_OVERLAP_SEC if mode in ("poll", "auto", "cron") else 0
     return (start_date - margin) <= lead_ts <= (end_date + 60)
 
