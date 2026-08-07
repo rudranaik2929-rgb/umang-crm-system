@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal, ActivityIndicator, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api, warmUpBackend, IMPORT_TIMEOUT_MS } from '../lib/api';
+import { api, warmUpBackend, IMPORT_TIMEOUT_MS, downloadLeadsExcel } from '../lib/api';
 
 interface Props {
   visible: boolean;
@@ -145,6 +145,16 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
     onClose();
   };
 
+  const handleDownload = async () => {
+    setErrorMsg(null);
+    setResult(null);
+    try {
+      await downloadLeadsExcel();
+    } catch (e: any) {
+      setErrorMsg(e?.response?.data?.detail || e?.message || 'Download failed. Please try again.');
+    }
+  };
+
   const finishImport = () => {
     setStep('upload');
     setResult(null);
@@ -248,6 +258,14 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
               </View>
 
               <ScrollView contentContainerStyle={{ padding: 20, gap: 16 }}>
+                <Pressable
+                  onPress={handleDownload}
+                  style={[styles.downloadBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '10' }]}
+                >
+                  <Ionicons name="download-outline" size={16} color={colors.primary} />
+                  <Text style={[styles.downloadText, { color: colors.primary }]}>Download all leads (Excel)</Text>
+                </Pressable>
+
                 <Text style={[styles.desc, { color: colors.textSecondary }]}>
                   Upload Excel (.xlsx) or CSV. Leads auto-assign when the Assign to column matches an employee name (upper/lower case OK).
                 </Text>
@@ -345,6 +363,8 @@ const styles = StyleSheet.create({
   },
   pickerTitle: { fontSize: 14, fontWeight: '600' },
   pickerSub: { fontSize: 11 },
+  downloadBtn: { height: 40, borderRadius: 10, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+  downloadText: { fontSize: 13, fontWeight: '600' },
   selectedCard: { padding: 16, borderRadius: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 12 },
   fileName: { fontSize: 13, fontWeight: '600' },
   fileSize: { fontSize: 11, marginTop: 2 },

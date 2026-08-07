@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel, defaultRouteFor } from '../lib/constants';
-import { api, clearSnapshots, clearGetCache } from '../lib/api';
+import { api, clearSnapshots, clearGetCache, downloadLeadsExcel } from '../lib/api';
 import { useRouter, usePathname } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
 import { AddBookingLeadModal } from './AddBookingLeadModal';
@@ -35,6 +35,14 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
   const isBookingEmployee = user?.role === 'booking';
   const canImportLeads = user?.role === 'admin' || user?.role === 'manager';
+
+  const downloadLeads = async () => {
+    try {
+      await downloadLeadsExcel();
+    } catch (e: any) {
+      alert(e?.response?.data?.detail || e?.message || 'Download failed.');
+    }
+  };
 
   const resetAssignments = async () => {
     if (typeof window === 'undefined') return;
@@ -144,13 +152,22 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         )}
 
         {canImportLeads ? (
-          <Pressable
-            onPress={() => setImportLeadsVisible(true)}
-            testID="topbar-import-leads"
-            style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
-          >
-            <Ionicons name="cloud-upload-outline" size={18} color={colors.accent} />
-          </Pressable>
+          <>
+            <Pressable
+              onPress={() => setImportLeadsVisible(true)}
+              testID="topbar-import-leads"
+              style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
+            >
+              <Ionicons name="cloud-upload-outline" size={18} color={colors.accent} />
+            </Pressable>
+            <Pressable
+              onPress={downloadLeads}
+              testID="topbar-download-leads"
+              style={[styles.iconBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '15' }]}
+            >
+              <Ionicons name="download-outline" size={18} color={colors.primary} />
+            </Pressable>
+          </>
         ) : null}
 
         {isBookingEmployee ? (

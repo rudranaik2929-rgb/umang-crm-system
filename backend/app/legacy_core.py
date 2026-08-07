@@ -6420,6 +6420,57 @@ async def list_leads(
     return all_leads[offset:offset + limit]
 
 
+@api_router.get("/leads/export")
+async def export_leads(cu: User = Depends(get_current_user)):
+    """Download every lead as an Excel (.xlsx) file — same data the CRM lists,
+    including Housing.com project/locality/price columns when available."""
+    ensure_roles(cu, ["admin", "manager", "marketing"])
+    base_select = LEADS_CANONICAL_SELECT
+    if housing_extra_columns_available():
+        base_select += "," + ",".join(HOUSING_EXTRA_COLUMNS)
+
+    leads = sb_select_all("leads", {"select": base_select, "order": "created_at.desc"})
+    cache_ids = {l.get("lead_id") for l in SESSION_CACHE["leads"]}
+    db_only = [l for l in leads if l.get("lead_id") not in cache_ids]
+    all_leads = SESSION_CACHE["leads"] + db_only
+    all_leads = [l for l in all_leads if lead_is_since_start(l)]
+
+    headers = [
+        "Name", "Phone", "Email", "Source", "Stage", "Status", "Lead Type",
+        "Priority", "Call Status", "Budget", "Location", "Property Type",
+        "Assigned To", "Assigned At", "Follow Up At", "Created At", "Updated At",
+        "External Lead ID", "Project ID", "Project Name", "Service Type",
+        "Locality", "City", "Price Range", "Lead Received At",
+    ]
+    key_map = [
+        "name", "phone", "email", "source", "stage", "status", "lead_type",
+        "priority", "call_status", "budget", "location", "property_type",
+        "assigned_to", "assigned_at", "follow_up_at", "created_at", "updated_at",
+        "external_lead_id", "property_project_id", "project_name", "service_type",
+        "locality", "city", "price_range", "lead_received_at",
+    ]
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Leads"
+    ws.append(headers)
+    for lead in all_leads:
+        ws.append([lead.get(k) for k in key_map])
+    ws.freeze_panes = "A2"
+    for col_idx in range(1, len(headers) + 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 18
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    fname = f"leads_export_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}.xlsx"
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @api_router.get("/leads/booking-queue")
 async def list_booking_queue(limit: int = 100, cu: User = Depends(get_current_user)):
     """Hot / handoff leads for New Booking — small payload, no full-table scan."""

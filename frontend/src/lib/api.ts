@@ -428,6 +428,25 @@ export function clearSnapshots() {
     } catch {}
 }
 
+/** Download all leads as an Excel (.xlsx) file via the authenticated API. Web-only. */
+export async function downloadLeadsExcel(): Promise<void> {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+        throw new Error('Excel download is only available on the web app.');
+    }
+    const res = await api.get('/leads/export', { responseType: 'blob', timeout: 120000 });
+    const blob = res.data as Blob;
+    const url = window.URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    const contentDisp = res.headers?.['content-disposition'] || '';
+    const match = /filename="?([^";]+)"?/.exec(contentDisp);
+    anchor.href = url;
+    anchor.download = match?.[1] || `leads_export_${Date.now()}.xlsx`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    window.URL.revokeObjectURL(url);
+}
+
 export { LIVE_REFRESH_MS } from './liveSync';
 
 export const META_INTEGRATION_TIMEOUT_MS = 180000;
