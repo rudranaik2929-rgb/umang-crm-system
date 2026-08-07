@@ -84,7 +84,7 @@ def test_housing_sync_skips_stale_leads(monkeypatch):
     assert inserted["leads"][0]["external_lead_id"] == "new-1"
 
 
-def test_housing_auto_mode_imports_lead_without_lead_date(monkeypatch):
+def test_housing_auto_mode_skips_lead_without_lead_date(monkeypatch):
     inserted = _install_fake_supabase(monkeypatch)
     monkeypatch.setattr(main, "HOUSING_PROFILE_ID", "2548773")
     monkeypatch.setattr(main, "HOUSING_ENCRYPTION_KEY", "secret-key")
@@ -102,9 +102,12 @@ def test_housing_auto_mode_imports_lead_without_lead_date(monkeypatch):
     monkeypatch.setattr(main._http, "get", lambda *args, **kwargs: FakeResponse())
 
     result = main.run_housing_sync_background("auto")
+    # Live-only rule: a payload without a parsable lead_date cannot be proven new,
+    # so pull syncs must skip it instead of importing an unverifiable/old lead.
     assert result["status"] == "success"
-    assert len(result["created"]) == 1
-    assert len(inserted["leads"]) == 1
+    assert len(result["created"]) == 0
+    assert result["skipped_stale"] == 1
+    assert len(inserted["leads"]) == 0
 
 
 def test_housing_sync_window_auto_uses_checkpoint(monkeypatch):

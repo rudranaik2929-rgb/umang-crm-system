@@ -3729,6 +3729,10 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
     ]))
     locality = clean_text(pick_first(payload, ["locality_name", "locality", "project_locality"]))
     city = clean_text(pick_first(payload, ["city_name", "city", "contact.city"]))
+    project_id = clean_text(pick_first(payload, ["project_id", "property_project_id", "project", "project_id_number"]))
+    project_name = clean_text(pick_first(payload, ["project_name", "project", "property_name", "projectname"]))
+    service_type = clean_text(pick_first(payload, ["service_type", "service_type_name", "service", "enquiry_type"]))
+    price_range = clean_text(pick_first(payload, ["price_range", "budget_range", "price", "requirement_budget", "price_budget"]))
     location = clean_text(pick_first(payload, [
         "city", "location", "locality", "project_locality", "address", "contact.city",
         "preferred_locality", "preferred_location", "area", "locality_name", "city_name",
@@ -3758,17 +3762,18 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
         "lead_id", "id", "uuid", "enquiry_id", "leadgen_id", "external_id",
     ]))
     if not external_id and source == "Housing.com":
-        project_id = clean_text(payload.get("project_id"))
+        project_id = clean_text(pick_first(payload, ["project_id", "property_project_id", "project"]))
         lead_date = clean_text(payload.get("lead_date"))
-        phone_key = normalize_phone(pick_first(payload, ["lead_phone", "phone", "mobile"]))
+        phone_key = normalize_phone(pick_first(payload, ["lead_phone", "phone", "mobile", "phone_number"]))
         parts = [p for p in [project_id, phone_key, lead_date] if p]
         if len(parts) >= 2:
             external_id = ":".join(parts)
-    project_name = clean_text(pick_first(payload, ["project_name", "project", "property_name"]))
     notes = clean_text(pick_first(payload, ["notes", "comment", "message", "remarks", "query"]))
     note_parts = []
     if project_name:
         note_parts.append(f"Project: {project_name}")
+    if project_id:
+        note_parts.append(f"Project ID: {project_id}")
     if clean_text(payload.get("project_id")):
         note_parts.append(f"Project ID: {clean_text(payload.get('project_id'))}")
     if source == "Facebook":
@@ -3795,34 +3800,140 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
         "source": source,
         "external_lead_id": external_id,
         "external_created_at": external_created_at,
+        "project_id": project_id,
+        "project_name": project_name,
+        "service_type": service_type,
+        "locality": locality,
+        "city": city,
+        "price_range": price_range,
+        "lead_received_at": external_created_at if source == "Housing.com" else None,
         "notes": "\n".join(note_parts) if note_parts else None,
     }
 
-def find_existing_integrated_lead(phone: str, email: Optional[str], source: str, external_id: Optional[str]):
-    if external_id:
-        rows = sb_select("leads", {
-            "external_lead_id": f"eq.{external_id}",
-            "select": "*",
+def _housing_row_matches_project(row: Dict[str, Any], project_id: Optional[str]) -> bool:
+    """Does a stored Housing row belong to the same project as the incoming payload?
+
+    Checks the dedicated property_project_id column first, then falls back to the
+    raw_payload copy of project_id (legacy rows predating the column).
+    """
+    if not project_id:
+        return False
+    if clean_text(row.get("property_project_id")) == project_id:
+        return True
+    raw = row.get("raw_payload")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, dict) and clean_text(raw.get("project_id")) == project_id:
+        return True
+    return False
+
+
+def _housing_row_lead_date_key(row: Dict[str, Any]) -> Optional[str]:
+    """Calendar day (YYYY-MM-DD) of a stored Housing row's lead_received_at."""
+    ts = parse_lead_ts(row.get("lead_received_at")) or parse_lead_ts(row.get("external_created_at"))
+    if ts:
+        return ts.date().isoformat()
+    raw = row.get("raw_payload")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = None
+    if isinstance(raw, dict):
+        parsed = parse_external_datetime(pick_first(raw, ["lead_date", "created_time", "created_at", "submitted_at", "time"]))
+        ts = parse_lead_ts(parsed)
+        if ts:
+            return ts.date().isoformat()
+    return None
+
+
+def housing_lead_date_key(payload: Dict[str, Any]) -> Optional[str]:
+    """Calendar day (YYYY-MM-DD) of the incoming Housing lead_date."""
+    parsed = parse_external_datetime(pick_first(payload, [
+        "lead_date", "created_time", "created_at", "lead_created_time", "submitted_at", "time",
+    ]))
+    ts = parse_lead_ts(parsed)
+    return ts.date().isoformat() if ts else None
+
+
+def find_existing_housing_composite_duplicate(
+    phone: str,
+    project_id: Optional[str],
+    lead_date_key: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Composite-key dedupe for Housing.com: phone + property_project_id + lead_date.
+
+    This deliberately does NOT match on phone alone (or email) — the same customer
+    enquiring for different projects must produce separate leads. A stored row only
+    counts as a duplicate when the phone AND project match AND the enquiry fell on
+    the same calendar day.
+    """
+    if not phone or not project_id:
+        return None
+    rows = sb_select("leads", {
+        "source": "eq.Housing.com",
+        "phone": f"eq.{phone}",
+        "select": "*",
+    })
+    for row in rows:
+        if not _housing_row_matches_project(row, project_id):
+            continue
+        row_day = _housing_row_lead_date_key(row)
+        if row_day and lead_date_key and row_day != lead_date_key:
+            continue
+        return row
+    for lead in SESSION_CACHE["leads"]:
+        if lead.get("source") != "Housing.com":
+            continue
+        if not _housing_row_matches_project(lead, project_id):
+            continue
+        row_day = _housing_row_lead_date_key(lead)
+        if row_day and lead_date_key and row_day != lead_date_key:
+            continue
+        return lead
+    return None
+
+
+def _find_existing_by_external_id(external_id: Optional[str], source: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Exact enquiry-id lookup (Housing lead_id, Meta leadgen id, derived composite)."""
+    if not external_id:
+        return None
+    rows = sb_select("leads", {
+        "external_lead_id": f"eq.{external_id}",
+        "select": "*",
+        "limit": "1",
+    })
+    if rows:
+        return rows[0]
+    if source:
+        events = sb_select("integration_events", {
+            "source": f"eq.{source}",
+            "external_id": f"eq.{external_id}",
+            "status": "eq.created",
+            "select": "lead_id",
             "limit": "1",
         })
-        if rows:
-            return rows[0]
-        if source:
-            events = sb_select("integration_events", {
-                "source": f"eq.{source}",
-                "external_id": f"eq.{external_id}",
-                "status": "eq.created",
-                "select": "lead_id",
+        if events and events[0].get("lead_id"):
+            rows = sb_select("leads", {
+                "lead_id": f"eq.{events[0]['lead_id']}",
+                "select": "*",
                 "limit": "1",
             })
-            if events and events[0].get("lead_id"):
-                rows = sb_select("leads", {
-                    "lead_id": f"eq.{events[0]['lead_id']}",
-                    "select": "*",
-                    "limit": "1",
-                })
-                if rows:
-                    return rows[0]
+            if rows:
+                return rows[0]
+    for lead in SESSION_CACHE["leads"]:
+        if external_id and lead.get("external_lead_id") == external_id:
+            return lead
+    return None
+
+
+def find_existing_integrated_lead(phone: str, email: Optional[str], source: str, external_id: Optional[str]):
+    by_id = _find_existing_by_external_id(external_id, source)
+    if by_id:
+        return by_id
 
     scoped_source = source if source in ("Housing.com", "Facebook") else None
 
@@ -3853,6 +3964,11 @@ def find_existing_integrated_lead(phone: str, email: Optional[str], source: str,
             return lead
     return None
 
+
+def housing_composite_exists(phone: str, project_id: Optional[str], lead_date_key: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Public composite-key duplicate check used by the Housing pipeline (webhook + pull sync)."""
+    return find_existing_housing_composite_duplicate(phone, project_id, lead_date_key)
+
 def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, quiet: bool = False) -> Dict[str, Any]:
     normalized = lead_from_payload(payload, source)
     if not normalized["phone"] and not normalized.get("email"):
@@ -3874,17 +3990,34 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
                 )
             return {"status": "ignored", "reason": "before_start_date", "payload": normalized}
 
-    existing = find_existing_integrated_lead(
-        normalized["phone"],
-        normalized.get("email"),
-        source,
-        normalized.get("external_lead_id"),
-    )
+    if source == "Housing.com":
+        # Composite-key dedupe only — phone/email alone must NEVER swallow a
+        # second enquiry from the same customer for a different project.
+        existing = _find_existing_by_external_id(normalized.get("external_lead_id"), source)
+        if not existing:
+            existing = housing_composite_exists(
+                normalized["phone"],
+                normalized.get("project_id"),
+                housing_lead_date_key(payload),
+            )
+    else:
+        existing = find_existing_integrated_lead(
+            normalized["phone"],
+            normalized.get("email"),
+            source,
+            normalized.get("external_lead_id"),
+        )
     # A pre-Aug-1 lead (or stale cache ghost of a deleted one) must never be
     # refreshed/resurrected — treat it as non-existent so a fresh lead is created.
     if existing and not lead_is_since_start(existing):
         existing = None
     if existing:
+        if source == "Housing.com":
+            # Never overwrite existing lead data on a Housing re-delivery.
+            if not quiet:
+                log_activity(actor, "integration_duplicate", f"Duplicate lead received from {source}; existing record kept unchanged.", lead_id=existing["lead_id"])
+                record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
+            return {"status": "duplicate", "lead": existing, "lead_id": existing["lead_id"], "updated": False}
         update_data = {"updated_at": now_utc().isoformat()}
         for key in ("email", "budget", "location", "property_type", "notes"):
             if normalized.get(key) and not clean_text(existing.get(key)):
@@ -3895,7 +4028,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
         if not quiet:
             log_activity(actor, "integration_duplicate", f"Duplicate lead received from {source}; existing record refreshed.", lead_id=existing["lead_id"])
             record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
-        return {"status": "duplicate", "lead": updated or merged, "lead_id": existing["lead_id"]}
+        return {"status": "duplicate", "lead": updated or merged, "lead_id": existing["lead_id"], "updated": True}
 
     brokerage = is_brokerage_lead(source, payload)
     assigned_to = None
@@ -3923,6 +4056,16 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
         "created_at": created_at,
         "updated_at": now,
     }
+    if source == "Housing.com":
+        base_lead.update({
+            "property_project_id": normalized.get("project_id"),
+            "project_name": normalized.get("project_name"),
+            "service_type": normalized.get("service_type"),
+            "locality": normalized.get("locality"),
+            "city": normalized.get("city"),
+            "price_range": normalized.get("price_range"),
+            "lead_received_at": normalized.get("lead_received_at"),
+        })
     optional_lead = {
         **base_lead,
         "external_lead_id": normalized.get("external_lead_id"),
@@ -5090,7 +5233,9 @@ async def housing_webhook(request: Request):
     verify_housing_request(request, body)
 
     created, duplicates, ignored = [], [], []
+    received = 0
     for payload in as_list_payload(body):
+        received += 1
         merged_payload = {**payload}
         if body.get("integration_uuid") and "integration_uuid" not in merged_payload:
             merged_payload["integration_uuid"] = body.get("integration_uuid")
@@ -5100,8 +5245,34 @@ async def housing_webhook(request: Request):
         elif result["status"] == "duplicate":
             duplicates.append(result["lead_id"])
         else:
-            ignored.append(result)
-    return {"status": "success", "source": "Housing.com", "created": created, "duplicates": duplicates, "ignored": ignored}
+            ignored.append({"lead_id": clean_text(pick_first(merged_payload, ["lead_id", "id", "enquiry_id"])), "reason": result.get("reason")})
+    logging.info(
+        "Housing webhook: received=%s created=%s duplicates=%s ignored=%s reasons=%s",
+        received,
+        len(created),
+        len(duplicates),
+        len(ignored),
+        _reason_counts(ignored),
+    )
+    return {
+        "status": "success",
+        "source": "Housing.com",
+        "received": received,
+        "created": created,
+        "duplicates": duplicates,
+        "skipped": ignored,
+        "skipped_reasons": _reason_counts(ignored),
+    }
+
+
+def _reason_counts(rows) -> Dict[str, int]:
+    """Bucket integration results by their skip/ignore reason."""
+    counts: Dict[str, int] = {}
+    for r in rows or []:
+        reason = r.get("reason") if isinstance(r, dict) else None
+        reason = reason or "unknown"
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
 
 async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = "manual") -> Dict[str, Any]:
     start_date, end_date = housing_sync_window(
@@ -5138,8 +5309,20 @@ async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = 
         elif result["status"] == "duplicate":
             duplicates.append(result["lead_id"])
         else:
-            ignored.append(result)
+            ignored.append({"lead_id": clean_text(pick_first(lead_payload, ["lead_id", "id", "enquiry_id"])), "reason": result.get("reason")})
 
+    logging.info(
+        "Housing sync mode=%s window=%s..%s received=%s created=%s duplicates=%s skipped_stale=%s ignored=%s reasons=%s",
+        mode,
+        start_date,
+        end_date,
+        len(lead_payloads),
+        len(created),
+        len(duplicates),
+        len(skipped_stale),
+        len(ignored),
+        _reason_counts(ignored),
+    )
     record_housing_sync_checkpoint(end_date, {
         "mode": mode,
         "start_date": start_date,
@@ -5147,6 +5330,7 @@ async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = 
         "created": len(created),
         "duplicates": len(duplicates),
         "skipped_stale": len(skipped_stale),
+        "skipped_reasons": _reason_counts(ignored),
     })
     return {
         "status": "success",
@@ -5155,10 +5339,12 @@ async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = 
         "start_date": start_date,
         "end_date": end_date,
         "fetched": len(lead_payloads),
+        "received": len(lead_payloads),
         "created": created,
         "duplicates": duplicates,
         "ignored": ignored,
         "skipped_stale": len(skipped_stale),
+        "skipped_reasons": _reason_counts(ignored),
     }
 
 
