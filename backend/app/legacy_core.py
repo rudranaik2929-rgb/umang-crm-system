@@ -3608,13 +3608,13 @@ def should_import_housing_lead_on_sync(
 ) -> bool:
     """Skip old Housing API leads — only import when lead_date is inside the sync window.
 
-    Live-only rule: pull syncs must never backfill history. A payload with no
-    parsable lead_date cannot be proven new, so it is skipped too — otherwise
-    stale/dateless leads can be re-imported as if they were fresh.
+    Auto/pull syncs are time-scoped by the API itself (start_date..end_date), so a
+    payload without a parsable lead_date inside that recent window is treated as new.
+    Manual syncs (which can target historical ranges) must not backfill dateless rows.
     """
     lead_ts = get_housing_lead_epoch(payload)
     if lead_ts is None:
-        return False
+        return mode in ("poll", "auto", "cron")
     margin = HOUSING_POLL_OVERLAP_SEC if mode in ("poll", "auto", "cron") else 0
     return (start_date - margin) <= lead_ts <= (end_date + 60)
 
@@ -3969,6 +3969,30 @@ def housing_composite_exists(phone: str, project_id: Optional[str], lead_date_ke
     """Public composite-key duplicate check used by the Housing pipeline (webhook + pull sync)."""
     return find_existing_housing_composite_duplicate(phone, project_id, lead_date_key)
 
+
+HOUSING_EXTRA_COLUMNS = (
+    "property_project_id",
+    "project_name",
+    "service_type",
+    "locality",
+    "city",
+    "price_range",
+    "lead_received_at",
+)
+
+
+def housing_extra_columns_available() -> bool:
+    """Are the Housing.dedicated columns present on the DB leads table?
+
+    Gated so imports still work (and Housing leads still appear) even before the
+    Supabase migration has been applied — the extra fields are dropped, all other
+    columns and the composite dedupe still function via raw_payload.
+    """
+    try:
+        return sb_columns_exist("leads", list(HOUSING_EXTRA_COLUMNS))
+    except Exception:
+        return False
+
 def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, quiet: bool = False) -> Dict[str, Any]:
     normalized = lead_from_payload(payload, source)
     if not normalized["phone"] and not normalized.get("email"):
@@ -4057,15 +4081,19 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
         "updated_at": now,
     }
     if source == "Housing.com":
-        base_lead.update({
-            "property_project_id": normalized.get("project_id"),
-            "project_name": normalized.get("project_name"),
-            "service_type": normalized.get("service_type"),
-            "locality": normalized.get("locality"),
-            "city": normalized.get("city"),
-            "price_range": normalized.get("price_range"),
-            "lead_received_at": normalized.get("lead_received_at"),
-        })
+        # Only write the Housing.dedicated columns when the migration has run —
+        # otherwise the INSERT (and the fallback) would fail and Housing leads
+        # would silently stop landing in the CRM while Meta leads keep coming.
+        if housing_extra_columns_available():
+            base_lead.update({
+                "property_project_id": normalized.get("project_id"),
+                "project_name": normalized.get("project_name"),
+                "service_type": normalized.get("service_type"),
+                "locality": normalized.get("locality"),
+                "city": normalized.get("city"),
+                "price_range": normalized.get("price_range"),
+                "lead_received_at": normalized.get("lead_received_at"),
+            })
     optional_lead = {
         **base_lead,
         "external_lead_id": normalized.get("external_lead_id"),

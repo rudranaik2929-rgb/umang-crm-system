@@ -111,3 +111,27 @@ def test_duplicate_never_overwrites_existing_lead(monkeypatch):
     stored = inserted["leads"][0]
     assert stored["name"] != "Changed Name"
     assert r2.get("updated") is False
+
+
+def test_housing_insert_works_when_extra_columns_missing(monkeypatch):
+    """Housing leads must keep importing even if the DB migration was not run
+    (this was why Housing showed 0 while Meta kept coming)."""
+    inserted = _install_fake_supabase(monkeypatch)
+    monkeypatch.setattr(main, "sb_columns_exist", lambda table, columns: False)
+
+    r = _import(_housing_payload("H-1", "7987878787", "P1", int(time.time()) - 60))
+    assert r["status"] == "created"
+    stored = inserted["leads"][0]
+    assert "property_project_id" not in stored
+    assert stored["source"] == "Housing.com"
+
+
+def test_housing_insert_includes_extra_columns_when_available(monkeypatch):
+    inserted = _install_fake_supabase(monkeypatch)
+    monkeypatch.setattr(main, "sb_columns_exist", lambda table, cols: True)
+
+    r = _import(_housing_payload("H-1", "7988227467", "P9", int(time.time()) - 60))
+    assert r["status"] == "created"
+    stored = inserted["leads"][0]
+    assert stored["property_project_id"] == "P9"
+    assert stored["lead_received_at"] is not None
