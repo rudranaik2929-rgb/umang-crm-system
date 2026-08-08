@@ -6421,9 +6421,13 @@ async def list_leads(
 
 
 @api_router.get("/leads/export")
-async def export_leads(cu: User = Depends(get_current_user)):
-    """Download every lead as an Excel (.xlsx) file — same data the CRM lists,
-    including Housing.com project/locality/price columns when available."""
+async def export_leads(
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    cu: User = Depends(get_current_user),
+):
+    """Download leads as an Excel (.xlsx) file — all leads or filtered to a
+    date range (dates are matched against the lead's displayed CRM date)."""
     ensure_roles(cu, ["admin", "manager", "marketing"])
     base_select = LEADS_CANONICAL_SELECT
     if housing_extra_columns_available():
@@ -6434,6 +6438,7 @@ async def export_leads(cu: User = Depends(get_current_user)):
     db_only = [l for l in leads if l.get("lead_id") not in cache_ids]
     all_leads = SESSION_CACHE["leads"] + db_only
     all_leads = [l for l in all_leads if lead_is_since_start(l)]
+    all_leads = apply_dashboard_date_filter(all_leads, "all", date_from, date_to)
 
     headers = [
         "Name", "Phone", "Email", "Source", "Stage", "Status", "Lead Type",

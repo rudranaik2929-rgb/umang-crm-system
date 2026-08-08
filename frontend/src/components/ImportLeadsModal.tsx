@@ -2,7 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal, ActivityIndicator, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { api, warmUpBackend, IMPORT_TIMEOUT_MS, downloadLeadsExcel } from '../lib/api';
+import { api, warmUpBackend, IMPORT_TIMEOUT_MS } from '../lib/api';
+import { ExportLeadsModal } from './ExportLeadsModal';
 
 interface Props {
   visible: boolean;
@@ -53,6 +54,7 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
   const [result, setResult] = useState<ImportResult | null>(null);
   const [step, setStep] = useState<'upload' | 'summary'>('upload');
   const [statusLine, setStatusLine] = useState<string | null>(null);
+  const [exportVisible, setExportVisible] = useState(false);
 
   useEffect(() => {
     if (!visible) {
@@ -148,11 +150,7 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
   const handleDownload = async () => {
     setErrorMsg(null);
     setResult(null);
-    try {
-      await downloadLeadsExcel();
-    } catch (e: any) {
-      setErrorMsg(e?.response?.data?.detail || e?.message || 'Download failed. Please try again.');
-    }
+    setExportVisible(true);
   };
 
   const finishImport = () => {
@@ -342,6 +340,8 @@ export function ImportLeadsModal({ visible, onClose, onSuccess }: Props) {
           )}
         </View>
       </View>
+
+      <ExportLeadsModal visible={exportVisible} onClose={() => setExportVisible(false)} />
     </Modal>
   );
 }

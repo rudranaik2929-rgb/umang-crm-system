@@ -4,7 +4,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { ROLES, roleLabel, defaultRouteFor } from '../lib/constants';
-import { api, clearSnapshots, clearGetCache, downloadLeadsExcel } from '../lib/api';
+import { api, clearSnapshots, clearGetCache } from '../lib/api';
+import { ExportLeadsModal } from './ExportLeadsModal';
 import { useRouter, usePathname } from 'expo-router';
 import { AddLeadModal } from './AddLeadModal';
 import { AddBookingLeadModal } from './AddBookingLeadModal';
@@ -29,6 +30,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const [actingEmployee, setActingEmployee] = useState<any | null>(null);
   const [addLeadVisible, setAddLeadVisible] = useState(false);
   const [importLeadsVisible, setImportLeadsVisible] = useState(false);
+  const [exportLeadsVisible, setExportLeadsVisible] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
   
@@ -37,11 +39,7 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   const canImportLeads = user?.role === 'admin' || user?.role === 'manager';
 
   const downloadLeads = async () => {
-    try {
-      await downloadLeadsExcel();
-    } catch (e: any) {
-      alert(e?.response?.data?.detail || e?.message || 'Download failed.');
-    }
+    setExportLeadsVisible(true);
   };
 
   const resetAssignments = async () => {
@@ -448,6 +446,11 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
             window.location.reload();
           }
         }}
+      />
+
+      <ExportLeadsModal
+        visible={exportLeadsVisible}
+        onClose={() => setExportLeadsVisible(false)}
       />
     </View>
   );

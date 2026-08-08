@@ -428,12 +428,13 @@ export function clearSnapshots() {
     } catch {}
 }
 
-/** Download all leads as an Excel (.xlsx) file via the authenticated API. Web-only. */
-export async function downloadLeadsExcel(): Promise<void> {
+/** Download leads as an Excel (.xlsx) file via the authenticated API. Web-only.
+ *  Optional `params` may contain date_from / date_to (YYYY-MM-DD) to limit the range. */
+export async function downloadLeadsExcel(params?: Record<string, string>): Promise<void> {
     if (Platform.OS !== 'web' || typeof window === 'undefined') {
         throw new Error('Excel download is only available on the web app.');
     }
-    const res = await api.get('/leads/export', { responseType: 'blob', timeout: 120000 });
+    const res = await api.get('/leads/export', { params: params || {}, responseType: 'blob', timeout: 120000 });
     const blob = res.data as Blob;
     const url = window.URL.createObjectURL(blob);
     const anchor = document.createElement('a');
