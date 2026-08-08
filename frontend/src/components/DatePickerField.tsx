@@ -100,7 +100,7 @@ export function DatePickerField({ label, value, onChange, colors, testID, helper
         data-testid={testID ? `${testID}-native` : undefined}
         className="crm-date-input"
         type="date"
-        value={value || todayIsoDate()}
+        value={value || ''}
         onChange={(e) => onChange(e.target.value)}
         aria-hidden
         tabIndex={-1}

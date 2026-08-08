@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, Modal, ScrollView, ActivityIndicator
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { downloadLeadsExcel } from '../lib/api';
-import { DatePickerField, formatDateLabel } from './DatePickerField';
+import { DatePickerField, formatDateLabel, todayIsoDate } from './DatePickerField';
 
 interface Props {
   visible: boolean;
@@ -32,6 +32,7 @@ export function ExportLeadsModal({ visible, onClose }: Props) {
       const params: Record<string, string> = {};
       if (dateFrom) params.date_from = dateFrom;
       if (dateTo) params.date_to = dateTo;
+      else if (dateFrom) params.date_to = todayIsoDate();
       await downloadLeadsExcel(params);
       handleClose();
     } catch (e: any) {
