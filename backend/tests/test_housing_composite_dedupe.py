@@ -180,3 +180,43 @@ def test_masked_phone_lead_different_project_is_separate(monkeypatch):
     assert r1["status"] == "created"
     assert r2["status"] == "created"
     assert len(inserted["leads"]) == 2
+
+
+def test_phone_full_import_enriches_masked_phone_row(monkeypatch):
+    """A later delivery WITH phone for the same project+day+name must fill the
+    phone into the existing masked (phone-less) row instead of duplicating."""
+    inserted = _install_fake_supabase(monkeypatch)
+    ts = int(time.time()) - 60
+
+    # 1) Pull-API style row arrives masked (no phone) -> created phone-less.
+    r1 = _import(_masked_housing_payload("312389", ts))
+    assert r1["status"] == "created"
+    assert inserted["leads"][0]["phone"] == ""
+    masked_id = r1["lead_id"]
+
+    # 2) CSV/webhook style row with the real phone arrives for the same enquiry.
+    real = _masked_housing_payload("312389", ts)
+    real["lead_phone"] = "919819191919"
+    real["lead_name"] = "Bhawar Singh Solanki"
+    r2 = _import(real)
+    assert r2["status"] == "duplicate"
+    assert r2["lead_id"] == masked_id
+    assert r2.get("updated") is True
+    assert r2["lead"]["phone"] == "919819191919"
+    assert len(inserted["leads"]) == 1
+
+
+def test_phone_full_import_does_not_enrich_wrong_person(monkeypatch):
+    """Different name on the same project+day must NOT be enriched/merged."""
+    inserted = _install_fake_supabase(monkeypatch)
+    ts = int(time.time()) - 60
+
+    r1 = _import(_masked_housing_payload("312389", ts))
+    assert r1["status"] == "created"
+
+    other = _masked_housing_payload("312389", ts)
+    other["lead_phone"] = "919111222333"
+    other["lead_name"] = "Different Person"
+    r2 = _import(other)
+    assert r2["status"] == "created"
+    assert len(inserted["leads"]) == 2

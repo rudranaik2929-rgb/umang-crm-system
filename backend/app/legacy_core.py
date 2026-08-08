@@ -3869,6 +3869,83 @@ def housing_lead_date_key(payload: Dict[str, Any]) -> Optional[str]:
     return ts.date().isoformat() if ts else None
 
 
+def _housing_name_slug(name: Optional[str]) -> str:
+    """Lowercased alphanumeric name slug for fuzzy identity matching."""
+    return re.sub(r"[^a-z0-9]+", "", clean_text(name).lower())
+
+
+def _housing_row_name_slug(row: Dict[str, Any]) -> str:
+    name = clean_text(row.get("name") or row.get("customer_name"))
+    if not name:
+        raw = row.get("raw_payload")
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:
+                raw = None
+        if isinstance(raw, dict):
+            name = clean_text(pick_first(raw, ["lead_name", "customer_name", "name"]))
+    return _housing_name_slug(name)
+
+
+def find_housing_row_by_project_date_name(
+    project_id: Optional[str],
+    lead_date_key: Optional[str],
+    name: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Find a stored Housing row for the same project + calendar day + name.
+
+    This links a masked (phone-less, from the pull API) row to the same enquiry
+    delivered later WITH contact details (webhook / CSV import) — so the existing
+    lead is enriched with the phone instead of a duplicate row being created.
+    """
+    if not project_id or not lead_date_key:
+        return None
+    name_slug = _housing_name_slug(name)
+    if not name_slug:
+        return None
+    rows = sb_select("leads", {
+        "source": "eq.Housing.com",
+        "select": "*",
+    })
+    for row in rows:
+        if not _housing_row_matches_project(row, project_id):
+            continue
+        row_day = _housing_row_lead_date_key(row)
+        if row_day and lead_date_key and row_day != lead_date_key:
+            continue
+        if _housing_row_name_slug(row) == name_slug:
+            return row
+    for lead in SESSION_CACHE["leads"]:
+        if lead.get("source") != "Housing.com":
+            continue
+        if not _housing_row_matches_project(lead, project_id):
+            continue
+        row_day = _housing_row_lead_date_key(lead)
+        if row_day and lead_date_key and row_day != lead_date_key:
+            continue
+        if _housing_row_name_slug(lead) == name_slug:
+            return lead
+    return None
+
+
+def enrich_housing_contact(
+    existing: Dict[str, Any],
+    normalized: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Fill missing phone/email on a stored Housing row (masked pull row) with
+    the contact details of the same enquiry delivered via webhook/CSV import."""
+    update_data = {"updated_at": now_utc().isoformat()}
+    if normalized.get("phone") and not clean_text(existing.get("phone")):
+        update_data["phone"] = normalized["phone"]
+    if normalized.get("email") and not clean_text(existing.get("email")):
+        update_data["email"] = normalized["email"]
+    if len(update_data) > 1:
+        sb_update("leads", "lead_id", existing["lead_id"], update_data)
+        update_cached_lead(existing["lead_id"], update_data)
+    return {**existing, **update_data}
+
+
 def find_existing_housing_composite_duplicate(
     phone: str,
     project_id: Optional[str],
@@ -3902,6 +3979,8 @@ def find_existing_housing_composite_duplicate(
             continue
         row_day = _housing_row_lead_date_key(lead)
         if row_day and lead_date_key and row_day != lead_date_key:
+            continue
+        if clean_text(lead.get("phone")) != phone:
             continue
         return lead
     return None
@@ -4041,6 +4120,16 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
                 normalized.get("project_id"),
                 housing_lead_date_key(payload),
             )
+        if not existing:
+            # The pull API masks phone/email; the same enquiry may already be
+            # stored as a phone-less row (or vice-versa: a phone-full row may
+            # already exist and the masked copy arrives later). Match on
+            # project + day + name so masked and unmasked copies link up.
+            existing = find_housing_row_by_project_date_name(
+                normalized.get("project_id"),
+                housing_lead_date_key(payload),
+                normalized.get("name"),
+            )
     else:
         existing = find_existing_integrated_lead(
             normalized["phone"],
@@ -4054,7 +4143,15 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
         existing = None
     if existing:
         if source == "Housing.com":
-            # Never overwrite existing lead data on a Housing re-delivery.
+            # Housing re-delivery: never overwrite existing data, but DO fill in
+            # contact details (phone/email) that the pull API masked — a later
+            # webhook/CSV copy of the same enquiry carries them.
+            enriched = enrich_housing_contact(existing, normalized)
+            if enriched.get("phone") != existing.get("phone") or enriched.get("email") != existing.get("email"):
+                if not quiet:
+                    log_activity(actor, "integration_duplicate", f"Duplicate lead received from {source}; contact details filled in.", lead_id=existing["lead_id"])
+                    record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
+                return {"status": "duplicate", "lead": enriched, "lead_id": existing["lead_id"], "updated": True}
             if not quiet:
                 log_activity(actor, "integration_duplicate", f"Duplicate lead received from {source}; existing record kept unchanged.", lead_id=existing["lead_id"])
                 record_integration_event(source, payload, "duplicate", lead_id=existing["lead_id"], external_id=normalized.get("external_lead_id"))
