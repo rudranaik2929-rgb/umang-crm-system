@@ -3595,6 +3595,10 @@ def housing_sync_window(
             start_date = max(last_end - HOUSING_POLL_OVERLAP_SEC, end_date - HOUSING_POLL_INITIAL_WINDOW_SEC)
         else:
             start_date = end_date - HOUSING_POLL_INITIAL_WINDOW_SEC
+        # Housing's API serves leads with a delivery lag (lead_date can be hours
+        # old when first exposed). A narrow poll window would permanently miss
+        # them, so always look back at least HOUSING_POLL_MIN_WINDOW_SEC.
+        start_date = min(start_date, end_date - HOUSING_POLL_MIN_WINDOW_SEC)
     else:
         start_date = end_date - HOUSING_MANUAL_DEFAULT_WINDOW_SEC
     return start_date, end_date

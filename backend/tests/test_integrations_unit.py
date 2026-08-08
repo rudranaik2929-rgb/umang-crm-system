@@ -114,7 +114,10 @@ def test_housing_sync_window_auto_uses_checkpoint(monkeypatch):
     monkeypatch.setattr(main, "get_last_housing_sync_end_epoch", lambda: now - 600)
     start, end = main.housing_sync_window("auto", None, now, False)
     assert end == now
-    assert start >= now - main.HOUSING_POLL_INITIAL_WINDOW_SEC
+    # Housing delivers leads with a lag, so the poll must always cover at least
+    # the minimum window — never collapse to a narrow checkpoint-derived range.
+    assert start <= now - main.HOUSING_POLL_MIN_WINDOW_SEC
+    assert start >= now - max(main.HOUSING_POLL_MIN_WINDOW_SEC, main.HOUSING_POLL_INITIAL_WINDOW_SEC) - 1
     assert start <= now - 300
 
 
