@@ -5,6 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
+import { formatPhoneDisplay } from '../../src/lib/leadContact';
 import { Ionicons } from '@expo/vector-icons';
 export default function BrokerLeads() {
   const { colors } = useTheme();
@@ -53,7 +54,7 @@ export default function BrokerLeads() {
                 <Text style={[styles.name, { color: colors.text }]}>{lead.name}</Text>
                 <Text style={[styles.badge, { color: colors.warning, borderColor: colors.warning + '50' }]}>Brokerage</Text>
               </View>
-              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{lead.phone}{lead.email ? ` · ${lead.email}` : ''}</Text>
+              <Text style={{ color: colors.textSecondary, fontSize: 12 }}>{formatPhoneDisplay(lead.phone) || '—'}{lead.email ? ` · ${lead.email}` : ''}</Text>
               <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 4 }}>Source: {lead.source || '—'}</Text>
               {lead.brokerage_amount ? (
                 <Text style={{ color: colors.textMuted, fontSize: 11 }}>Brokerage: ₹{lead.brokerage_amount}</Text>

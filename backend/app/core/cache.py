@@ -25,7 +25,7 @@ LEADS_CANONICAL_SELECT = (
     "lead_id,name,phone,email,external_lead_id,source,stage,status,lead_type,"
     "priority,call_status,budget,location,property_type,assigned_to,assigned_at,last_employee_action_at,"
     "site_visitor_id,site_visit_assigned_by,site_visit_assigned_at,"
-    "follow_up_at,created_at,updated_at,starred,brokerage_amount"
+    "follow_up_at,created_at,updated_at,starred,brokerage_amount,raw_payload"
 )
 
 # Dashboard metric boxes + /leads/filtered drill-down MUST use the same lead shape.

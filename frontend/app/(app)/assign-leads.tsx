@@ -8,6 +8,7 @@ import { api, getSnapshot, setSnapshot, warmUpBackend, isTransientApiError } fro
 import { roleLabel, isAdmin } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { formatBudgetStringLakhs, workflowStatusColor, workflowStatusLabel } from '../../src/lib/leadFormat';
+import { formatPhoneDisplay } from '../../src/lib/leadContact';
 import {
   AssignLeadsAdvancedModal,
   AssignWorkspaceFilters,
@@ -855,7 +856,7 @@ export default function AssignLeads() {
                               </Text>
                             </View>
                           </View>
-                          <Text style={{ color: colors.textMuted, fontSize: 11 }}>{lead.phone}</Text>
+                          <Text style={{ color: colors.textMuted, fontSize: 11 }}>{formatPhoneDisplay(lead.phone) || '—'}</Text>
                           <Text style={{ color: colors.textSecondary, fontSize: 11, marginTop: 2 }}>
                             {[lead.property_type, formatBudgetStringLakhs(lead.budget) ? `${formatBudgetStringLakhs(lead.budget)} L` : null].filter(Boolean).join(' · ') || 'Requirement pending'}
                           </Text>

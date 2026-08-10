@@ -179,6 +179,37 @@ def sb_storage_url(bucket: str, path: str) -> str:
     return f"{SUPABASE_URL}/storage/v1/object/{bucket}/{clean_path}"
 
 
+def sb_storage_ensure_bucket(bucket: str, *, public: bool = False, file_size_limit: Optional[int] = None, allowed_mime_types: Optional[List[str]] = None) -> bool:
+    """Create a private Storage bucket if it does not already exist.
+
+    Uses the service role key so no manual Dashboard step is required — the
+    first upload attempt creates the bucket automatically.
+    """
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        return False
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+    }
+    body: Dict[str, Any] = {"name": bucket, "public": public}
+    if file_size_limit:
+        body["file_size_limit"] = file_size_limit
+    if allowed_mime_types:
+        body["allowed_mime_types"] = allowed_mime_types
+    r = _http.post(
+        f"{SUPABASE_URL}/storage/v1/bucket",
+        headers=headers,
+        json=body,
+    )
+    if r.status_code < 400:
+        return True
+    if r.status_code == 400 and '"already exists"' in r.text.lower():
+        return True
+    logging.error(f"Supabase storage ensure bucket {bucket}: {r.status_code} {r.text[:300]}")
+    return False
+
+
 def sb_storage_upload(bucket: str, path: str, content: bytes, content_type: str, upsert: bool = True) -> bool:
     """Upload a file to Supabase Storage using the service role key."""
     if not SUPABASE_URL or not SUPABASE_KEY:
@@ -308,6 +339,7 @@ __all__ = [
     "sb_patch_filter",
     "sb_select_in",
     "sb_storage_url",
+    "sb_storage_ensure_bucket",
     "sb_storage_upload",
     "sb_storage_download",
     "sb_storage_delete",

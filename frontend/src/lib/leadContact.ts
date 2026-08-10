@@ -8,6 +8,23 @@ export function digitsOnly(phone?: string) {
   return d;
 }
 
+/** Consistent display format: +91 98765 43210 (used by every lead list/popup). */
+export function formatPhoneDisplay(phone?: string): string {
+  const raw = String(phone || '').trim();
+  if (!raw || raw === '—') return '';
+  const d = raw.replace(/\D/g, '');
+  let ten: string | null = null;
+  if (d.length === 10) ten = d;
+  else if (d.length >= 12 && d.startsWith('91')) ten = d.slice(2, 12);
+  else if (d.length === 12 && d.startsWith('0')) ten = d.slice(1);
+  if (!ten) {
+    const masked = /^\*+$|^x+$/i.test(raw) || /^(\d)\1+$/.test(d);
+    return masked ? '' : raw;
+  }
+  if (/^(\d)\1{9}$/.test(ten)) return '';
+  return `+91 ${ten.slice(0, 5)} ${ten.slice(5)}`;
+}
+
 export function telUri(phone?: string) {
   const raw = String(phone || '').trim();
   if (!raw) return '';
@@ -21,18 +38,20 @@ export async function openPhoneCall(phone?: string) {
     Alert.alert('No phone number', 'This lead has no phone number to call.');
     return;
   }
+  if (Platform.OS === 'web' && typeof window !== 'undefined') {
+    // Web: navigate straight to tel: so the browser dialer opens immediately
+    // on click — no intermediate alert / permission prompt.
+    window.location.href = uri;
+    return;
+  }
   try {
     const can = await Linking.canOpenURL(uri);
-    if (!can && Platform.OS !== 'web') {
+    if (!can) {
       Alert.alert('Cannot call', phone || '');
       return;
     }
     await Linking.openURL(uri);
   } catch {
-    if (Platform.OS === 'web' && typeof window !== 'undefined') {
-      window.location.href = uri;
-      return;
-    }
     Alert.alert('Call failed', 'Could not open the phone dialer.');
   }
 }

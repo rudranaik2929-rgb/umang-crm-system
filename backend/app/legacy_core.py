@@ -1115,8 +1115,95 @@ def workflow_status_label(lead: Dict[str, Any]) -> str:
     return "Active"
 
 
+HOUSING_RAW_PHONE_KEYS = (
+    "lead_phone", "phone", "mobile", "phone_number", "mobile_number", "contact_number",
+    "customer_phone", "contact_phone", "enquirer_phone", "caller_phone", "requester_phone",
+    "user_phone", "phone_mobile", "mobile_no", "telephone", "whatsapp",
+    "contact.phone", "contact.mobile", "customer.phone", "customer.mobile",
+    "user.phone", "user.mobile", "enquirer.phone", "contact_details.phone",
+    "contact_details.mobile", "customer_details.phone",
+)
+
+def _looks_masked(phone_digits: str) -> bool:
+    if not phone_digits:
+        return True
+    # Housing.com masks contact details like "**********", "XXXX", "-"
+    if any(ch in phone_digits for ch in ("*", "x", "X")) or phone_digits in {"0", "1"}:
+        return True
+    body = phone_digits[2:] if phone_digits.startswith("91") else phone_digits
+    if body and len(set(body)) == 1:
+        return True  # all-same digit runs (0000000000 / 1111111111) are placeholders
+    return False
+
+def phone_from_raw_payload(raw: Any, source: Optional[str] = None) -> str:
+    """Best-effort phone number extracted from an integration raw_payload.
+
+    Housing.com's pull API masks lead_phone/lead_email, but webhook / CSV / newer
+    poll payloads often carry the real number under one of many key spellings.
+    Masked-looking values (****, xxxx, all-same digits) are treated as absent so
+    they never overwrite a real phone or surface to the UI.
+    """
+    if not raw:
+        return ""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return ""
+    if not isinstance(raw, dict):
+        return ""
+    for key in HOUSING_RAW_PHONE_KEYS:
+        value = pick_first(raw, [key])
+        if value is None:
+            continue
+        digits = normalize_phone(value)
+        if _looks_masked(digits):
+            continue
+        if len(digits) == 10 or (len(digits) == 12 and digits.startswith("91")):
+            return digits
+    # Fallback: scan every top-level value that looks like a phone number.
+    for value in raw.values():
+        if not isinstance(value, (str, int, float)):
+            continue
+        digits = normalize_phone(value)
+        if _looks_masked(digits):
+            continue
+        if len(digits) == 10 or (len(digits) == 12 and digits.startswith("91")):
+            return digits
+    return ""
+
+def email_from_raw_payload(raw: Any) -> str:
+    if not raw:
+        return ""
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            return ""
+    if not isinstance(raw, dict):
+        return ""
+    for key in ("lead_email", "email", "email_address", "email_id", "mail",
+                "contact.email", "customer.email", "user.email", "contact_details.email"):
+        value = pick_first(raw, [key])
+        if value and "@" in str(value):
+            return str(value).strip()
+    return ""
+
+
 def enrich_lead_display_fields(lead: Dict[str, Any]) -> Dict[str, Any]:
     row = dict(lead)
+    # Housing.com pull payloads mask phone/email — recover the real number from
+    # raw_payload when the main column is empty so lists/popups always show it.
+    if not clean_text(row.get("phone")):
+        raw = row.get("raw_payload")
+        recovered = phone_from_raw_payload(raw, row.get("source"))
+        if recovered:
+            row["phone"] = recovered
+    if not clean_text(row.get("email")):
+        raw = row.get("raw_payload")
+        recovered = email_from_raw_payload(raw)
+        if recovered:
+            row["email"] = recovered
     row["inquiry_status"] = classify_inquiry_status(lead)
     row["workflow_status"] = row["inquiry_status"]
     row["is_missed"] = is_missed_lead(lead)
@@ -3727,6 +3814,9 @@ def lead_from_payload(payload: Dict[str, Any], source: str) -> Dict[str, Any]:
     ])) or "Valued Customer"
     phone = normalize_phone(pick_first(payload, [
         "phone_number", "phone", "mobile", "contact_number", "lead_phone", "contact.phone",
+        "mobile_number", "customer_phone", "contact_phone", "enquirer_phone", "caller_phone",
+        "requester_phone", "user_phone", "mobile_no", "contact.mobile", "customer.phone",
+        "contact_details.phone",
     ]))
     email = clean_text(pick_first(payload, [
         "email", "lead_email", "email_address", "contact.email",
@@ -8582,6 +8672,12 @@ async def upload_booking_document(
     content_type, ext = _detect_booking_document_type(file.filename, file.content_type, contents)
     doc_id = gen_id("doc")
     storage_path = f"{booking_id}/{doc_id}.{ext}"
+    if not sb_storage_ensure_bucket(
+        BOOKING_DOCUMENT_BUCKET,
+        file_size_limit=BOOKING_DOCUMENT_MAX_BYTES,
+        allowed_mime_types=["application/pdf", "image/jpeg"],
+    ):
+        raise HTTPException(status_code=503, detail="Could not create the booking-documents storage bucket. Check the SUPABASE_SERVICE_ROLE_KEY / storage permissions.")
     if not sb_storage_upload(BOOKING_DOCUMENT_BUCKET, storage_path, contents, content_type, upsert=True):
         raise HTTPException(status_code=503, detail="Could not upload document to storage. Check Supabase bucket setup.")
     previous = _normalize_booking_document_meta(booking.get("booking_document"))
@@ -8599,7 +8695,7 @@ async def upload_booking_document(
     updated = sb_update("bookings", "booking_id", booking_id, {"booking_document": document_meta})
     if not updated:
         sb_storage_delete(BOOKING_DOCUMENT_BUCKET, storage_path)
-        raise HTTPException(status_code=503, detail="Could not save document metadata. Run supabase/BOOKING_DOCUMENTS.sql.")
+        raise HTTPException(status_code=503, detail="Could not save document metadata. Run supabase/BOOKING_DOCUMENTS.sql to add the booking_document column.")
     booking_record = _sync_booking_cache(booking_id, {"booking_document": document_meta}) or {**booking, **updated, "booking_document": document_meta}
     log_activity(
         cu,

@@ -18,7 +18,7 @@ import {
   formatHousingLeadDate,
   stripActivityActorPrefix,
 } from '../lib/leadFormat';
-import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
+import { formatPhoneDisplay, openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { ScheduleFollowUpModal } from './ScheduleFollowUpModal';
 import { EditableMultiline } from './EditableMultiline';
 import { useSidebarLayout } from '../layout/SidebarLayoutContext';
@@ -573,7 +573,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
               <View style={[styles.header, { borderBottomColor: colors.border + '80' }]}>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.name, { color: colors.text }]}>{lead.name}</Text>
-                  <Text style={[styles.sub, { color: colors.textMuted }]}>{lead.phone}{lead.email ? `  ·  ${lead.email}` : ''}</Text>
+                  <Text style={[styles.sub, { color: colors.textMuted }]}>{formatPhoneDisplay(lead.phone) || '—'}{lead.email ? `  ·  ${lead.email}` : ''}</Text>
                   <View style={{ flexDirection: 'row', gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
                     <Pressable
                       onPress={() => openPhoneCall(lead.phone)}

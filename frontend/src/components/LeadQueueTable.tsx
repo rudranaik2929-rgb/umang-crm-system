@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { WorkflowStatusBadge } from './Badge';
 import { formatBudgetRangeLakhs, formatBudgetStringLakhs } from '../lib/leadFormat';
-import { copyPhone, openPhoneCall, openWhatsApp } from '../lib/leadContact';
+import { copyPhone, formatPhoneDisplay, openPhoneCall, openWhatsApp } from '../lib/leadContact';
 
 function formatBudgetDisplay(lead: any) {
   const raw = lead?.raw_payload;
@@ -86,7 +86,7 @@ export function LeadQueueTable({ leads, onOpen, testIdPrefix = 'queue' }: Props)
             <View style={styles.mobileTop}>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.cellPrimary, { color: colors.text }]}>{l.name}</Text>
-                <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{l.phone || '—'}</Text>
+                <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{formatPhoneDisplay(l.phone) || '—'}</Text>
               </View>
               <WorkflowStatusBadge lead={l} />
             </View>
@@ -130,7 +130,7 @@ export function LeadQueueTable({ leads, onOpen, testIdPrefix = 'queue' }: Props)
         >
           <Pressable style={{ flex: 2 }} onPress={() => onOpen(l.lead_id)}>
             <Text style={[styles.cellPrimary, { color: colors.text }]}>{l.name}</Text>
-            <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{l.phone}</Text>
+            <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{formatPhoneDisplay(l.phone) || '—'}</Text>
           </Pressable>
           <Pressable style={{ flex: 1.5 }} onPress={() => onOpen(l.lead_id)}>
             <Text style={[styles.cellPrimary, { color: colors.text }]}>{formatBudgetDisplay(l)}</Text>

@@ -9,6 +9,7 @@ import { LeadDetailModal } from './LeadDetailModal';
 import { WorkflowStatusBadge } from './Badge';
 import { formatBudgetStringLakhs } from '../lib/leadFormat';
 import { platformLabel, roleLabel } from '../lib/constants';
+import { formatPhoneDisplay } from '../lib/leadContact';
 import { SearchableSelect } from './SearchableSelect';
 import { parseInquiryStatusFilter, serializeInquiryStatusFilter } from '../lib/inquiryStatusFilter';
 import { useMainContentOverlayStyle } from '../layout/SidebarLayoutContext';
@@ -480,7 +481,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                     <Text style={[st.td, st.colIndex, { color: colors.textMuted }]}>{serial}</Text>
                     <Text style={[st.td, st.colName, { color: colors.text, fontWeight: '700' }]} numberOfLines={2}>{l.name}</Text>
                     <Text style={[st.td, st.colContact, { color: colors.textSecondary }]} numberOfLines={2}>
-                      {l.phone}{l.email ? `\n${l.email}` : ''}
+                      {formatPhoneDisplay(l.phone) || '—'}{l.email ? `\n${l.email}` : ''}
                     </Text>
                     <Text style={[st.td, st.colEmployee, { color: colors.textMuted }]} numberOfLines={2}>
                       {l.employee_name || 'Unassigned'}
@@ -508,7 +509,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                   <Text style={[st.rowIndex, { color: colors.textMuted }]}>{serial}</Text>
                   <View style={{ flex: 1 }}>
                     <Text style={{ color: colors.text, fontWeight: '700' }}>{l.name}</Text>
-                    <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone}</Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 11 }}>{formatPhoneDisplay(l.phone) || '—'}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>
                       {l.employee_name ? `Assigned: ${l.employee_name}` : 'Unassigned'}
                       {' · '}{platformLabel(l.platform || l.source)}

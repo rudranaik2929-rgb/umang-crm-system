@@ -2,8 +2,12 @@
 -- Booking documents — PDF/JPEG upload metadata on bookings
 -- Run once in Supabase SQL Editor (safe to re-run).
 --
--- Stores file metadata in bookings.booking_document (jsonb).
--- Actual files live in Supabase Storage bucket: booking-documents
+-- 1) Adds bookings.booking_document (jsonb) — metadata column the CRM uses to
+--    track each uploaded file.
+-- 2) Storage bucket "booking-documents" is created AUTOMATICALLY by the backend
+--    on the first upload (no Dashboard step required). If you prefer to create
+--    it manually: Dashboard → Storage → New bucket → id: booking-documents,
+--    PRIVATE, max size 15 MB, MIME types application/pdf + image/jpeg.
 -- =============================================================================
 
 alter table bookings
@@ -12,16 +16,6 @@ alter table bookings
 comment on column bookings.booking_document is
   'Uploaded booking document metadata: file_name, content_type, storage_path, uploaded_at, uploaded_by, size_bytes';
 
--- ---------------------------------------------------------------------------
--- Supabase Storage setup (Dashboard → Storage → New bucket)
--- ---------------------------------------------------------------------------
--- 1. Create bucket id: booking-documents
--- 2. Set bucket to PRIVATE (recommended — backend serves preview via service role)
--- 3. Allowed MIME types (optional policy): application/pdf, image/jpeg
--- 4. Max file size: 15 MB (matches backend BOOKING_DOCUMENT_MAX_BYTES)
---
--- No public RLS policies required — the CRM backend uploads/downloads using
--- SUPABASE_SERVICE_ROLE_KEY. Do NOT expose the service role key to the browser.
---
--- Optional: verify column exists
--- select booking_id, booking_document from bookings limit 5;
+-- Optional sanity check: which bookings already have a document uploaded?
+-- select booking_id, booking_document->>'file_name' as file from bookings
+-- where booking_document is not null limit 10;

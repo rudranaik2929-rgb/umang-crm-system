@@ -14,6 +14,7 @@ import {
   formatHousingLeadDate,
 } from '../lib/leadFormat';
 import { platformLabel } from '../lib/constants';
+import { formatPhoneDisplay } from '../lib/leadContact';
 import { useMainContentOverlayStyle } from '../layout/SidebarLayoutContext';
 
 type PlatformRow = {
@@ -457,7 +458,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
                       >
                         <Text style={[st.tableCell, st.colName, st.leadName, { color: colors.text }]} numberOfLines={2}>{lead.name}</Text>
                         <Text style={[st.tableCell, st.colContact, { color: colors.textSecondary }]} numberOfLines={2}>
-                          {lead.phone}{lead.email ? `\n${lead.email}` : ''}
+                          {formatPhoneDisplay(lead.phone) || '—'}{lead.email ? `\n${lead.email}` : ''}
                         </Text>
                         <Text style={[st.tableCell, st.colLocation, { color: colors.textMuted }]} numberOfLines={3}>
                           {[project, lead.location, configLabel].filter(Boolean).join('\n') || '—'}
@@ -490,7 +491,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
                         {lead ? <WorkflowStatusBadge lead={lead} /> : null}
                       </View>
                       <Text style={[st.leadSub, { color: colors.textSecondary }]}>
-                        {lead.phone}{lead.email ? ` · ${lead.email}` : ''}
+                        {formatPhoneDisplay(lead.phone) || '—'}{lead.email ? ` · ${lead.email}` : ''}
                       </Text>
                       {project || lead.location ? (
                         <Text style={[st.leadMeta, { color: colors.textMuted }]} numberOfLines={2}>

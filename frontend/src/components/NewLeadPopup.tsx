@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
+import { formatPhoneDisplay } from '../lib/leadContact';
 
 interface RecentLead {
   lead_id: string;
@@ -90,7 +91,7 @@ export function NewLeadPopup({ enabled = true, pollMs = 120000 }: { enabled?: bo
                 {lead.platform_label || 'Lead'}
               </Text>
               <Text style={[styles.time, { color: colors.textMuted }]} numberOfLines={1}>
-                {formatArrival(lead.created_at)}{lead.phone ? ` · ${lead.phone}` : ''}
+                {formatArrival(lead.created_at)}{formatPhoneDisplay(lead.phone) ? ` · ${formatPhoneDisplay(lead.phone)}` : ''}
               </Text>
             </View>
             <Pressable onPress={() => dismiss(lead.lead_id)} hitSlop={8} style={styles.close}>

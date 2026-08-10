@@ -7,6 +7,7 @@ import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { STAGES, STAGE_COLORS, stageLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
+import { formatPhoneDisplay } from '../../src/lib/leadContact';
 import { EmptyState } from '../../src/components/EmptyState';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
@@ -191,7 +192,7 @@ function KanbanCard({ lead, colors, onPress, onEdit, onToggleStar, onDelete }: a
         </View>
         <View style={styles.cardMeta}>
           <Ionicons name="call-outline" size={11} color={colors.textMuted} />
-          <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{lead.phone}</Text>
+          <Text style={[styles.cardMetaText, { color: colors.textMuted }]} numberOfLines={1}>{formatPhoneDisplay(lead.phone) || '—'}</Text>
         </View>
         {lead.location ? (
           <View style={styles.cardMeta}>

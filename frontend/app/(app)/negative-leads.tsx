@@ -5,6 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
+import { formatPhoneDisplay } from '../../src/lib/leadContact';
 import { Badge } from '../../src/components/Badge';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
 import { Ionicons } from '@expo/vector-icons';
@@ -58,7 +59,7 @@ export default function NegativeLeads() {
                   style={({ hovered }: any) => [styles.tRow, { borderBottomColor: colors.border, backgroundColor: hovered ? colors.surfaceAlt : 'transparent' }]}>
                   <View style={{ flex: 2 }}>
                     <Text style={[styles.cellPrimary, { color: colors.text }]}>{l.name}</Text>
-                    <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{l.phone}</Text>
+                    <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{formatPhoneDisplay(l.phone) || '—'}</Text>
                   </View>
                   <View style={{ flex: 1.5 }}>
                     <Text style={[styles.cellPrimary, { color: colors.text }]}>{l.budget || '—'}</Text>

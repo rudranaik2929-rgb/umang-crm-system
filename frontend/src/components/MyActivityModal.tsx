@@ -6,7 +6,7 @@ import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { WorkflowStatusBadge } from './Badge';
 import { formatBudgetStringLakhs } from '../lib/leadFormat';
-import { openPhoneCall, openWhatsApp } from '../lib/leadContact';
+import { formatPhoneDisplay, openPhoneCall, openWhatsApp } from '../lib/leadContact';
 import { PanelRefreshButton } from './PanelRefreshButton';
 
 type Props = {
@@ -138,7 +138,7 @@ export function MyActivityModal({ visible, metric, onClose, onChanged, onOpenLea
               >
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: colors.text, fontWeight: '700' }}>{l.name}</Text>
-                  <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone || '—'}</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 11 }}>{formatPhoneDisplay(l.phone) || '—'}</Text>
                   <Text style={{ color: colors.textSecondary, fontSize: 10, marginTop: 2 }}>
                     {[l.property_type, l.location].filter(Boolean).join(' · ') || l.source || '—'}
                   </Text>
