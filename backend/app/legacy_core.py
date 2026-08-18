@@ -8672,23 +8672,25 @@ async def upload_booking_document(
     content_type, ext = _detect_booking_document_type(file.filename, file.content_type, contents)
     doc_id = gen_id("doc")
     storage_path = f"{booking_id}/{doc_id}.{ext}"
-    if not sb_storage_ensure_bucket(
-        BOOKING_DOCUMENT_BUCKET,
-        file_size_limit=BOOKING_DOCUMENT_MAX_BYTES,
-        allowed_mime_types=["application/pdf", "image/jpeg"],
-    ):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Could not create/access the 'booking-documents' storage bucket. "
-                "Fix: (1) Set SUPABASE_SERVICE_ROLE_KEY in Render env to the real key from "
-                "Supabase Dashboard → Settings → API → service_role, (2) Redeploy the service, "
-                "(3) Or create the bucket manually: Supabase Dashboard → Storage → New bucket → "
-                "id: booking-documents, Private, 15 MB, MIME: application/pdf + image/jpeg"
-            ),
-        )
     if not sb_storage_upload(BOOKING_DOCUMENT_BUCKET, storage_path, contents, content_type, upsert=True):
-        raise HTTPException(status_code=503, detail="Could not upload document to storage. Check Supabase bucket setup.")
+        created = sb_storage_ensure_bucket(
+            BOOKING_DOCUMENT_BUCKET,
+            file_size_limit=BOOKING_DOCUMENT_MAX_BYTES,
+            allowed_mime_types=["application/pdf", "image/jpeg"],
+        )
+        if created:
+            if not sb_storage_upload(BOOKING_DOCUMENT_BUCKET, storage_path, contents, content_type, upsert=True):
+                raise HTTPException(status_code=503, detail="Could not upload document to storage even after creating bucket. Check Supabase setup.")
+        else:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    "Could not upload document. The 'booking-documents' storage bucket may not exist. "
+                    "Run the SQL in supabase/FIX_BOOKING_STORAGE.sql in Supabase SQL Editor, "
+                    "or create it manually: Supabase Dashboard → Storage → New bucket → "
+                    "id: booking-documents, Private, 15 MB, MIME: application/pdf + image/jpeg"
+                ),
+            )
     previous = _normalize_booking_document_meta(booking.get("booking_document"))
     if previous and previous.get("storage_path") and previous["storage_path"] != storage_path:
         sb_storage_delete(BOOKING_DOCUMENT_BUCKET, previous["storage_path"])
