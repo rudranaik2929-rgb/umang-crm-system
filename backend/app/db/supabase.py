@@ -186,6 +186,12 @@ def sb_storage_ensure_bucket(bucket: str, *, public: bool = False, file_size_lim
     first upload attempt creates the bucket automatically.
     """
     if not SUPABASE_URL or not SUPABASE_KEY:
+        logging.error("sb_storage_ensure_bucket: SUPABASE_URL or SUPABASE_KEY is empty — cannot create bucket")
+        return False
+    # Quick sanity: key looks like a JWT (starts with ey)
+    if not SUPABASE_KEY.startswith("ey"):
+        logging.error(f"sb_storage_ensure_bucket: SUPABASE_KEY does not look like a valid JWT (starts with '{SUPABASE_KEY[:8]}...'). "
+                      "Set the real service_role key from Supabase Dashboard → Settings → API.")
         return False
     headers = {
         "apikey": SUPABASE_KEY,
@@ -203,17 +209,22 @@ def sb_storage_ensure_bucket(bucket: str, *, public: bool = False, file_size_lim
         json=body,
     )
     if r.status_code < 400:
+        logging.info(f"sb_storage_ensure_bucket: bucket '{bucket}' created successfully")
         return True
     if r.status_code == 400 and '"already exists"' in r.text.lower():
+        logging.info(f"sb_storage_ensure_bucket: bucket '{bucket}' already exists (ok)")
         return True
-    logging.error(f"Supabase storage ensure bucket {bucket}: {r.status_code} {r.text[:300]}")
+    logging.error(f"sb_storage_ensure_bucket FAILED for '{bucket}': HTTP {r.status_code} — {r.text[:400]}")
     return False
 
 
 def sb_storage_upload(bucket: str, path: str, content: bytes, content_type: str, upsert: bool = True) -> bool:
     """Upload a file to Supabase Storage using the service role key."""
     if not SUPABASE_URL or not SUPABASE_KEY:
-        logging.error("Supabase storage upload skipped — URL or key not configured")
+        logging.error("sb_storage_upload: SUPABASE_URL or SUPABASE_KEY is empty — cannot upload")
+        return False
+    if not SUPABASE_KEY.startswith("ey"):
+        logging.error(f"sb_storage_upload: SUPABASE_KEY does not look like a valid JWT (starts with '{SUPABASE_KEY[:8]}...')")
         return False
     clean_path = path.lstrip("/")
     headers = {
@@ -223,14 +234,16 @@ def sb_storage_upload(bucket: str, path: str, content: bytes, content_type: str,
     }
     if upsert:
         headers["x-upsert"] = "true"
+    logging.info(f"sb_storage_upload: uploading {len(content)} bytes to {bucket}/{clean_path}")
     r = _http.post(
         f"{SUPABASE_URL}/storage/v1/object/{bucket}/{clean_path}",
         headers=headers,
         content=content,
     )
     if r.status_code >= 400:
-        logging.error(f"Supabase storage upload {bucket}/{clean_path}: {r.status_code} {r.text[:300]}")
+        logging.error(f"sb_storage_upload FAILED: {bucket}/{clean_path} — HTTP {r.status_code} — {r.text[:400]}")
         return False
+    logging.info(f"sb_storage_upload: success — {bucket}/{clean_path}")
     return True
 
 

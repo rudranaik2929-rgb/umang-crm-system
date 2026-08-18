@@ -8677,7 +8677,16 @@ async def upload_booking_document(
         file_size_limit=BOOKING_DOCUMENT_MAX_BYTES,
         allowed_mime_types=["application/pdf", "image/jpeg"],
     ):
-        raise HTTPException(status_code=503, detail="Could not create the booking-documents storage bucket. Check the SUPABASE_SERVICE_ROLE_KEY / storage permissions.")
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Could not create/access the 'booking-documents' storage bucket. "
+                "Fix: (1) Set SUPABASE_SERVICE_ROLE_KEY in Render env to the real key from "
+                "Supabase Dashboard → Settings → API → service_role, (2) Redeploy the service, "
+                "(3) Or create the bucket manually: Supabase Dashboard → Storage → New bucket → "
+                "id: booking-documents, Private, 15 MB, MIME: application/pdf + image/jpeg"
+            ),
+        )
     if not sb_storage_upload(BOOKING_DOCUMENT_BUCKET, storage_path, contents, content_type, upsert=True):
         raise HTTPException(status_code=503, detail="Could not upload document to storage. Check Supabase bucket setup.")
     previous = _normalize_booking_document_meta(booking.get("booking_document"))
