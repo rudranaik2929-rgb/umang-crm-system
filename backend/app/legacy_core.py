@@ -9629,12 +9629,40 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
 @api_router.delete("/employees/{eid}")
 async def delete_employee(eid: str, cu: User=Depends(get_current_user)):
     ensure_roles(cu, ["admin", "manager"])
-    rows = sb_select("employees", {"employee_id": f"eq.{eid}", "select": "user_id", "limit": "1"})
-    linked_user_id = (rows[0] if rows else {}).get("user_id")
-    sb_delete("employees", "employee_id", eid)
-    if linked_user_id:
-        sb_delete("users", "user_id", linked_user_id)
-        invalidate_sessions_for_user(linked_user_id)
+    rows = sb_select("employees", {
+        "employee_id": f"eq.{eid}",
+        "select": "employee_id,email,user_id",
+        "limit": "1",
+    })
+    if not rows:
+        raise HTTPException(status_code=404, detail="Employee not found")
+    employee = rows[0]
+    email = normalize_email(employee.get("email"))
+
+    # Collect every login row linked to this employee so the email is fully
+    # released after delete (hard delete — same email can be reused for a new
+    # account). Covers orphaned/legacy employees whose user_id was never set.
+    user_ids: List[str] = []
+    for candidate in (employee.get("user_id"),):
+        if candidate:
+            user_ids.append(str(candidate))
+    if email:
+        for r in sb_select("users", {"email": f"eq.{email}", "select": "user_id"}):
+            uid = r.get("user_id")
+            if uid and str(uid) not in user_ids:
+                user_ids.append(str(uid))
+    for r in sb_select("users", {"employee_id": f"eq.{eid}", "select": "user_id"}):
+        uid = r.get("user_id")
+        if uid and str(uid) not in user_ids:
+            user_ids.append(str(uid))
+
+    if not sb_delete("employees", "employee_id", eid):
+        raise HTTPException(status_code=500, detail="Could not delete employee.")
+    sb_delete("employee_locations", "employee_id", eid)
+    for uid in user_ids:
+        if sb_delete("users", "user_id", uid):
+            invalidate_sessions_for_user(uid)
+    invalidate_employees_cache()
     return {"ok": True}
 
 # ---- Templates & Campaigns ----
