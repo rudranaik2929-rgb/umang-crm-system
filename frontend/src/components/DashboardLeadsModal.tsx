@@ -462,6 +462,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                 <Text style={[st.th, st.colEmployee, { color: colors.textMuted }]}>Employee</Text>
                 <Text style={[st.th, st.colSource, { color: colors.textMuted }]}>Source</Text>
                 <Text style={[st.th, st.colStatus, { color: colors.textMuted }]}>Status</Text>
+                <Text style={[st.th, st.colLocation, { color: colors.textMuted }]}>Location</Text>
                 <Text style={[st.th, st.colDate, { color: colors.textMuted }]}>Date</Text>
               </View>
             ) : null}
@@ -492,6 +493,9 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                     <View style={[st.colStatus, st.td]}>
                       <WorkflowStatusBadge lead={l} />
                     </View>
+                    <Text style={[st.td, st.colLocation, { color: colors.textSecondary }]} numberOfLines={2}>
+                      {l.location || '—'}
+                    </Text>
                     <Text style={[st.td, st.colDate, { color: colors.textMuted }]}>
                       {bucket === 'follow_up' && l.follow_up_at
                         ? new Date(l.follow_up_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
@@ -513,6 +517,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                     <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>
                       {l.employee_name ? `Assigned: ${l.employee_name}` : 'Unassigned'}
                       {' · '}{platformLabel(l.platform || l.source)}
+                      {l.location ? ` · Location: ${l.location}` : ''}
                     </Text>
                   </View>
                   <View style={{ alignItems: 'flex-end', gap: 4 }}>
@@ -700,5 +705,6 @@ const st = StyleSheet.create({
   colEmployee: { flex: 0.9, minWidth: 100 },
   colSource: { flex: 0.8, minWidth: 90 },
   colStatus: { flex: 0.9, minWidth: 100 },
+  colLocation: { flex: 0.9, minWidth: 90 },
   colDate: { flex: 0.8, minWidth: 90 },
 });
