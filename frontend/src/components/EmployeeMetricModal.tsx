@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, Modal, Pressable, ScrollView, ActivityIndicator, Platform } from 'react-native';
+import { View, Text, StyleSheet, Modal, Pressable, ScrollView, ActivityIndicator, Platform, useWindowDimensions } from 'react-native';
 import { createPortal } from 'react-dom';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api } from '../lib/api';
 import { WorkflowStatusBadge } from './Badge';
+import { formatPhoneDisplay } from '../lib/leadContact';
+import { platformLabel } from '../lib/constants';
 
 const METRIC_LABELS: Record<string, string> = {
   total: 'Total Leads (Backlog)',
@@ -46,6 +48,13 @@ function formatWhen(iso?: string | null) {
   return new Date(iso).toLocaleString('en-IN', { dateStyle: 'short', timeStyle: 'short' });
 }
 
+function formatDate(value?: string) {
+  if (!value) return '—';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return String(value).slice(0, 10);
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
 export function EmployeeMetricModal({
   visible,
   employeeId,
@@ -56,6 +65,8 @@ export function EmployeeMetricModal({
   onOpenLead,
 }: Props) {
   const { colors } = useTheme();
+  const { width: windowWidth } = useWindowDimensions();
+  const isWide = windowWidth >= 768;
   const [leads, setLeads] = useState<any[]>([]);
   const [bookings, setBookings] = useState<any[]>([]);
   const [report, setReport] = useState<any[]>([]);
@@ -173,8 +184,50 @@ export function EmployeeMetricModal({
           <Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 32, fontSize: 13 }}>
             No leads in this category.
           </Text>
+        ) : isWide ? (
+          <>
+            <View style={[styles.tableHeader, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <Text style={[styles.th, styles.colIndex, { color: colors.textMuted }]}>#</Text>
+              <Text style={[styles.th, styles.colName, { color: colors.textMuted }]}>Name</Text>
+              <Text style={[styles.th, styles.colContact, { color: colors.textMuted }]}>Contact</Text>
+              <Text style={[styles.th, styles.colSource, { color: colors.textMuted }]}>Source</Text>
+              <Text style={[styles.th, styles.colStatus, { color: colors.textMuted }]}>Status</Text>
+              <Text style={[styles.th, styles.colDate, { color: colors.textMuted }]}>Date</Text>
+              <Text style={[styles.th, styles.colLocation, { color: colors.textMuted }]}>Location</Text>
+            </View>
+            <ScrollView style={{ maxHeight: 520 }} keyboardShouldPersistTaps="handled">
+              {leads.map((l, index) => (
+                <Pressable
+                  key={l.lead_id}
+                  testID={`emp-metric-lead-${l.lead_id}`}
+                  onPress={() => openLead(l.lead_id)}
+                  style={({ pressed }) => [styles.tableRow, {
+                    borderColor: colors.border,
+                    backgroundColor: pressed ? colors.primary + '08' : colors.surfaceAlt,
+                  }]}
+                >
+                  <Text style={[styles.td, styles.colIndex, { color: colors.textMuted }]}>{index + 1}</Text>
+                  <Text style={[styles.td, styles.colName, { color: colors.text, fontWeight: '700' }]} numberOfLines={2}>{l.name}</Text>
+                  <Text style={[styles.td, styles.colContact, { color: colors.textSecondary }]} numberOfLines={2}>
+                    {formatPhoneDisplay(l.phone) || '—'}{l.email ? `\n${l.email}` : ''}
+                    {l.budget ? `\n${l.budget} L` : ''}
+                  </Text>
+                  <Text style={[styles.td, styles.colSource, { color: colors.textMuted }]} numberOfLines={2}>
+                    {platformLabel(l.platform || l.source)}
+                  </Text>
+                  <View style={styles.colStatus}>
+                    <WorkflowStatusBadge lead={l} />
+                  </View>
+                  <Text style={[styles.td, styles.colDate, { color: colors.textMuted }]}>{formatDate(l.created_at)}</Text>
+                  <Text style={[styles.td, styles.colLocation, { color: colors.textSecondary }]} numberOfLines={2}>
+                    {l.location || '—'}
+                  </Text>
+                </Pressable>
+              ))}
+            </ScrollView>
+          </>
         ) : (
-          <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
+          <ScrollView style={{ maxHeight: 520 }} keyboardShouldPersistTaps="handled">
             {leads.map((l) => (
               <Pressable
                 key={l.lead_id}
@@ -184,9 +237,17 @@ export function EmployeeMetricModal({
               >
                 <View style={{ flex: 1 }}>
                   <Text style={{ color: colors.text, fontWeight: '700' }}>{l.name}</Text>
-                  <Text style={{ color: colors.textMuted, fontSize: 11 }}>{l.phone || '—'}</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 11 }}>{formatPhoneDisplay(l.phone) || '—'}</Text>
+                  <Text style={{ color: colors.textMuted, fontSize: 10, marginTop: 4 }}>
+                    {platformLabel(l.platform || l.source)}
+                    {' · '}{formatDate(l.created_at)}
+                    {l.location ? ` · ${l.location}` : ''}
+                  </Text>
                 </View>
-                <WorkflowStatusBadge lead={l} />
+                <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                  <WorkflowStatusBadge lead={l} />
+                  {l.budget ? <Text style={{ color: colors.textMuted, fontSize: 10 }}>{l.budget} L</Text> : null}
+                </View>
               </Pressable>
             ))}
           </ScrollView>
@@ -227,10 +288,40 @@ export function EmployeeMetricModal({
 
 const styles = StyleSheet.create({
   backdrop: { flex: 1, width: '100%', height: '100%', justifyContent: 'center', alignItems: 'center', padding: 20 },
-  card: { width: '100%', maxWidth: 560, maxHeight: '85%', borderRadius: 12, borderWidth: 1, padding: 18 },
+  card: { width: '100%', maxWidth: 920, maxHeight: '85%', borderRadius: 12, borderWidth: 1, padding: 18 },
   header: { marginBottom: 14 },
   title: { fontSize: 18, fontWeight: '700' },
   close: { position: 'absolute', right: 0, top: 0, width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8, alignItems: 'center', gap: 10 },
   reportCard: { padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8 },
+  tableHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginBottom: 8,
+    gap: 10,
+  },
+  tableRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
+    marginBottom: 8,
+    gap: 10,
+    ...Platform.select({ web: { cursor: 'pointer' as any }, default: {} }),
+  },
+  th: { fontSize: 10, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.5 },
+  td: { fontSize: 12, lineHeight: 17 },
+  colIndex: { width: 30, minWidth: 30, flexGrow: 0, flexShrink: 0, textAlign: 'right' },
+  colName: { flex: 1.2, minWidth: 120 },
+  colContact: { flex: 1, minWidth: 120 },
+  colSource: { flex: 0.7, minWidth: 80 },
+  colStatus: { flex: 0.9, minWidth: 96 },
+  colDate: { flex: 0.8, minWidth: 88 },
+  colLocation: { flex: 0.9, minWidth: 100 },
 });
