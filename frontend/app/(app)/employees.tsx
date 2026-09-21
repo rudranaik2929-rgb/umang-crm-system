@@ -66,6 +66,7 @@ export default function Employees() {
   const [loading, setLoading] = useState(!cachedEmployees);
   const [showAdd, setShowAdd] = useState(false);
   const [editEmployee, setEditEmployee] = useState<any | null>(null);
+  const [viewMode, setViewMode] = useState<'service' | 'location'>('service');
 
   const load = useCallback(async () => {
     try {
@@ -104,8 +105,9 @@ export default function Employees() {
 
   const activeCount = employees.filter((e) => e.active !== false).length;
 
-  // Group employees by role so the list is not mixed randomly — grouped by
-  // role label in the agreed order (Sales Executive → Telecaller → …).
+  // Group employees either by role (service-wise) or by location, so the list
+  // is not mixed randomly. Service-wise: Sales Executive → Telecaller → ….
+  // Location-wise: grouped per location and listed alphabetically.
   const groups = useMemo(() => {
     const sorted = [...employees].sort(
       (a, b) =>
@@ -115,14 +117,25 @@ export default function Employees() {
     const out: { label: string; items: any[]; startIndex: number }[] = [];
     let n = 0;
     for (const e of sorted) {
-      const label = roleLabel(e.role);
+      const label =
+        viewMode === 'location'
+          ? (e.location || '').trim() || 'Unknown'
+          : roleLabel(e.role);
       const g = out.find((x) => x.label === label);
       if (g) g.items.push(e);
       else out.push({ label, items: [e], startIndex: n });
       n += 1;
     }
+    if (viewMode === 'location') {
+      out.sort((a, b) => a.label.localeCompare(b.label));
+      let idx = 0;
+      for (const g of out) {
+        g.startIndex = idx;
+        idx += g.items.length;
+      }
+    }
     return out;
-  }, [employees]);
+  }, [employees, viewMode]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -137,6 +150,31 @@ export default function Employees() {
         }
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
+        {employees.length === 0 && !loading ? null : (
+          <View style={[styles.toggleRow, { borderColor: colors.border, backgroundColor: colors.surface }]}>
+            <Text style={[styles.toggleLabel, { color: colors.textMuted }]}>Group by</Text>
+            <View style={[styles.toggleSeg, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
+              <Pressable
+                testID="group-service"
+                onPress={() => setViewMode('service')}
+                style={[styles.toggleBtn, viewMode === 'service' && { backgroundColor: colors.primary }]}
+              >
+                <Text style={[styles.toggleText, { color: viewMode === 'service' ? '#fff' : colors.textSecondary }]}>
+                  Service wise
+                </Text>
+              </Pressable>
+              <Pressable
+                testID="group-location"
+                onPress={() => setViewMode('location')}
+                style={[styles.toggleBtn, viewMode === 'location' && { backgroundColor: colors.primary }]}
+              >
+                <Text style={[styles.toggleText, { color: viewMode === 'location' ? '#fff' : colors.textSecondary }]}>
+                  Location wise
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        )}
         {loading ? <ActivityIndicator color={colors.primary} /> :
           employees.length === 0 ? (
             <EmptyState
@@ -170,7 +208,9 @@ export default function Employees() {
               {groups.map((g) => (
                 <View key={g.label}>
                   <View style={[styles.groupHeader, { backgroundColor: colors.surfaceAlt, borderBottomColor: colors.border }]}>
-                    <Text style={[styles.groupTitle, { color: colors.primary }]}>{g.label}s</Text>
+                    <Text style={[styles.groupTitle, { color: colors.primary }]}>
+                      {viewMode === 'location' ? g.label : `${g.label}s`}
+                    </Text>
                     <Text style={[styles.groupCount, { color: colors.textMuted }]}>
                       {g.items.length} member{g.items.length === 1 ? '' : 's'}
                     </Text>
@@ -646,6 +686,11 @@ const styles = StyleSheet.create({
   groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
   groupTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
   groupCount: { fontSize: 11, fontWeight: '600' },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, paddingVertical: 10 },
+  toggleLabel: { fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
+  toggleSeg: { flexDirection: 'row', borderWidth: 1, borderRadius: 8, overflow: 'hidden' },
+  toggleBtn: { paddingHorizontal: 16, paddingVertical: 8 },
+  toggleText: { fontSize: 12, fontWeight: '700' },
   tRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
   serialNo: { fontSize: 12, fontWeight: '700' },
   cellPrimary: { fontSize: 13, fontWeight: '500' },
