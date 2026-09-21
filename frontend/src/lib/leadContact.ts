@@ -38,10 +38,14 @@ export async function openPhoneCall(phone?: string) {
     Alert.alert('No phone number', 'This lead has no phone number to call.');
     return;
   }
-  if (Platform.OS === 'web' && typeof window !== 'undefined') {
-    // Web: navigate straight to tel: so the browser dialer opens immediately
-    // on click — no intermediate alert / permission prompt.
-    window.location.href = uri;
+  if (Platform.OS === 'web' && typeof document !== 'undefined') {
+    // Web: trigger the tel: link through a transient anchor click. The browser
+    // dialer opens immediately without navigating/redirecting away from the page.
+    const a = document.createElement('a');
+    a.href = uri;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     return;
   }
   try {

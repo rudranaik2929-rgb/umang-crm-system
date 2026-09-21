@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Modal, TextInput } from 'react-native';
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
@@ -40,6 +40,23 @@ function pagesForEmployee(employee: { allowed_pages?: unknown; role?: string }) 
   const saved = parseAllowedPages(employee.allowed_pages);
   if (saved !== null) return saved;
   return ROLE_DEFAULT_SERVICES[employee.role || 'telecaller'] || ['pipeline'];
+}
+
+/** Display order for the employee list — Sales Executives first, then Telecallers, then the rest by role. */
+const ROLE_SORT_ORDER = [
+  'site_visit',
+  'sales_executive',
+  'telecaller',
+  'booking',
+  'loan',
+  'marketing',
+  'manager',
+  'admin',
+];
+
+function roleSortRank(role?: string): number {
+  const idx = ROLE_SORT_ORDER.indexOf((role || '').trim().toLowerCase());
+  return idx === -1 ? ROLE_SORT_ORDER.length : idx;
 }
 
 export default function Employees() {
@@ -87,6 +104,26 @@ export default function Employees() {
 
   const activeCount = employees.filter((e) => e.active !== false).length;
 
+  // Group employees by role so the list is not mixed randomly — grouped by
+  // role label in the agreed order (Sales Executive → Telecaller → …).
+  const groups = useMemo(() => {
+    const sorted = [...employees].sort(
+      (a, b) =>
+        roleSortRank(a.role) - roleSortRank(b.role) ||
+        (a.name || '').localeCompare(b.name || ''),
+    );
+    const out: { label: string; items: any[]; startIndex: number }[] = [];
+    let n = 0;
+    for (const e of sorted) {
+      const label = roleLabel(e.role);
+      const g = out.find((x) => x.label === label);
+      if (g) g.items.push(e);
+      else out.push({ label, items: [e], startIndex: n });
+      n += 1;
+    }
+    return out;
+  }, [employees]);
+
   return (
     <View style={{ flex: 1 }}>
       <TopBar
@@ -130,41 +167,51 @@ export default function Employees() {
                 <Text style={[styles.th, { color: colors.textMuted, width: 90 }]}>STATUS</Text>
                 <Text style={[styles.th, { color: colors.textMuted, width: 120, textAlign: 'right' }]}>ACTIONS</Text>
               </View>
-              {employees.map((e, index) => (
-                <View key={e.employee_id} style={[styles.tRow, { borderBottomColor: colors.border }]}>
-                  <Text style={[styles.serialNo, { color: colors.textMuted, width: 44 }]}>{index + 1}</Text>
-                  <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                    <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
-                      <Text style={{ color: '#fff', fontWeight: '700' }}>{e.name?.[0]?.toUpperCase() || '?'}</Text>
+              {groups.map((g) => (
+                <View key={g.label}>
+                  <View style={[styles.groupHeader, { backgroundColor: colors.surfaceAlt, borderBottomColor: colors.border }]}>
+                    <Text style={[styles.groupTitle, { color: colors.primary }]}>{g.label}s</Text>
+                    <Text style={[styles.groupCount, { color: colors.textMuted }]}>
+                      {g.items.length} member{g.items.length === 1 ? '' : 's'}
+                    </Text>
+                  </View>
+                  {g.items.map((e, i) => (
+                    <View key={e.employee_id} style={[styles.tRow, { borderBottomColor: colors.border }]}>
+                      <Text style={[styles.serialNo, { color: colors.textMuted, width: 44 }]}>{g.startIndex + i + 1}</Text>
+                      <View style={{ flex: 2, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <View style={[styles.avatar, { backgroundColor: colors.primary }]}>
+                          <Text style={{ color: '#fff', fontWeight: '700' }}>{e.name?.[0]?.toUpperCase() || '?'}</Text>
+                        </View>
+                        <View>
+                          <Text style={[styles.cellPrimary, { color: colors.text }]}>{e.name}</Text>
+                          <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{e.phone || '—'}</Text>
+                        </View>
+                      </View>
+                      <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.5 }]} numberOfLines={2}>
+                        {e.location || '—'}
+                      </Text>
+                      <Text style={[styles.cellPrimary, { color: colors.text, flex: 2 }]}>{e.email}</Text>
+                      <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.3 }]}>{roleLabel(e.role)}</Text>
+                      <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.2 }]}>{e.department}</Text>
+                      <View style={{ width: 90 }}>
+                        <Badge text={e.active ? 'ACTIVE' : 'DISABLED'} color={e.active ? colors.positive : colors.textMuted} />
+                      </View>
+                      <View style={{ width: 120, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 }}>
+                        <Pressable testID={`emp-edit-${e.employee_id}`} onPress={() => setEditEmployee(e)}
+                          style={[styles.iconAct, { borderColor: colors.border }]}>
+                          <Ionicons name="create-outline" size={14} color={colors.primary} />
+                        </Pressable>
+                        <Pressable testID={`emp-toggle-${e.employee_id}`} onPress={() => toggle(e)}
+                          style={[styles.iconAct, { borderColor: colors.border }]}>
+                          <Ionicons name={e.active ? 'pause-circle-outline' : 'play-circle-outline'} size={14} color={colors.textSecondary} />
+                        </Pressable>
+                        <Pressable testID={`emp-delete-${e.employee_id}`} onPress={() => remove(e.employee_id)}
+                          style={[styles.iconAct, { borderColor: colors.border }]}>
+                          <Ionicons name="trash-outline" size={14} color={colors.negative} />
+                        </Pressable>
+                      </View>
                     </View>
-                    <View>
-                      <Text style={[styles.cellPrimary, { color: colors.text }]}>{e.name}</Text>
-                      <Text style={[styles.cellSecondary, { color: colors.textMuted }]}>{e.phone || '—'}</Text>
-                    </View>
-                  </View>
-                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.5 }]} numberOfLines={2}>
-                    {e.location || '—'}
-                  </Text>
-                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 2 }]}>{e.email}</Text>
-                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.3 }]}>{roleLabel(e.role)}</Text>
-                  <Text style={[styles.cellPrimary, { color: colors.text, flex: 1.2 }]}>{e.department}</Text>
-                  <View style={{ width: 90 }}>
-                    <Badge text={e.active ? 'ACTIVE' : 'DISABLED'} color={e.active ? colors.positive : colors.textMuted} />
-                  </View>
-                  <View style={{ width: 120, flexDirection: 'row', justifyContent: 'flex-end', gap: 6 }}>
-                    <Pressable testID={`emp-edit-${e.employee_id}`} onPress={() => setEditEmployee(e)}
-                      style={[styles.iconAct, { borderColor: colors.border }]}>
-                      <Ionicons name="create-outline" size={14} color={colors.primary} />
-                    </Pressable>
-                    <Pressable testID={`emp-toggle-${e.employee_id}`} onPress={() => toggle(e)}
-                      style={[styles.iconAct, { borderColor: colors.border }]}>
-                      <Ionicons name={e.active ? 'pause-circle-outline' : 'play-circle-outline'} size={14} color={colors.textSecondary} />
-                    </Pressable>
-                    <Pressable testID={`emp-delete-${e.employee_id}`} onPress={() => remove(e.employee_id)}
-                      style={[styles.iconAct, { borderColor: colors.border }]}>
-                      <Ionicons name="trash-outline" size={14} color={colors.negative} />
-                    </Pressable>
-                  </View>
+                  ))}
                 </View>
               ))}
             </View>
@@ -596,6 +643,9 @@ const styles = StyleSheet.create({
   tableSummary: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   tHead: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   th: { fontSize: 10, fontWeight: '700', letterSpacing: 1.2 },
+  groupHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1 },
+  groupTitle: { fontSize: 11, fontWeight: '800', letterSpacing: 1.2, textTransform: 'uppercase' },
+  groupCount: { fontSize: 11, fontWeight: '600' },
   tRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1 },
   serialNo: { fontSize: 12, fontWeight: '700' },
   cellPrimary: { fontSize: 13, fontWeight: '500' },
