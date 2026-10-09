@@ -148,6 +148,40 @@ def test_assign_workspace_filter_and_facets_include_missed_leads():
     assert facets["inquiry_status"]["ringing"] == 1
 
 
+def test_open_leads_inquiry_filter():
+    fresh_open = _lead(lead_id="o1", stage="assigned", assigned_to="emp1", assigned_at=main.now_utc().isoformat())
+    unassigned_open = _lead(lead_id="o2", stage="new", assigned_to=None)
+    cold = _lead(lead_id="o3", stage="positive", priority="cold")
+    missed = _lead(lead_id="o4", assigned_at=(main.now_utc() - datetime.timedelta(hours=28)).isoformat())
+
+    assert main.classify_company_dashboard_bucket(fresh_open) == "open_leads"
+    assert main.classify_company_dashboard_bucket(unassigned_open) == "open_leads"
+    assert main.classify_company_dashboard_bucket(cold) == "cold_leads"
+    assert main.classify_company_dashboard_bucket(missed) == "missed_leads"
+
+    assert main.lead_matches_inquiry_filter(fresh_open, "open_leads") is True
+    assert main.lead_matches_inquiry_filter(unassigned_open, "open_leads") is True
+    assert main.lead_matches_inquiry_filter(cold, "open_leads") is False
+    assert main.lead_matches_inquiry_filter(missed, "open_leads") is False
+    assert main.lead_matches_inquiry_filter(fresh_open, "open_leads,cold") is True
+    assert "open_leads" in main.ASSIGN_INQUIRY_STATUSES
+
+
+def test_assign_workspace_filter_and_facets_include_open_leads():
+    fresh_open = _lead(lead_id="o1", stage="assigned", assigned_to="emp1", assigned_at=main.now_utc().isoformat())
+    cold = _lead(lead_id="o3", stage="positive", priority="cold")
+
+    filtered = main.filter_assign_workspace_leads(
+        [fresh_open, cold],
+        inquiry_status="open_leads",
+    )
+    assert {l["lead_id"] for l in filtered} == {"o1"}
+
+    facets = main.compute_assign_workspace_facets([fresh_open, cold])
+    assert facets["inquiry_status"]["open_leads"] == 1
+    assert facets["inquiry_status"]["cold"] == 1
+
+
 def test_dashboard_visited_bucket():
     rows = [
         _lead(lead_id="v1", stage="site_visit", status="active"),

@@ -75,6 +75,21 @@ function statusActionPatch(action: string | null | undefined): Record<string, an
   return {};
 }
 
+// Mirrors backend classify_company_dashboard_bucket → "open_leads": pipeline leads
+// (unassigned, freshly assigned, or in-progress) that have not been worked into a
+// classified bucket yet — i.e. not negative/closed, not missed, no ringing/visited/
+// follow-up/booking/cold/hot marker.
+function isOpenLeadMatch(lead: any): boolean {
+  if (!lead || lead?.status === 'negative' || lead?.stage === 'closed') return false;
+  if (isMissedLead(lead)) return false;
+  const priority = String(lead?.priority || '').toLowerCase();
+  if (['hot', 'cold', 'handoff_booking', 'handoff_loan'].includes(priority)) return false;
+  if (['booking', 'loan', 'registration', 'site_visit', 'positive'].includes(lead?.stage)) return false;
+  if (String(lead?.call_status || '').trim()) return false;
+  if (lead?.follow_up_at) return false;
+  return true;
+}
+
 function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilters): boolean {
   const assignee = (filters.assigned_to || 'all').trim().toLowerCase();
   if (assignee === 'unassigned') {
@@ -104,6 +119,7 @@ function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilter
     if (inquiry === 'hot') return String(lead?.priority || '') === 'hot';
     if (inquiry === 'cold') return String(lead?.priority || '') === 'cold';
     if (inquiry === 'missed_leads') return isMissedLead(lead);
+    if (inquiry === 'open_leads') return isOpenLeadMatch(lead);
     if (inquiry === 'follow_up') {
       return Boolean(lead?.follow_up_at)
         && !String(lead?.call_status || '').trim()
@@ -149,6 +165,7 @@ function formatDt(iso?: string | null) {
 const INQUIRY_COLORS: Record<string, string> = {
   active: '#0EA5E9',
   new: '#6366F1',
+  open_leads: '#6366F1',
   unassigned: '#6366F1',
   visited: '#14B8A6',
   booked: '#22C55E',

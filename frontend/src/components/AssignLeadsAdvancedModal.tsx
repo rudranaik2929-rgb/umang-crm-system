@@ -30,6 +30,7 @@ const INQUIRY_OPTIONS = [
   { key: 'all', label: 'All enquiries' },
   { key: 'active', label: 'Active' },
   { key: 'new', label: 'New' },
+  { key: 'open_leads', label: 'Open Leads' },
   { key: 'unassigned', label: 'Unassigned' },
   { key: 'visited', label: 'Visited' },
   { key: 'booked', label: 'Booked' },

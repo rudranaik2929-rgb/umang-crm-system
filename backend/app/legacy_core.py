@@ -1265,6 +1265,8 @@ def lead_matches_single_inquiry_filter(
         return lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]
     if key == "missed_leads":
         return is_missed_lead(lead)
+    if key == "open_leads":
+        return classify_company_dashboard_bucket(lead) == "open_leads"
     return classify_inquiry_status(lead) == key
 
 
@@ -1397,6 +1399,8 @@ def compute_assign_workspace_facets(
             inquiry["unassigned"] += 1
         if is_missed_lead(lead):
             inquiry["missed_leads"] += 1
+        if classify_company_dashboard_bucket(lead) == "open_leads":
+            inquiry["open_leads"] += 1
         plat = classify_lead_platform(lead.get("source"))
         source["all"] += 1
         if plat == "housing":
@@ -1762,7 +1766,7 @@ class SiteVisitorAssignRequest(BaseModel):
 
 
 ASSIGN_INQUIRY_STATUSES = [
-    "all", "active", "new", "hot", "cold", "missed_leads", "follow_up", "visited", "booked", "ringing",
+    "all", "active", "new", "open_leads", "hot", "cold", "missed_leads", "follow_up", "visited", "booked", "ringing",
     "not_interested", "low_budget", "other_location", "already_purchased", "not_searching", "unassigned",
 ]
 ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
