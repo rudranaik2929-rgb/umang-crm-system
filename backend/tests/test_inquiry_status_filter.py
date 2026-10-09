@@ -1,5 +1,6 @@
 import sys
 from pathlib import Path
+import datetime
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 if str(BACKEND_DIR) not in sys.path:
@@ -111,6 +112,40 @@ def test_inquiry_cold_and_follow_up_filters():
     assert main.lead_matches_inquiry_filter(cold, "follow_up,cold") is True
     assert "follow_up" in main.ASSIGN_INQUIRY_STATUSES
     assert "cold" in main.ASSIGN_INQUIRY_STATUSES
+
+
+def test_missed_leads_inquiry_filter():
+    past = (main.now_utc() - datetime.timedelta(hours=28)).isoformat()
+    missed = _lead(lead_id="m1", assigned_at=past)
+    worked = _lead(lead_id="m2", assigned_at=past, call_status="ringing")
+    fresh = _lead(lead_id="m3", assigned_at=main.now_utc().isoformat())
+
+    assert main.is_missed_lead(missed) is True
+    assert main.is_missed_lead(worked) is False
+    assert main.is_missed_lead(fresh) is False
+    assert main.lead_matches_inquiry_filter(missed, "missed_leads") is True
+    assert main.lead_matches_inquiry_filter(worked, "missed_leads") is False
+    assert main.lead_matches_inquiry_filter(fresh, "missed_leads") is False
+    assert main.lead_matches_inquiry_filter(missed, "ringing,missed_leads") is True
+    assert "missed_leads" in main.ASSIGN_INQUIRY_STATUSES
+
+
+def test_assign_workspace_filter_and_facets_include_missed_leads():
+    past = (main.now_utc() - datetime.timedelta(hours=28)).isoformat()
+    missed = _lead(lead_id="m1", assigned_at=past)
+    worked = _lead(lead_id="m2", assigned_at=past, call_status="ringing")
+
+    filtered = main.filter_assign_workspace_leads(
+        [missed, worked],
+        inquiry_status="missed_leads",
+    )
+    assert {l["lead_id"] for l in filtered} == {"m1"}
+
+    facets = main.compute_assign_workspace_facets([missed, worked])
+    assert facets["inquiry_status"]["missed_leads"] == 1
+    # Missed lead still counts in the classic "active" bucket; the worked one is "ringing".
+    assert facets["inquiry_status"]["active"] == 1
+    assert facets["inquiry_status"]["ringing"] == 1
 
 
 def test_dashboard_visited_bucket():

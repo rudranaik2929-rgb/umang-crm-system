@@ -38,6 +38,7 @@ const INQUIRY_OPTIONS = [
   { key: 'not_interested', label: 'Not Interested' },
   { key: 'hot', label: 'Hot' },
   { key: 'cold', label: 'Cold Lead' },
+  { key: 'missed_leads', label: 'Missed Leads' },
   { key: 'low_budget', label: 'Low Budget' },
   { key: 'other_location', label: 'Other Location' },
   { key: 'already_purchased', label: 'Already Purchased' },

@@ -7,7 +7,7 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot, warmUpBackend, isTransientApiError } from '../../src/lib/api';
 import { roleLabel, isAdmin } from '../../src/lib/constants';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
-import { formatBudgetStringLakhs, workflowStatusColor, workflowStatusLabel } from '../../src/lib/leadFormat';
+import { formatBudgetStringLakhs, workflowStatusColor, workflowStatusLabel, isMissedLead } from '../../src/lib/leadFormat';
 import { formatPhoneDisplay } from '../../src/lib/leadContact';
 import {
   AssignLeadsAdvancedModal,
@@ -103,6 +103,7 @@ function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilter
     if (inquiry === 'booked') return ['booking', 'loan', 'registration'].includes(lead?.stage);
     if (inquiry === 'hot') return String(lead?.priority || '') === 'hot';
     if (inquiry === 'cold') return String(lead?.priority || '') === 'cold';
+    if (inquiry === 'missed_leads') return isMissedLead(lead);
     if (inquiry === 'follow_up') {
       return Boolean(lead?.follow_up_at)
         && !String(lead?.call_status || '').trim()
@@ -156,6 +157,7 @@ const INQUIRY_COLORS: Record<string, string> = {
   not_interested: '#E11D48',
   hot: '#EF4444',
   cold: '#64748B',
+  missed_leads: '#DC2626',
   low_budget: '#A855F7',
 };
 

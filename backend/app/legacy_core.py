@@ -1263,6 +1263,8 @@ def lead_matches_single_inquiry_filter(
         return is_lead_unassigned(lead, employees)
     if key == "booked":
         return lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]
+    if key == "missed_leads":
+        return is_missed_lead(lead)
     return classify_inquiry_status(lead) == key
 
 
@@ -1393,6 +1395,8 @@ def compute_assign_workspace_facets(
             inquiry[bucket] += 1
         if is_lead_unassigned(lead, employees):
             inquiry["unassigned"] += 1
+        if is_missed_lead(lead):
+            inquiry["missed_leads"] += 1
         plat = classify_lead_platform(lead.get("source"))
         source["all"] += 1
         if plat == "housing":
@@ -1758,7 +1762,7 @@ class SiteVisitorAssignRequest(BaseModel):
 
 
 ASSIGN_INQUIRY_STATUSES = [
-    "all", "active", "new", "hot", "cold", "follow_up", "visited", "booked", "ringing",
+    "all", "active", "new", "hot", "cold", "missed_leads", "follow_up", "visited", "booked", "ringing",
     "not_interested", "low_budget", "other_location", "already_purchased", "not_searching", "unassigned",
 ]
 ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
@@ -7242,7 +7246,8 @@ async def list_assign_workspace(
     offset = max(offset, 0)
     select = (
         "lead_id,name,phone,email,source,stage,status,priority,call_status,"
-        "budget,location,property_type,assigned_to,assigned_at,assigned_by,created_at,updated_at"
+        "budget,location,property_type,assigned_to,assigned_at,assigned_by,created_at,updated_at,"
+        "follow_up_at,last_employee_action_at"
     )
     all_leads = fetch_all_leads_merged(select)
     employees = sb_select("employees", {
