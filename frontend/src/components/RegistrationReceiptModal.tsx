@@ -179,13 +179,13 @@ export function RegistrationReceiptModal({
             </View>
 
             <Text style={[styles.section, { color: colors.textMuted }]}>INVOICE DETAILS</Text>
-            <Field label="INVOICE / RECEIPT NO." value={form.invoice_no} onChange={(v) => setField('invoice_no', v)} colors={colors} testID="reg-invoice-no" />
-            <Field label="RECEIPT DATE" value={form.receipt_date} onChange={(v) => setField('receipt_date', v)} colors={colors} placeholder="e.g. 13 Jun 2026" testID="reg-receipt-date" />
-            <Field label="BUYER NAME" value={form.buyer_name} onChange={(v) => setField('buyer_name', v)} colors={colors} testID="reg-buyer-name" />
-            <Field label="BUYER PHONE" value={form.buyer_phone} onChange={(v) => setField('buyer_phone', v)} colors={colors} keyboardType="phone-pad" testID="reg-buyer-phone" />
-            <Field label="PROPERTY NAME" value={form.property_name} onChange={(v) => setField('property_name', v)} colors={colors} testID="reg-property" />
-            <Field label="FLAT / UNIT NO." value={form.unit_number} onChange={(v) => setField('unit_number', v)} colors={colors} testID="reg-unit" />
-            <Field label="TOWER / WING" value={form.tower} onChange={(v) => setField('tower', v)} colors={colors} testID="reg-tower" />
+            <Field label="INVOICE / RECEIPT NO." value={form.invoice_no} onChange={(v: string) => setField('invoice_no', v)} colors={colors} testID="reg-invoice-no" />
+            <Field label="RECEIPT DATE" value={form.receipt_date} onChange={(v: string) => setField('receipt_date', v)} colors={colors} placeholder="e.g. 13 Jun 2026" testID="reg-receipt-date" />
+            <Field label="BUYER NAME" value={form.buyer_name} onChange={(v: string) => setField('buyer_name', v)} colors={colors} testID="reg-buyer-name" />
+            <Field label="BUYER PHONE" value={form.buyer_phone} onChange={(v: string) => setField('buyer_phone', v)} colors={colors} keyboardType="phone-pad" testID="reg-buyer-phone" />
+            <Field label="PROPERTY NAME" value={form.property_name} onChange={(v: string) => setField('property_name', v)} colors={colors} testID="reg-property" />
+            <Field label="FLAT / UNIT NO." value={form.unit_number} onChange={(v: string) => setField('unit_number', v)} colors={colors} testID="reg-unit" />
+            <Field label="TOWER / WING" value={form.tower} onChange={(v: string) => setField('tower', v)} colors={colors} testID="reg-tower" />
 
             <Text style={[styles.section, { color: colors.textMuted, marginTop: 8 }]}>CHARGE BREAKDOWN (₹)</Text>
             {([
@@ -200,13 +200,13 @@ export function RegistrationReceiptModal({
                 key={key}
                 label={label}
                 value={form[key]}
-                onChange={(v) => setField(key, v)}
+                onChange={(v: string) => setField(key, v)}
                 colors={colors}
                 keyboardType="numeric"
                 testID={`reg-${key}`}
               />
             ))}
-            <Field label="NOTES" value={form.notes} onChange={(v) => setField('notes', v)} colors={colors} multiline testID="reg-notes" />
+            <Field label="NOTES" value={form.notes} onChange={(v: string) => setField('notes', v)} colors={colors} multiline testID="reg-notes" />
 
             {error ? <Text style={{ color: colors.negative, fontSize: 12, marginTop: 8 }}>{error}</Text> : null}
 

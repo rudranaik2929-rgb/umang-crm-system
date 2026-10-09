@@ -4,7 +4,7 @@ import { defaultRouteFor } from './constants';
 export function leadRouteForRole(
   role?: string | null,
   email?: string | null,
-  allowedPages?: string[],
+  allowedPages?: string[] | null,
 ): string {
   const r = (role || '').toLowerCase();
   if (r === 'telecaller') return '/(app)/telecaller';
@@ -17,7 +17,7 @@ export function leadDeepLinkPath(
   leadId: string,
   role?: string | null,
   email?: string | null,
-  allowedPages?: string[],
+  allowedPages?: string[] | null,
 ): string {
   const base = leadRouteForRole(role, email, allowedPages);
   return `${base}?openLead=${encodeURIComponent(leadId)}`;

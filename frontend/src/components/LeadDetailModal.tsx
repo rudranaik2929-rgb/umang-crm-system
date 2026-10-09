@@ -868,9 +868,9 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   </View>
                   {editingDetails ? (
                     <View style={{ gap: 10, marginTop: 4 }}>
-                      <DetailField label="Budget" value={detailForm.budget} onChangeText={(v) => setDetailForm((f) => ({ ...f, budget: v }))} colors={colors} placeholder="e.g. 45 - 50 L" />
-                      <DetailField label="Location" value={detailForm.location} onChangeText={(v) => setDetailForm((f) => ({ ...f, location: v }))} colors={colors} placeholder="Area / city" />
-                      <DetailField label="Configuration" value={detailForm.property_type} onChangeText={(v) => setDetailForm((f) => ({ ...f, property_type: v }))} colors={colors} placeholder="e.g. 2BHK" />
+                      <DetailField label="Budget" value={detailForm.budget} onChangeText={(v: string) => setDetailForm((f) => ({ ...f, budget: v }))} colors={colors} placeholder="e.g. 45 - 50 L" />
+                      <DetailField label="Location" value={detailForm.location} onChangeText={(v: string) => setDetailForm((f) => ({ ...f, location: v }))} colors={colors} placeholder="Area / city" />
+                      <DetailField label="Configuration" value={detailForm.property_type} onChangeText={(v: string) => setDetailForm((f) => ({ ...f, property_type: v }))} colors={colors} placeholder="e.g. 2BHK" />
                       {preferredProperty ? (
                         <DetailRow label="Pref. Property" value={preferredProperty} colors={colors} />
                       ) : null}

@@ -13,6 +13,7 @@ if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
 
 from app import main  # noqa: E402
+from tests import fake_supabase  # noqa: E402
 
 
 def _install_fake_supabase(monkeypatch):
@@ -33,6 +34,7 @@ def _install_fake_supabase(monkeypatch):
     monkeypatch.setattr(main, "sb_update", fake_update)
     monkeypatch.setattr(main, "assign_lead_round_robin", lambda: None)
     monkeypatch.setattr(main, "create_notification", lambda *args, **kwargs: None)
+    fake_supabase.silence_notifications(monkeypatch)
     main.SESSION_CACHE["leads"] = []
     main.SESSION_CACHE["activities"] = []
     return inserted
@@ -275,14 +277,18 @@ def test_integration_lead_without_date_is_imported(monkeypatch):
 
 
 def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
+    # merge_leads_with_cache drops cached rows that are absent from the DB unless
+    # they look freshly inserted, so seeded rows carry an updated_at just like the
+    # PostgREST row an INSERT actually returns.
+    now = main.now_utc().isoformat()
     monkeypatch.setattr(main, "SESSION_CACHE", {"leads": [
-        {"lead_id": "l1", "source": "manual_entry", "status": "active", "phone": "+919000000001"},
-        {"lead_id": "l2", "source": "Housing.com", "status": "active", "phone": "+919000000002"},
+        {"lead_id": "l1", "source": "manual_entry", "status": "active", "phone": "+919000000001", "updated_at": now},
+        {"lead_id": "l2", "source": "Housing.com", "status": "active", "phone": "+919000000002", "updated_at": now},
         # Real Meta lead: has contact details + a genuine leadgen id.
-        {"lead_id": "l3", "source": "Facebook", "status": "negative", "phone": "+919000000003", "external_lead_id": "778899"},
-        {"lead_id": "l4", "source": "website", "status": "active", "phone": "+919000000004"},
+        {"lead_id": "l3", "source": "Facebook", "status": "negative", "phone": "+919000000003", "external_lead_id": "778899", "updated_at": now},
+        {"lead_id": "l4", "source": "website", "status": "active", "phone": "+919000000004", "updated_at": now},
         # Meta test/sample submission (444444444444) — must be excluded.
-        {"lead_id": "l5", "source": "Facebook", "status": "active", "external_lead_id": "444444444444"},
+        {"lead_id": "l5", "source": "Facebook", "status": "active", "external_lead_id": "444444444444", "updated_at": now},
     ], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []})
     monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
 
@@ -313,9 +319,10 @@ def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
 
 
 def test_list_leads_by_platform_housing(monkeypatch):
+    now = main.now_utc().isoformat()
     monkeypatch.setattr(main, "SESSION_CACHE", {"leads": [
-        {"lead_id": "h1", "source": "Housing.com", "name": "Buyer One", "phone": "+911", "status": "active", "stage": "new"},
-        {"lead_id": "m1", "source": "manual_entry", "name": "Manual", "phone": "+912", "status": "active", "stage": "new"},
+        {"lead_id": "h1", "source": "Housing.com", "name": "Buyer One", "phone": "+911", "status": "active", "stage": "new", "updated_at": now},
+        {"lead_id": "m1", "source": "manual_entry", "name": "Manual", "phone": "+912", "status": "active", "stage": "new", "updated_at": now},
     ], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []})
     monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
 

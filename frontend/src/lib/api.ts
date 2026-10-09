@@ -3,6 +3,16 @@ import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { notifyLiveDataChanged } from './liveSync';
 
+// `api.get` is wrapped below to support skipping the in-memory GET cache. The
+// extra flag is declared here so call sites that pass it type-check against the
+// standard AxiosRequestConfig type instead of failing with an unknown property.
+declare module 'axios' {
+    export interface AxiosRequestConfig {
+        /** Skip the short-lived in-memory GET cache and always hit the backend. */
+        bypassCache?: boolean;
+    }
+}
+
 // Default: Render URL until api.umanghometechllp.in custom domain is live on Render.
 const BACKEND_URL = (process.env.EXPO_PUBLIC_BACKEND_URL || 'https://umang-crm-systemumang-home-tech.onrender.com').replace(/\/$/, '');
 
@@ -446,6 +456,47 @@ export async function downloadLeadsExcel(params?: Record<string, string>): Promi
     anchor.click();
     anchor.remove();
     window.URL.revokeObjectURL(url);
+}
+
+/** Backend page size for lead list reads. PostgREST caps a response at 1000 rows. */
+export const LEADS_PAGE_SIZE = 1000;
+/** Hard stop so a misbehaving backend can never spin this loop forever. */
+const LEADS_MAX_PAGES = 20;
+
+/**
+ * Fetch a lead list endpoint in full, following `offset` until it is exhausted.
+ *
+ * The backend paginates its list endpoints (max `LEADS_LIST_MAX_LIMIT` rows per
+ * response). The CRM holds ~5k leads, so a single un-paged request returns only
+ * the newest slice and every older lead silently disappears from the screen —
+ * which is exactly the "my leads are missing" symptom this helper removes.
+ *
+ * Pass the same filters you would send to the endpoint; `limit`/`offset` are
+ * managed here.
+ */
+export async function fetchAllLeads<T = any>(
+    url: string,
+    params: Record<string, unknown> = {},
+    config: { pageSize?: number; maxPages?: number } = {},
+): Promise<T[]> {
+    const pageSize = Math.min(config.pageSize ?? LEADS_PAGE_SIZE, 1000);
+    const maxPages = config.maxPages ?? LEADS_MAX_PAGES;
+    const collected: T[] = [];
+
+    for (let page = 0; page < maxPages; page++) {
+        const res = await api.get(url, {
+            params: { ...params, limit: pageSize, offset: page * pageSize },
+            bypassCache: true,
+            timeout: DASHBOARD_TIMEOUT_MS,
+        });
+        const rows: T[] = Array.isArray(res.data) ? res.data : [];
+        collected.push(...rows);
+        if (rows.length < pageSize) return collected;
+    }
+    console.warn(
+        `[api] ${url} hit the ${maxPages}-page ceiling (${collected.length} rows) — the list may be incomplete.`,
+    );
+    return collected;
 }
 
 export { LIVE_REFRESH_MS } from './liveSync';

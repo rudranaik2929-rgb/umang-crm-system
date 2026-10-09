@@ -216,7 +216,7 @@ export default function Dashboard() {
       <View style={{ flex: 1 }}>
         <TopBar title="Dashboard" />
         <View style={[styles.loadingWrap, { backgroundColor: colors.background }]}>
-          <Ionicons name="cloud-offline-outline" size={48} color={colors.muted} />
+          <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
           <Text style={[styles.errorText, { color: colors.text }]}>{loadError}</Text>
           <Pressable onPress={() => { setLoading(true); refreshDashboard(); }} style={[styles.retryBtn, { backgroundColor: colors.primary }]}>
             <Text style={styles.retryBtnText}>Retry</Text>

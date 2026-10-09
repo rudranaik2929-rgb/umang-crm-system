@@ -463,7 +463,7 @@ export default function AssignLeads() {
     leadsRef.current = next;
     setLeads(next);
     if (removed > 0) {
-      setTotal((t) => Math.max(0, Number(t) - removed));
+      setTotal((t: number) => Math.max(0, Number(t) - removed));
     }
   };
 
@@ -498,7 +498,7 @@ export default function AssignLeads() {
           const others = prev.filter((l) => l.lead_id !== leadId);
           return [...snapshot, ...others];
         });
-        setTotal((t) => Math.max(Number(t), snapshot.length));
+        setTotal((t: number) => Math.max(Number(t), snapshot.length));
       }
       setMessage(e?.response?.data?.detail || 'Assign failed.');
     } finally {
@@ -587,7 +587,7 @@ export default function AssignLeads() {
           return [...snapshot, ...others];
         });
         leadsRef.current = [...snapshot, ...leadsRef.current.filter((l) => !leadIds.includes(l.lead_id))];
-        setTotal((t) => Math.max(Number(t), snapshot.length));
+        setTotal((t: number) => Math.max(Number(t), snapshot.length));
         setMessage(e?.response?.data?.detail || e?.message || 'Bulk update failed — list restored.');
       } finally {
         operationBusyRef.current = false;

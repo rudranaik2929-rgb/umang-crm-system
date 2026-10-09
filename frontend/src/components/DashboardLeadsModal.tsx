@@ -490,7 +490,7 @@ export function DashboardLeadsModal({ visible, bucket, onClose, userRole, onChan
                     <Text style={[st.td, st.colSource, { color: colors.textMuted }]} numberOfLines={2}>
                       {platformLabel(l.platform || l.source)}
                     </Text>
-                    <View style={[st.colStatus, st.td]}>
+                    <View style={st.colStatus}>
                       <WorkflowStatusBadge lead={l} />
                     </View>
                     <Text style={[st.td, st.colLocation, { color: colors.textSecondary }]} numberOfLines={2}>

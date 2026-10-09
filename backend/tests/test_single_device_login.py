@@ -100,6 +100,7 @@ def test_issue_session_shift_invalidates_old_token(monkeypatch):
     updates = []
     monkeypatch.setattr(main, "sb_insert", lambda *a, **k: None)
     monkeypatch.setattr(main, "sb_delete", lambda *a, **k: True)
+    monkeypatch.setattr(main, "sb_select", lambda *a, **k: [])
     monkeypatch.setattr(main, "sb_update", lambda table, pk, pk_val, data: updates.append(data) or data)
     monkeypatch.setattr(main, "COOKIE_SECURE", False)
 

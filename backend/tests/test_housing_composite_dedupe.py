@@ -10,6 +10,7 @@ import time
 import pytest
 
 from app import legacy_core as main
+from tests import fake_supabase
 
 
 def _install_fake_supabase(monkeypatch):
@@ -32,6 +33,7 @@ def _install_fake_supabase(monkeypatch):
     monkeypatch.setattr(main, "sb_update", fake_update)
     monkeypatch.setattr(main, "assign_lead_round_robin", lambda: None)
     monkeypatch.setattr(main, "create_notification", lambda *args, **kwargs: None)
+    fake_supabase.silence_notifications(monkeypatch)
     main.SESSION_CACHE["leads"] = []
     main.SESSION_CACHE["activities"] = []
     return inserted

@@ -42,6 +42,8 @@ type HousingVerify = {
 type FacebookVerify = {
   token_configured: boolean;
   token_valid: boolean;
+  /** Token authenticates against Meta but cannot read Lead Ads (needs a Page token). */
+  token_authenticated?: boolean;
   token_error?: string | null;
   token_type?: string | null;
   lead_api_ready?: boolean;
@@ -75,6 +77,10 @@ export default function Integrations() {
   const [fbEvents, setFbEvents] = useState<any[]>(cachedInteg?.fbEvents ?? []);
   const [fbVerify, setFbVerify] = useState<FacebookVerify | null>(cachedInteg?.fbVerify ?? null);
   const [metaLeads, setMetaLeads] = useState<MetaLeadRow[]>(cachedInteg?.metaLeads ?? []);
+  // The endpoint returns the true bucket size in `total`; `leads` is only the
+  // requested page. Counting the page instead made this screen report "50 in CRM"
+  // when several hundred Meta leads were actually stored.
+  const [metaTotal, setMetaTotal] = useState<number>(cachedInteg?.metaTotal ?? 0);
   const [metaSyncing, setMetaSyncing] = useState(false);
 
   const load = useCallback(async () => {
@@ -85,7 +91,7 @@ export default function Integrations() {
         api.get('/integrations/housing/verify'),
         api.get('/integrations/facebook/events', { params: { limit: 5 } }).catch(() => ({ data: { events: [] } })),
         api.get('/integrations/facebook/verify').catch(() => ({ data: null })),
-        api.get('/leads/by-platform/meta', { params: { limit: 50 } }).catch(() => ({ data: { leads: [] } })),
+        api.get('/leads/by-platform/meta', { params: { limit: 50 } }).catch(() => ({ data: { leads: [], total: 0 } })),
       ]);
       const nextStatus = s.data || {};
       const nextPlatforms = Array.isArray(plat.data?.platforms) ? plat.data.platforms : [];
@@ -93,6 +99,8 @@ export default function Integrations() {
       const nextEvents = Array.isArray(fb.data?.events) ? fb.data.events : [];
       const nextFbVerify = fbV.data || null;
       const nextMeta = Array.isArray(metaList.data?.leads) ? metaList.data.leads : [];
+      const nextMetaTotal = Number(metaList.data?.total);
+      setMetaTotal(Number.isFinite(nextMetaTotal) ? nextMetaTotal : nextMeta.length);
       setStatus(nextStatus);
       setPlatforms(nextPlatforms);
       setHousingVerify(nextHousing);
@@ -102,6 +110,7 @@ export default function Integrations() {
       setSnapshot('integrations-page', {
         status: nextStatus, platforms: nextPlatforms, housingVerify: nextHousing,
         fbEvents: nextEvents, fbVerify: nextFbVerify, metaLeads: nextMeta,
+        metaTotal: nextMetaTotal,
       });
     } finally {
       setLoading(false);
@@ -228,8 +237,8 @@ export default function Integrations() {
     if ((fbVerify?.pending_webhook_events || 0) > 0) {
       return `${fbVerify?.pending_webhook_events} webhook lead(s) waiting — click Resync Webhooks after token is set.`;
     }
-    if (metaLeads.length > 0) {
-      return `${metaLeads.length} in CRM · ${fbVerify?.forms_count ?? 0} form(s) · Page ${fbVerify?.page_id || '—'} · historical import off`;
+    if (metaTotal > 0) {
+      return `${metaTotal} in CRM · ${fbVerify?.forms_count ?? 0} form(s) · Page ${fbVerify?.page_id || '—'} · historical import off`;
     }
     if (fbVerify?.lead_api_ready) {
       return `Token OK · ${fbVerify?.forms_count ?? 0} Lead Ad form(s). New submissions arrive via webhook; Sync New Meta Leads covers the recent window only.`;
@@ -241,7 +250,7 @@ export default function Integrations() {
       return `Last event: ${fbEvents[0].status} · ${fbEvents[0].external_id || '—'}`;
     }
     return 'Submit a real lead via your Facebook Lead Ad form — historical Meta import is disabled.';
-  }, [fbEvents, fbVerify, metaLeads.length]);
+  }, [fbEvents, fbVerify, metaTotal]);
 
   return (
     <View style={{ flex: 1 }}>
@@ -329,7 +338,10 @@ export default function Integrations() {
             <View style={[styles.tablePanel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <View style={styles.tableHead}>
                 <Text style={[styles.panelTitle, { color: colors.text }]}>Meta Leads in CRM</Text>
-                <Text style={[styles.panelSub, { color: colors.textMuted }]}>{metaLeads.length} from Facebook Lead Ads</Text>
+                <Text style={[styles.panelSub, { color: colors.textMuted }]}>
+                  {metaTotal} from Facebook Lead Ads
+                  {metaTotal > metaLeads.length ? ` — showing latest ${metaLeads.length}` : ''}
+                </Text>
               </View>
               {metaLeads.map((lead) => (
                 <View key={lead.lead_id} style={[styles.sourceRow, { borderTopColor: colors.border }]}>

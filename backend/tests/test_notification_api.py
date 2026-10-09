@@ -25,6 +25,13 @@ def test_notification_matches_new_lead_assigned_type():
 
 
 def test_fetch_notifications_queries_each_user_id(monkeypatch):
+    """Every notification id goes out in a single PostgREST `in.()` filter.
+
+    The implementation was refactored from one request per id to one combined
+    query; this locks in the current shape so a regression that drops an id (or
+    silently returns nothing) is caught here.
+    """
+    seen_filters: list = []
     user = main.User(
         user_id="user_khyati",
         email="khyati@umang.com",
@@ -38,7 +45,11 @@ def test_fetch_notifications_queries_each_user_id(monkeypatch):
     def fake_select(table, params=None):
         params = params or {}
         if table != "employees":
-            if (params or {}).get("user_id") == "eq.emp_khyati":
+            filt = params.get("user_id") or ""
+            seen_filters.append(filt)
+            # Rows keyed by emp_khyati match both the legacy eq. probe and the
+            # combined in.() read that replaced the per-id queries.
+            if "emp_khyati" in filt:
                 return [{
                     "notification_id": "n1",
                     "user_id": "emp_khyati",
@@ -61,3 +72,8 @@ def test_fetch_notifications_queries_each_user_id(monkeypatch):
     rows = main._fetch_notifications_for_user(user)
     assert len(rows) == 1
     assert rows[0]["notification_id"] == "n1"
+
+    combined = [f for f in seen_filters if f and f.startswith("in.")]
+    assert combined, f"expected a combined in.() filter, saw {seen_filters}"
+    assert "emp_khyati" in combined[0]
+    assert "user_khyati" in combined[0]

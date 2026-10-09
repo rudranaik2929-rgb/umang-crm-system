@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Anima
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, fetchAllLeads, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { STAGES, STAGE_COLORS, stageLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
@@ -23,8 +23,10 @@ export default function Pipeline() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads');
-      const next = (r.data || []).filter((l: any) => l.status !== 'negative' && l.stage !== 'broker' && l.lead_type !== 'brokerage');
+      // Page through the whole pipeline: /leads caps each response, so a single
+      // request only ever returned the newest slice of the board.
+      const rows = await fetchAllLeads<any>('/leads');
+      const next = rows.filter((l: any) => l.status !== 'negative' && l.stage !== 'broker' && l.lead_type !== 'brokerage');
       setLeads(next);
       setSnapshot('pipeline-leads', next);
     } finally {

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, fetchAllLeads, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { EmptyState } from '../../src/components/EmptyState';
 import { formatPhoneDisplay } from '../../src/lib/leadContact';
 import { Badge } from '../../src/components/Badge';
@@ -20,8 +20,9 @@ export default function NegativeLeads() {
 
   const load = useCallback(async () => {
     try {
-      const r = await api.get('/leads', { params: { status_: 'negative', limit: 200 } });
-      const next = r.data || [];
+      // Page through every negative lead — there are 1k+, and a single capped
+      // request only returned the newest 200.
+      const next = await fetchAllLeads<any>('/leads', { status_: 'negative' });
       setLeads(next);
       setSnapshot('negative-leads-page', next);
     } finally { setLoading(false); }

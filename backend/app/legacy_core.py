@@ -1763,7 +1763,22 @@ ASSIGN_INQUIRY_STATUSES = [
 ]
 ASSIGN_SOURCE_FILTERS = ["all", "housing", "meta", "manual", "other"]
 ASSIGN_WORKSPACE_PAGE_SIZE = 1000
-ASSIGN_WORKSPACE_MAX_LIMIT = 2000
+
+# Page sizing for the lead list endpoints.
+#
+# These caps used to be 200 (default) and 500 (maximum), which silently threw
+# away everything past that many rows. The `leads` table is ~5k rows, so the
+# Pipeline screen was showing the newest 200 of ~4,950 leads and the rest were
+# unreachable — including leads a user had just created.
+#
+# PostgREST caps any single response at 1000 rows and sb_select_all stitches
+# larger reads together in the background, so the ceiling here only bounds what
+# we hand back to the caller. Clients should still page with `offset`
+# (see frontend/src/lib/api.ts `fetchAllLeads`) rather than pull 5k rows at once.
+LEADS_LIST_DEFAULT_LIMIT = 1000
+LEADS_LIST_MAX_LIMIT = 5000
+
+ASSIGN_WORKSPACE_MAX_LIMIT = LEADS_LIST_MAX_LIMIT
 INQUIRY_ACTION_PRESETS: Dict[str, Dict[str, Any]] = {
     "active": {"status": "active", "stage": "assigned"},
     "new": {"status": "active", "stage": "new"},
@@ -6555,11 +6570,11 @@ async def list_leads(
     q: Optional[str]=None,
     exclude_broker: bool = True,
     broker_only: bool = False,
-    limit: int=200,
+    limit: int=LEADS_LIST_DEFAULT_LIMIT,
     offset: int=0,
     cu: User=Depends(get_current_user),
 ):
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     offset = max(offset, 0)
     list_fields = (
         "lead_id,name,phone,email,source,stage,status,lead_type,priority,call_status,"
@@ -6668,16 +6683,15 @@ async def export_leads(
 
 
 @api_router.get("/leads/booking-queue")
-async def list_booking_queue(limit: int = 100, cu: User = Depends(get_current_user)):
-    """Hot / handoff leads for New Booking — small payload, no full-table scan."""
-    limit = min(max(limit, 1), 200)
+async def list_booking_queue(limit: int = LEADS_LIST_DEFAULT_LIMIT, cu: User = Depends(get_current_user)):
+    """Hot / handoff leads for New Booking."""
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     select = "lead_id,name,phone,source,stage,status,priority,assigned_to,created_at,budget,location"
-    rows = sb_select("leads", {
+    rows = sb_select_all("leads", {
         "select": select,
         "status": "neq.negative",
         "or": "(priority.eq.hot,priority.eq.handoff_booking,stage.eq.booking)",
         "order": "created_at.desc",
-        "limit": str(limit + 30),
     })
     cache_slice = [l for l in SESSION_CACHE["leads"] if lead_ready_for_booking_queue(l)]
     cache_ids = {l.get("lead_id") for l in cache_slice}
@@ -6690,16 +6704,15 @@ async def list_booking_queue(limit: int = 100, cu: User = Depends(get_current_us
 
 
 @api_router.get("/leads/loan-queue")
-async def list_loan_queue(limit: int = 100, cu: User = Depends(get_current_user)):
+async def list_loan_queue(limit: int = LEADS_LIST_DEFAULT_LIMIT, cu: User = Depends(get_current_user)):
     """Hot / handoff leads for New Loan Application."""
-    limit = min(max(limit, 1), 200)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     select = "lead_id,name,phone,source,stage,status,priority,assigned_to,created_at,budget,location"
-    rows = sb_select("leads", {
+    rows = sb_select_all("leads", {
         "select": select,
         "status": "neq.negative",
         "or": "(priority.eq.hot,priority.eq.handoff_loan,stage.eq.loan)",
         "order": "created_at.desc",
-        "limit": str(limit + 30),
     })
     cache_slice = [l for l in SESSION_CACHE["leads"] if lead_ready_for_loan_queue(l)]
     cache_ids = {l.get("lead_id") for l in cache_slice}
@@ -7091,7 +7104,7 @@ async def list_leads_filtered(
             detail=f"status must be one of: {', '.join(DASHBOARD_PARTITION_BUCKETS)}",
         )
 
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     offset = max(offset, 0)
     today = now_utc().date().isoformat()
     all_leads = fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
@@ -7147,7 +7160,7 @@ async def workspace_leads(
     if not emp_id and cu.role not in ["admin", "manager"]:
         raise HTTPException(403, detail="Employee profile required for workspace")
 
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     select = EMPLOYEE_WORKFLOW_LEAD_SELECT
     if cu.role in ["admin", "manager"] and not cu.acting_as_employee_id:
         all_leads = fetch_all_leads_merged(select)
@@ -7433,7 +7446,7 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
 @api_router.get("/leads/by-platform/{platform}")
 async def list_leads_by_platform(
     platform: str,
-    limit: int = 200,
+    limit: int = LEADS_LIST_DEFAULT_LIMIT,
     offset: int = 0,
     status_filter: Optional[str] = None,
     cu: User = Depends(get_current_user),
@@ -7443,7 +7456,7 @@ async def list_leads_by_platform(
     if platform_key not in {"manual", "housing", "meta", "other"}:
         raise HTTPException(status_code=400, detail="Platform must be manual, housing, meta, or other")
 
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     offset = max(offset, 0)
     all_leads = fetch_all_leads_merged()
     cleaned = clean_leads_for_platform_stats(all_leads)
@@ -10048,7 +10061,7 @@ async def stats_me_leads_by_platform(cu: User = Depends(get_current_user)):
 @api_router.get("/stats/me/leads/by-platform/{platform}")
 async def list_me_leads_by_platform(
     platform: str,
-    limit: int = 200,
+    limit: int = LEADS_LIST_DEFAULT_LIMIT,
     offset: int = 0,
     status_filter: Optional[str] = None,
     cu: User = Depends(get_current_user),
@@ -10061,7 +10074,7 @@ async def list_me_leads_by_platform(
     if platform_key not in {"manual", "housing", "meta", "other"}:
         raise HTTPException(status_code=400, detail="Platform must be manual, housing, meta, or other")
 
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     offset = max(offset, 0)
     all_leads = fetch_employee_assigned_leads(
         cu,
@@ -10394,7 +10407,7 @@ async def stats_me_activity(metric_key: str, limit: int = 500, cu: User = Depend
     key = (metric_key or "").strip().lower()
     if key not in PERSONAL_ACTIVITY_METRICS:
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(PERSONAL_ACTIVITY_METRICS)}")
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     emp_id = resolve_employee_id(cu)
     if not emp_id and cu.role != "admin":
         raise HTTPException(400, detail="No employee profile linked to this login.")
@@ -10484,7 +10497,7 @@ async def list_employee_metric_leads(
     key = (metric_key or "").strip().lower()
     if key not in EMPLOYEE_METRIC_KEYS:
         raise HTTPException(400, detail=f"metric must be one of: {', '.join(EMPLOYEE_METRIC_KEYS)}")
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
     employees = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,user_id,role", "limit": "1"})
     employee = employees[0] if employees else {"employee_id": employee_id}

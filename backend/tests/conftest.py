@@ -1,68 +1,120 @@
+"""Shared pytest fixtures.
+
+The whole suite is hermetic: Supabase is replaced by the in-memory fake in
+``fake_supabase.py`` and auth is injected through FastAPI dependency overrides,
+so no test touches the network or the production CRM.
+
+Every test also starts from empty process-local caches. The backend keeps
+leads/employees/stats in module-level RAM for speed, and without an explicit
+reset those dicts leak between tests and make results order-dependent.
+"""
+
 import os
+import sys
+from pathlib import Path
+
 import pytest
-import requests
-import subprocess
-import json
 
-BASE_URL = "https://umang-home-tech.onrender.com"
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+if str(BACKEND_DIR) not in sys.path:
+    sys.path.insert(0, str(BACKEND_DIR))
 
+# Must be set before the app reads its settings, so config assertions exercise a
+# properly configured deployment rather than the placeholder default.
+os.environ.setdefault("JWT_SECRET", "test-only-jwt-secret-not-used-in-production")
+os.environ.setdefault("SUPABASE_URL", "https://test-project.supabase.co")
+os.environ.setdefault("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
 
-def _create_session_via_mongo(role="admin"):
-    """Insert a user and session into MongoDB and return (user_id, session_token)."""
-    js = """
-var visitorId = 'user_test_' + Date.now() + '_' + Math.floor(Math.random()*1e6);
-var sessionToken = 'test_session_' + Date.now() + '_' + Math.floor(Math.random()*1e6);
-db.users.insertOne({
-  user_id: visitorId,
-  email: 'admin.test+' + Date.now() + '@umang.com',
-  name: 'Admin Tester',
-  picture: null,
-  role: '%s',
-  created_at: new Date()
-});
-db.user_sessions.insertOne({
-  user_id: visitorId,
-  session_token: sessionToken,
-  expires_at: new Date(Date.now() + 7*24*60*60*1000),
-  created_at: new Date()
-});
-print('USER_ID=' + visitorId);
-print('SESSION_TOKEN=' + sessionToken);
-""" % role
-    out = subprocess.check_output(["mongosh", "test_database", "--quiet", "--eval", js], text=True)
-    user_id, token = None, None
-    for line in out.splitlines():
-        if line.startswith("USER_ID="):
-            user_id = line.split("=", 1)[1].strip()
-        elif line.startswith("SESSION_TOKEN="):
-            token = line.split("=", 1)[1].strip()
-    assert user_id and token, f"Could not parse mongo output: {out}"
-    return user_id, token
+from app import main as core  # noqa: E402
+from tests import fake_supabase  # noqa: E402
 
 
-@pytest.fixture(scope="session")
-def admin_session():
-    user_id, token = _create_session_via_mongo("admin")
-    return {"user_id": user_id, "token": token}
+def _make_user(role: str = "admin", **overrides):
+    """Build a User without touching the auth/session tables."""
+    user = core.User(
+        user_id=overrides.pop("user_id", "user_test_admin"),
+        email=overrides.pop("email", "admin@test.com"),
+        name=overrides.pop("name", "Test Admin"),
+        role=role,
+        employee_id=overrides.pop("employee_id", None),
+        acting_as_employee_id=overrides.pop("acting_as_employee_id", None),
+        created_at=core.now_utc(),
+    )
+    for key, value in overrides.items():
+        setattr(user, key, value)
+    return user
 
 
-@pytest.fixture(scope="session")
-def auth_client(admin_session):
-    s = requests.Session()
-    s.headers.update({
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {admin_session['token']}",
-    })
-    return s
+@pytest.fixture(autouse=True)
+def isolated_runtime():
+    """Reset Supabase fake + every in-process cache around each test."""
+    fake_supabase.reset()
+    fake_supabase.reset_runtime_caches()
+    core.app.dependency_overrides.clear()
+    yield
+    core.app.dependency_overrides.clear()
+    fake_supabase.reset_runtime_caches()
+    fake_supabase.reset()
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch):
+    """Fail loudly if any test reaches for a real TCP connection.
+
+    The suite is meant to be fully in-memory; a stray unpatched sb_* helper or
+    integration client must surface as an error, not a silent call to the live
+    Supabase project or a third-party API. Guarding at the socket layer leaves
+    the in-process TestClient (ASGI transport, no sockets) untouched.
+    """
+    import socket
+
+    def _blocked(*args, **kwargs):
+        raise RuntimeError(
+            "Blocked outbound network call during tests — a helper was not "
+            "patched against the in-memory Supabase fake."
+        )
+
+    monkeypatch.setattr(socket.socket, "connect", _blocked)
+    monkeypatch.setattr(socket.socket, "connect_ex", _blocked)
+    monkeypatch.setattr(socket, "create_connection", _blocked)
 
 
 @pytest.fixture
-def anon_client():
-    s = requests.Session()
-    s.headers.update({"Content-Type": "application/json"})
-    return s
+def fake_db(monkeypatch):
+    """Route all sb_* helpers at the in-memory tables and return the fake."""
+    fake_supabase.install(monkeypatch)
+    fake_supabase.reset()
+    return fake_supabase
 
 
-@pytest.fixture(scope="session")
-def base_url():
-    return BASE_URL
+@pytest.fixture
+def auth_user(monkeypatch, fake_db):
+    """An authenticated admin user, injected via dependency override.
+
+    The override key must be the same function object the routes were declared
+    with, so this cannot be a monkeypatch — ``Depends(get_current_user)`` is
+    already bound at import time.
+
+    A matching `users` row is seeded so endpoints that persist changes to the
+    signed-in user (e.g. /auth/set-role) behave as they do in production.
+    """
+    user = _make_user("admin")
+    fake_db.reset(seed={
+        "users": [{
+            "user_id": user.user_id,
+            "email": user.email,
+            "name": user.name,
+            "role": "admin",
+            "dashboard_type": "admin",
+        }],
+    })
+    core.app.dependency_overrides[core.get_current_user] = lambda: user
+    return user
+
+
+@pytest.fixture
+def client(fake_db, auth_user):
+    """TestClient wired to the fake DB with an authenticated admin."""
+    from fastapi.testclient import TestClient
+
+    return TestClient(core.app)

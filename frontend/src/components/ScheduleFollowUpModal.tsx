@@ -369,7 +369,7 @@ export function ScheduleFollowUpModal({
           <Pressable
             onPress={handleSubmit}
             disabled={busy || !canSubmit}
-            style={[styles.btn, styles.primaryBtn, { backgroundColor: busy ? colors.muted : '#F97316', opacity: canSubmit ? 1 : 0.6 }]}
+            style={[styles.btn, styles.primaryBtn, { backgroundColor: busy ? colors.textMuted : '#F97316', opacity: canSubmit ? 1 : 0.6 }]}
           >
             {busy ? <ActivityIndicator color="#fff" size="small" /> : <Text style={styles.primaryText}>Save & Open Follow Ups</Text>}
           </Pressable>

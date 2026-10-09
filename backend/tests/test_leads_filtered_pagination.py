@@ -96,7 +96,8 @@ def test_leads_filtered_clamps_limit_and_offset(monkeypatch):
         oversized = client.get("/api/leads/filtered", params={"bucket": "all", "limit": 9999, "offset": -10})
         assert oversized.status_code == 200, oversized.text
         body = oversized.json()
-        assert body["limit"] == 500
+        # Clamped to the shared ceiling, not a silent hardcoded 500.
+        assert body["limit"] == main.LEADS_LIST_MAX_LIMIT
         assert body["offset"] == 0
         assert len(body["leads"]) == 3
         assert body["has_more"] is False

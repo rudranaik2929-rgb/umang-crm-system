@@ -466,7 +466,7 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
                         <Text style={[st.tableCell, st.colBudget, { color: colors.textMuted }]} numberOfLines={2}>
                           {budgetLabel ? `${budgetLabel} L` : '—'}
                         </Text>
-                        <View style={[st.colStatus, st.tableCell]}>
+                        <View style={st.colStatus}>
                           <WorkflowStatusBadge lead={lead} />
                         </View>
                         <Text style={[st.tableCell, st.colDate, { color: colors.textMuted }]} numberOfLines={2}>{dateLabel}</Text>

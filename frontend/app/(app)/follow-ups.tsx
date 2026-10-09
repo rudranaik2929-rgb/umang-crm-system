@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable } from
 import { TopBar } from '../../src/components/TopBar';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, getSnapshot, setSnapshot } from '../../src/lib/api';
+import { api, fetchAllLeads, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
 import { isAdmin } from '../../src/lib/constants';
 
@@ -28,9 +28,10 @@ export default function FollowUpsPage() {
       if (!managerView) {
         const myId = (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
         if (myId) {
-          const leadsRes = await api.get('/leads', { params: { assigned_to: myId, limit: 300 } });
+          // Page through all of this employee's leads (top performers have 700+),
+          // otherwise follow-ups on leads past the first page get filtered out.
           const mine = new Set(
-            (leadsRes.data || [])
+            (await fetchAllLeads<any>('/leads', { assigned_to: myId }))
               .filter((l: any) => l.assigned_to === myId)
               .map((l: any) => l.lead_id),
           );

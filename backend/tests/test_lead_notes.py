@@ -71,9 +71,13 @@ def test_apply_lead_remarks_update_allows_any_actor(monkeypatch):
     assert out.get("notes") == "New remark text"
 
 
-def test_ensure_lead_update_access_blocks_workflow_for_non_assignee():
+def test_ensure_lead_update_access_blocks_workflow_for_non_assignee(monkeypatch):
     import pytest
     from fastapi import HTTPException
+
+    # The guard resolves the acting employee via an employee-table lookup before
+    # comparing it to the lead's assignee; stub it out so no network is touched.
+    monkeypatch.setattr(main, "sb_select", lambda *a, **k: [])
 
     class Telecaller:
         role = "telecaller"

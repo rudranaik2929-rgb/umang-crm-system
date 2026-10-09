@@ -376,7 +376,7 @@ export default function Loans() {
       <CreateLoanModal
         visible={showCreate}
         onClose={() => setShowCreate(false)}
-        onCreated={async (created) => {
+        onCreated={async (created: any) => {
           setShowCreate(false);
           if (created?.loan_id) {
             setLoans((prev) => {
