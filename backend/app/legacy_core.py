@@ -1002,20 +1002,59 @@ def filter_employee_metric_leads(emp_leads: List[Dict[str, Any]], metric_key: st
     return [l for l in rows if classify_employee_performance_metric(l) == key]
 
 
+def employee_metric_items(
+    metric_key: str,
+    emp_leads: List[Dict[str, Any]],
+    *,
+    role: Optional[str] = None,
+    all_leads: Optional[List[Dict[str, Any]]] = None,
+    employee: Optional[Dict[str, Any]] = None,
+    activities: Optional[List[Dict[str, Any]]] = None,
+    bookings: Optional[List[Dict[str, Any]]] = None,
+) -> List[Any]:
+    """Single source of truth for Employee Performance boxes.
+
+    Both the box count (_stats_employees_sync / compute_employee_assignment_stats)
+    and the drill-down popup (/leads/employee/{id}/metric/{key}) use this, so a
+    box count and its popup list can never disagree. Mirrors the dashboard's
+    semantics: missed + new are counted over ALL assigned leads, while the
+    exclusive workflow pills are counted over actioned (backlog) leads.
+    """
+    key = (metric_key or "").strip().lower()
+    rows = normalize_employee_leads(emp_leads)
+    if key in ("missed_leads", "missed"):
+        return filter_employee_missed_leads(rows)
+    if key in ("new_leads", "new", "assigned_new"):
+        return filter_employee_new_leads(rows)
+    if key in ("total", "all", "leads_total", "assigned_total", "backlog"):
+        return filter_employee_backlog_leads(rows)
+    if key in ("site_visit_assigned", "assigned_for_visit"):
+        source = all_leads if all_leads is not None else rows
+        if employee is not None:
+            return filter_site_visit_assigned_leads(source, employee)
+        return [l for l in dedupe_leads(source) if clean_text(l.get("site_visitor_id"))]
+    if key in ("today_activity", "today"):
+        return build_today_activity_report(activities or [], rows)
+    if key in BOOKING_TASK_KEYS:
+        return filter_bookings_by_task(bookings or [], key)
+    # Exclusive workflow pills are defined over actioned leads only.
+    return filter_employee_metric_leads(filter_employee_backlog_leads(rows), key)
+
+
 def compute_employee_workflow_stats(emp_leads: List[Dict[str, Any]]) -> Dict[str, int]:
     """Dashboard employee performance boxes — mutually exclusive status counts."""
     return {
-        "emp_active": len(filter_employee_metric_leads(emp_leads, "active")),
-        "emp_hot": len(filter_employee_metric_leads(emp_leads, "hot")),
-        "emp_cold": len(filter_employee_metric_leads(emp_leads, "cold")),
-        "emp_visited": len(filter_employee_metric_leads(emp_leads, "visited")),
-        "emp_not_interested": len(filter_employee_metric_leads(emp_leads, "not_interested")),
-        "emp_booking_done": len(filter_employee_metric_leads(emp_leads, "booking_done")),
-        "emp_low_budget": len(filter_employee_metric_leads(emp_leads, "low_budget")),
-        "emp_ringing": len(filter_employee_metric_leads(emp_leads, "ringing")),
-        "emp_follow_ups": len(filter_employee_metric_leads(emp_leads, "follow_ups")),
-        "emp_today_follow_ups": len(filter_employee_metric_leads(emp_leads, "today_follow_ups")),
-        "emp_missed_leads": len(filter_employee_missed_leads(emp_leads)),
+        "emp_active": len(employee_metric_items("active", emp_leads)),
+        "emp_hot": len(employee_metric_items("hot", emp_leads)),
+        "emp_cold": len(employee_metric_items("cold", emp_leads)),
+        "emp_visited": len(employee_metric_items("visited", emp_leads)),
+        "emp_not_interested": len(employee_metric_items("not_interested", emp_leads)),
+        "emp_booking_done": len(employee_metric_items("booking_done", emp_leads)),
+        "emp_low_budget": len(employee_metric_items("low_budget", emp_leads)),
+        "emp_ringing": len(employee_metric_items("ringing", emp_leads)),
+        "emp_follow_ups": len(employee_metric_items("follow_ups", emp_leads)),
+        "emp_today_follow_ups": len(employee_metric_items("today_follow_ups", emp_leads)),
+        "emp_missed_leads": len(employee_metric_items("missed_leads", emp_leads)),
     }
 
 
@@ -1040,7 +1079,7 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
         and l.get("stage") not in workspace_queue_stages(role)
         and l.get("stage") != "closed"
     )
-    workflow = compute_employee_workflow_stats(backlog_rows)
+    workflow = compute_employee_workflow_stats(rows)
     return {
         "assigned_total": len(backlog_rows),
         "emp_new_leads": len(new_rows),
@@ -3470,17 +3509,23 @@ def bookings_for_employee_record(
     return []
 
 
+def filter_new_bookings(bookings: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """New Bookings box — bookings with no completed pipeline task.
+
+    Single source of truth: the box count (compute_booking_employee_stats) and the
+    drill-down popup list (/leads/employee/{id}/metric/new_leads) both use this so
+    they can never disagree on a booking's status.
+    """
+    return [b for b in bookings if not normalize_booking_completed_tasks(b)]
+
+
 def compute_booking_employee_stats(
     employee: Dict[str, Any],
     all_bookings: List[Dict[str, Any]],
 ) -> Dict[str, Any]:
     rows = bookings_for_employee_record(employee, all_bookings)
     task_counts = compute_booking_task_counts(rows)
-    new_count = sum(
-        1 for b in rows
-        if not normalize_booking_completed_tasks(b)
-        and str(b.get("status") or "active").lower() in {"active", "pending", "confirmed", ""}
-    )
+    new_count = len(filter_new_bookings(rows))
     return {
         "assigned_total": len(rows),
         "emp_new_leads": new_count,
@@ -10255,7 +10300,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     }
 
 EMPLOYEE_METRIC_KEYS = [
-    "total", "active", "hot", "visited", "not_interested", "booking_done", "low_budget",
+    "total", "active", "hot", "cold", "visited", "not_interested", "booking_done", "low_budget",
     "ringing", "follow_ups", "today_follow_ups", "missed_leads", "new_leads", "today_activity",
     "site_visit_assigned", "assigned_for_visit",
 ] + BOOKING_TASK_KEYS
@@ -10518,10 +10563,7 @@ async def list_employee_metric_leads(
         )
         emp_bookings = bookings_for_employee_record(employee, all_bookings)
         if key in ("new_leads", "new", "assigned_new"):
-            filtered_bookings = [
-                b for b in emp_bookings
-                if not normalize_booking_completed_tasks(b)
-            ]
+            filtered_bookings = filter_new_bookings(emp_bookings)
         elif key in ("total", "backlog", "assigned_total"):
             filtered_bookings = emp_bookings
         elif key in BOOKING_TASK_KEYS:
@@ -10559,15 +10601,9 @@ async def list_employee_metric_leads(
             "leads": [],
         }
     if key in ("site_visit_assigned", "assigned_for_visit"):
-        filtered = filter_site_visit_assigned_leads(all_leads, employee)
-    elif key in ("new_leads", "new", "assigned_new"):
-        filtered = filter_employee_new_leads(emp_leads)
-    elif key in ("total", "backlog", "assigned_total"):
-        filtered = filter_employee_backlog_leads(emp_leads)
-    elif key in ("missed_leads", "missed"):
-        filtered = filter_employee_missed_leads(emp_leads)
+        filtered = employee_metric_items(key, emp_leads, all_leads=all_leads, employee=employee)
     elif key in EMPLOYEE_METRIC_KEYS and key not in BOOKING_TASK_KEYS:
-        filtered = filter_employee_metric_leads(filter_employee_backlog_leads(emp_leads), key)
+        filtered = employee_metric_items(key, emp_leads, role=emp_role)
     else:
         filtered = []
     if key in ("today_follow_ups", "today_follow_up", "emp_today_follow_ups"):

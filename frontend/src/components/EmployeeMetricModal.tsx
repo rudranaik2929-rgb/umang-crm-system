@@ -74,10 +74,12 @@ export function EmployeeMetricModal({
   const [total, setTotal] = useState(0);
   const [actionTotal, setActionTotal] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     if (!visible || !employeeId || !metric) return;
     setLoading(true);
+    setLoadError(null);
     try {
       const res = await api.get(`/leads/employee/${employeeId}/metric/${metric}`, { params: { limit: 500 } });
       const responseKind = res.data?.kind;
@@ -87,6 +89,14 @@ export function EmployeeMetricModal({
       setReport(res.data?.report || []);
       setTotal(Number(res.data?.total || 0));
       setActionTotal(Number(res.data?.action_total || 0));
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const detail = e?.response?.data?.detail;
+      setLoadError(
+        status === 403 || status === 400
+          ? (typeof detail === 'string' ? detail : 'This box could not be loaded.')
+          : 'Could not reach the server. Tap Retry to try again.'
+      );
     } finally {
       setLoading(false);
     }
@@ -134,6 +144,22 @@ export function EmployeeMetricModal({
         </View>
         {loading ? (
           <ActivityIndicator color={colors.primary} style={{ marginVertical: 40 }} />
+        ) : loadError ? (
+          <View style={{ alignItems: 'center', paddingVertical: 32, gap: 12 }}>
+            <Ionicons name="alert-circle-outline" size={28} color={colors.negative} />
+            <Text style={{ color: colors.textMuted, textAlign: 'center', fontSize: 13, maxWidth: 280 }}>
+              {loadError}
+            </Text>
+            <Pressable
+              onPress={load}
+              style={({ pressed }) => [
+                styles.retryBtn,
+                { borderColor: colors.border, backgroundColor: colors.surfaceAlt, opacity: pressed ? 0.8 : 1 },
+              ]}
+            >
+              <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 13 }}>Retry</Text>
+            </Pressable>
+          </View>
         ) : kind === 'today_report' ? (
           report.length === 0 ? (
             <Text style={{ color: colors.textMuted, textAlign: 'center', paddingVertical: 32, fontSize: 13 }}>
@@ -292,6 +318,7 @@ const styles = StyleSheet.create({
   header: { marginBottom: 14 },
   title: { fontSize: 18, fontWeight: '700' },
   close: { position: 'absolute', right: 0, top: 0, width: 34, height: 34, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
+  retryBtn: { paddingHorizontal: 18, paddingVertical: 8, borderRadius: 8, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   row: { flexDirection: 'row', padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8, alignItems: 'center', gap: 10 },
   reportCard: { padding: 12, borderRadius: 8, borderWidth: 1, marginBottom: 8 },
   tableHeader: {
