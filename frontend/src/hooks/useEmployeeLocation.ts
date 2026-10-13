@@ -27,6 +27,7 @@ async function sendLocationPing(lat: number, lng: number, accuracy?: number) {
     lng,
     accuracy: accuracy ?? null,
     captured_at: new Date().toISOString(),
+    source: 'gps',
   });
 }
 
@@ -81,7 +82,7 @@ export function useEmployeeLocation(user: TrackableUser) {
         }
         watchIdRef.current = navigator.geolocation.watchPosition(onPosition, onError, {
           enableHighAccuracy: true,
-          maximumAge: 30_000,
+          maximumAge: 10_000,
           timeout: 20_000,
         });
       },
@@ -117,7 +118,7 @@ export function useEmployeeLocation(user: TrackableUser) {
       if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
         navigator.geolocation?.getCurrentPosition(onPosition, () => {}, {
           enableHighAccuracy: true,
-          maximumAge: 30_000,
+          maximumAge: 10_000,
           timeout: 15_000,
         });
       }
@@ -130,7 +131,7 @@ export function useEmployeeLocation(user: TrackableUser) {
       if (state === 'active') {
         navigator.geolocation?.getCurrentPosition(onPosition, () => {}, {
           enableHighAccuracy: true,
-          maximumAge: 30_000,
+          maximumAge: 10_000,
           timeout: 15_000,
         });
       }

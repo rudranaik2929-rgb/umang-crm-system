@@ -13,6 +13,10 @@ export interface TrackedEmployee {
   longitude?: number | null;
   last_seen_at?: string | null;
   updated_at?: string | null;
+  accuracy?: number | string | null;
+  address?: string | null;
+  source?: string | null;
+  logged_in?: boolean;
   current_lead_name?: string | null;
   current_lead?: { name?: string | null } | null;
 }
@@ -74,6 +78,10 @@ export function EmployeeMap({ employees, selectedId }: Props) {
           : '—',
         color: markerColor(seenOf(e)),
         highlight: selectedId === e.employee_id,
+        accuracy: e.accuracy != null && !Number.isNaN(Number(e.accuracy)) ? Number(e.accuracy) : null,
+        address: e.address || null,
+        source: e.source || null,
+        loggedIn: !!e.logged_in,
       })),
     );
 
@@ -113,6 +121,12 @@ export function EmployeeMap({ employees, selectedId }: Props) {
       var bounds = [];
       var highlightMarker = null;
 
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+        });
+      }
+
       MARKERS.forEach(function (m) {
         var icon = L.icon({
           iconUrl: pinSvg(m.color),
@@ -124,11 +138,28 @@ export function EmployeeMap({ employees, selectedId }: Props) {
           icon: icon,
           zIndexOffset: m.highlight ? 999 : 0,
         }).addTo(map);
+        if (m.accuracy && m.accuracy > 0) {
+          L.circle([m.lat, m.lng], {
+            radius: m.accuracy,
+            color: m.color,
+            weight: 1,
+            fillColor: m.color,
+            fillOpacity: 0.10,
+          }).addTo(map);
+        }
+        var badge = m.loggedIn
+          ? '<span style="display:inline-block;background:#dcfce7;color:#166534;font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;margin-left:6px">Logged in</span>'
+          : '';
+        var manual = m.source === 'manual'
+          ? '<span style="display:inline-block;background:#e0e7ff;color:#3730a3;font-size:10px;font-weight:700;padding:1px 6px;border-radius:999px;margin-left:6px">Manual</span>'
+          : '';
         marker.bindPopup(
-          '<div style="min-width:180px;padding:2px 0">' +
-          '<div style="font-weight:700;font-size:14px;margin-bottom:6px">' + m.name + '</div>' +
-          '<div style="font-size:12px;color:#334155;margin-bottom:4px"><b>Current Lead:</b> ' + m.lead + '</div>' +
-          '<div style="font-size:12px;color:#64748b"><b>Last Updated:</b> ' + m.seen + '</div>' +
+          '<div style="min-width:190px;padding:2px 0">' +
+          '<div style="font-weight:700;font-size:14px;margin-bottom:6px">' + esc(m.name) + badge + manual + '</div>' +
+          '<div style="font-size:12px;color:#334155;margin-bottom:4px"><b>Current Lead:</b> ' + esc(m.lead) + '</div>' +
+          (m.address ? '<div style="font-size:12px;color:#334155;margin-bottom:4px"><b>Area:</b> ' + esc(m.address) + '</div>' : '') +
+          (m.accuracy ? '<div style="font-size:12px;color:#64748b;margin-bottom:4px">GPS accuracy: &plusmn;' + Math.round(m.accuracy) + ' m</div>' : '') +
+          '<div style="font-size:12px;color:#64748b"><b>Last Updated:</b> ' + esc(m.seen) + '</div>' +
           '</div>',
         );
         bounds.push([m.lat, m.lng]);

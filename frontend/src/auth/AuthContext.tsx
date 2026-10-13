@@ -127,6 +127,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, [user?.user_id, refresh]);
 
+  // Lightweight heartbeat so the admin "Who's logged in now" panel can tell an
+  // idle-but-open tab apart from a closed one. Sends no data — just presence.
+  useEffect(() => {
+    if (!user) return;
+    let stopped = false;
+    const beat = () => {
+      if (stopped) return;
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      api.get('/auth/heartbeat').catch(() => {});
+    };
+    beat();
+    const interval = setInterval(beat, 60_000);
+    return () => {
+      stopped = true;
+      clearInterval(interval);
+    };
+  }, [user?.user_id]);
+
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const onMoved = () => {
