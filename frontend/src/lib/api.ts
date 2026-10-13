@@ -458,8 +458,15 @@ export async function downloadLeadsExcel(params?: Record<string, string>): Promi
     window.URL.revokeObjectURL(url);
 }
 
-/** Backend page size for lead list reads. PostgREST caps a response at 1000 rows. */
-export const LEADS_PAGE_SIZE = 1000;
+/**
+ * Backend page size for lead list reads. The backend now serves this endpoint
+ * from its in-memory leads cache and allows up to `LEADS_LIST_MAX_LIMIT` (5000)
+ * rows per response, so one request usually returns the whole list instead of
+ * six sequential round-trips.
+ */
+export const LEADS_PAGE_SIZE = 5000;
+/** Backend's per-response ceiling for lead list reads. */
+export const LEADS_MAX_PAGE_SIZE = 5000;
 /** Hard stop so a misbehaving backend can never spin this loop forever. */
 const LEADS_MAX_PAGES = 20;
 
@@ -479,7 +486,7 @@ export async function fetchAllLeads<T = any>(
     params: Record<string, unknown> = {},
     config: { pageSize?: number; maxPages?: number } = {},
 ): Promise<T[]> {
-    const pageSize = Math.min(config.pageSize ?? LEADS_PAGE_SIZE, 1000);
+    const pageSize = Math.min(config.pageSize ?? LEADS_PAGE_SIZE, LEADS_MAX_PAGE_SIZE);
     const maxPages = config.maxPages ?? LEADS_MAX_PAGES;
     const collected: T[] = [];
 

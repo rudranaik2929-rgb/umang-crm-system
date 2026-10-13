@@ -539,9 +539,29 @@ def _project_lead_fields(row: Dict[str, Any], select: str) -> Dict[str, Any]:
     return {k: row.get(k) for k in keys}
 
 
+def _reload_leads_cache() -> List[Dict[str, Any]]:
+    """Fetch every lead and swap the canonical cache in. Clears the loading flag."""
+    try:
+        db_leads = sb_select_all("leads", {"select": LEADS_CANONICAL_SELECT, "order": "created_at.desc"})
+        merged = merge_leads_with_cache(db_leads)
+        merged = [l for l in merged if lead_is_since_start(l)]
+        with _leads_cache_lock:
+            _leads_cache.update({"ts": time.time(), "select": LEADS_CANONICAL_SELECT, "data": merged})
+        return merged
+    finally:
+        with _leads_cache_lock:
+            _leads_cache.pop("_loading", None)
+        _leads_cache_loading.set()
+
+
 def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
     """Full leads table + session cache — one canonical fetch shared across dashboard endpoints."""
     now = time.time()
+
+    def _project(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        if select in ("*", LEADS_CANONICAL_SELECT):
+            return rows
+        return [_project_lead_fields(l, select) for l in rows]
 
     def _from_cache() -> Optional[List[Dict[str, Any]]]:
         with _leads_cache_lock:
@@ -550,10 +570,14 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
                 and (now - float(_leads_cache["ts"])) < LEADS_CACHE_TTL_SEC
                 and _leads_cache.get("select") == LEADS_CANONICAL_SELECT
             ):
-                cached = _leads_cache["data"]
-                if select in ("*", LEADS_CANONICAL_SELECT):
-                    return cached
-                return [_project_lead_fields(l, select) for l in cached]
+                return _project(_leads_cache["data"])
+        return None
+
+    def _stale_rows() -> Optional[List[Dict[str, Any]]]:
+        with _leads_cache_lock:
+            data = _leads_cache.get("data")
+            if data is not None and _leads_cache.get("select") == LEADS_CANONICAL_SELECT:
+                return data
         return None
 
     hit = _from_cache()
@@ -571,6 +595,22 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
         if hit is not None:
             return hit
 
+    # Stale-while-revalidate: an expired cache still holds usable rows, so serve
+    # them right away and refresh in a background thread. Without this, every
+    # request that lands on the TTL boundary blocks on the multi-second full
+    # table scan (the periodic "everything is slow again" freeze).
+    stale = _stale_rows()
+    if stale is not None:
+        with _leads_cache_lock:
+            already_loading = bool(_leads_cache.get("_loading"))
+            if not already_loading:
+                _leads_cache["_loading"] = True
+        if not already_loading:
+            _leads_cache_loading.clear()
+            threading.Thread(target=_reload_leads_cache, name="leads-refresh", daemon=True).start()
+        return _project(stale)
+
+    # Cold start (no cache at all): load synchronously so the first request has data.
     is_loader = False
     with _leads_cache_lock:
         if not _leads_cache_loading.is_set() and not _leads_cache.get("_loading"):
@@ -583,23 +623,11 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
         hit = _from_cache()
         if hit is not None:
             return hit
+        stale = _stale_rows()
+        if stale is not None:
+            return _project(stale)
 
-    try:
-        db_leads = sb_select_all("leads", {"select": LEADS_CANONICAL_SELECT, "order": "created_at.desc"})
-        merged = merge_leads_with_cache(db_leads)
-        merged = [l for l in merged if lead_is_since_start(l)]
-        with _leads_cache_lock:
-            _leads_cache.update({"ts": time.time(), "select": LEADS_CANONICAL_SELECT, "data": merged})
-            _leads_cache.pop("_loading", None)
-        _leads_cache_loading.set()
-        if select in ("*", LEADS_CANONICAL_SELECT):
-            return merged
-        return [_project_lead_fields(l, select) for l in merged]
-    except Exception:
-        with _leads_cache_lock:
-            _leads_cache.pop("_loading", None)
-        _leads_cache_loading.set()
-        raise
+    return _project(_reload_leads_cache())
 
 
 def clean_leads_for_platform_stats(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -6634,33 +6662,23 @@ async def list_leads(
         "budget,location,property_type,assigned_to,assigned_at,follow_up_at,created_at,updated_at,"
         "external_lead_id,starred"
     )
-    params: Dict[str, str] = {"select": list_fields, "order": "created_at.desc"}
-    if stage: params["stage"] = f"eq.{stage}"
-    if status_: params["status"] = f"eq.{status_}"
-    if assigned_to: params["assigned_to"] = f"eq.{assigned_to}"
-    if source: params["source"] = f"ilike.*{source}*"
+    # Serve from the shared in-memory leads cache instead of re-scanning the
+    # whole Supabase table on every call. The frontend paginates this endpoint
+    # (fetchAllLeads) so pipeline / follow-ups / negative-leads each fired up to
+    # six full-table scans per screen, and the dashboard bundle hits /leads too.
+    # fetch_all_leads_merged() already merges the session cache, enriches, and
+    # drops pre-migration rows; we only add the query filters and the page slice.
+    all_leads = fetch_all_leads_merged(list_fields)
 
-    # Pull every matching row (paginated) — a hard cap here silently drops
-    # leads once the table grows past the cap, so never truncate before
-    # Python-side filtering and page slicing happen.
-    leads = sb_select_all("leads", params)
-    
-    # Filter session cache to match the query parameters
-    filtered_cache = []
-    for l in SESSION_CACHE["leads"]:
-        match = True
-        if stage and l.get("stage") != stage: match = False
-        if status_ and l.get("status") != status_: match = False
-        if assigned_to and l.get("assigned_to") != assigned_to: match = False
-        if source and source.lower() not in str(l.get("source", "")).lower(): match = False
-        if match:
-            filtered_cache.append(l)
-
-    # Merge with session cache (deduplicate: cache wins)
-    cache_ids = {l.get("lead_id") for l in filtered_cache}
-    db_only = [l for l in leads if l.get("lead_id") not in cache_ids]
-    all_leads = filtered_cache + db_only
-    all_leads = [l for l in all_leads if lead_is_since_start(l)]
+    if stage:
+        all_leads = [l for l in all_leads if l.get("stage") == stage]
+    if status_:
+        all_leads = [l for l in all_leads if l.get("status") == status_]
+    if assigned_to:
+        all_leads = [l for l in all_leads if l.get("assigned_to") == assigned_to]
+    if source:
+        needle_src = source.lower()
+        all_leads = [l for l in all_leads if needle_src in str(l.get("source", "")).lower()]
 
     if q:
         needle = q.lower().strip()
