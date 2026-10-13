@@ -64,8 +64,17 @@ Housing leads are **real enquiries** from the Housing.com API (name, phone, proj
 
 1. `supabase/schema.sql` — full schema
 2. `supabase/migrations/20260529_housing_integration_rls.sql` — RLS policies for `leads` and `integration_events`
+3. `supabase/login_monitoring.sql` — single-device session metadata + `login_events` audit table (powers the admin "Who's logged in now" panel)
+4. `supabase/employee_location_quality.sql` — GPS accuracy/address columns + `employee_location_history` breadcrumbs (powers Employee Tracking)
 
 Set `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env` for production webhook/sync writes.
+
+### Login monitoring & employee location
+
+- **Single device per user:** every named role (including `admin`) may hold one active session. A second login returns `409 { requires_shift: true }`; choosing **Shift** moves the session and signs the other device out.
+- **Who's logged in now:** Employee Tracking shows a live session panel (device, login time, last seen, IP, and a distinct "location live" state). Visible to admin/manager only and records only data already sent on a normal request — no extra permissions.
+- **Location quality:** pings worse than `LOCATION_MAX_ACCURACY_M` (default 150 m) never overwrite a good reading; area names come from OSM Nominatim (server-cached); history is kept for `LOCATION_HISTORY_RETENTION_DAYS` (default 90) and pruned hourly. Admins can correct or clear an employee's pin from Employee Tracking → **Fix**.
+- Tuning env: `LOCATION_MAX_ACCURACY_M`, `LOCATION_HISTORY_RETENTION_DAYS`, `LOCATION_HISTORY_MIN_GAP_SEC`, `LOCATION_HISTORY_MIN_DISTANCE_M`, `GEOCODE_ENABLED`, `ACTIVE_SESSION_ONLINE_SEC`.
 
 ### Facebook Lead Ads
 

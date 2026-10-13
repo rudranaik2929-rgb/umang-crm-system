@@ -26,12 +26,15 @@ def _clear_session_state():
     main.LOCAL_SESSIONS.clear()
 
 
-def test_role_requires_single_device_exempts_admin():
-    assert main.role_requires_single_device("admin") is False
+def test_role_requires_single_device_locks_all_named_roles():
+    # Client requested admins be single-login too, so every named role is locked.
+    assert main.role_requires_single_device("admin") is True
     assert main.role_requires_single_device("telecaller") is True
     assert main.role_requires_single_device("manager") is True
     assert main.role_requires_single_device("sales_executive") is True
+    # Only an unidentifiable (blank) role is exempt, defensively.
     assert main.role_requires_single_device(None) is False
+    assert main.role_requires_single_device("") is False
 
 
 def test_raise_if_session_conflict_blocks_second_login(monkeypatch):
@@ -58,16 +61,29 @@ def test_raise_if_session_conflict_allows_force_shift(monkeypatch):
     )
 
 
-def test_raise_if_session_conflict_skips_admin(monkeypatch):
-    called = {"n": 0}
+def test_raise_if_session_conflict_blocks_admin(monkeypatch):
+    """Admins are now single-login too — a second admin login must 409."""
+    monkeypatch.setattr(
+        main, "load_active_session",
+        lambda user_id, force_db=False: ("sid-old", "Desktop · Chrome"),
+    )
+    with pytest.raises(HTTPException) as ei:
+        main.raise_if_session_conflict(
+            {"user_id": "user_admin001", "role": "admin"},
+            force_shift=False,
+        )
+    assert ei.value.status_code == 409
 
-    def boom(*a, **k):
-        called["n"] += 1
-        return ("sid", "x")
 
-    monkeypatch.setattr(main, "load_active_session", boom)
-    main.raise_if_session_conflict({"user_id": "user_admin001", "role": "admin"}, force_shift=False)
-    assert called["n"] == 0
+def test_raise_if_session_conflict_admin_can_shift(monkeypatch):
+    monkeypatch.setattr(
+        main, "load_active_session",
+        lambda user_id, force_db=False: ("sid-old", "Desktop · Chrome"),
+    )
+    main.raise_if_session_conflict(
+        {"user_id": "user_admin001", "role": "admin"},
+        force_shift=True,
+    )
 
 
 def test_raise_if_session_conflict_allows_first_login(monkeypatch):

@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import threading
 import uuid, logging, random, os, httpx, csv, io, openpyxl
-import base64, hashlib, hmac, json, re, time
+import base64, hashlib, hmac, json, re, time, math
 from io import BytesIO
 from passlib.context import CryptContext
 from pydantic import BaseModel
@@ -508,6 +508,15 @@ def flush_all_runtime_caches() -> Dict[str, int]:
     for cache in (_assignment_stats_cache, _employee_stats_cache, _dashboard_stats_cache, _graph_cache):
         cache["ts"] = 0.0
         cache["data"] = None
+    # Live-session mirrors + derived monitoring/geocode caches (fresh DB state).
+    for bucket in (USER_ACTIVE_SIDS, USER_ACTIVE_DEVICES, USER_ACTIVE_LAST_SEEN,
+                   _USER_LAST_SEEN_WRITE_AT, _SID_CACHE_AT, _GEOCODE_CACHE,
+                   _HIST_WRITE_AT):
+        bucket.clear()
+    _FORCED_OUT_LOGGED.clear()
+    _active_sessions_cache.update({"ts": 0.0, "data": None})
+    _GEOCODE_LAST_AT["t"] = 0.0
+    _HIST_PRUNE_AT["t"] = 0.0
     invalidate_employees_cache()
     return cleared
 
@@ -1976,28 +1985,129 @@ async def get_session_token(request: Request):
     return None
 
 
-# ---- Single-device session lock (all employees; admin exempt) ----
-# Non-admin roles may hold one active_session_id. Second login returns 409
-# requires_shift; Shift issues a new sid and invalidates the prior session.
+# ---- Single-device session lock (every role, admins included) ----
+# Every named role (admin too) may hold one active_session_id. A second login
+# returns 409 requires_shift; Shift issues a new sid and invalidates the prior
+# session. Only a blank/unknown role is exempt (should not happen post-login).
 SINGLE_DEVICE_ROLES = frozenset({
-    "telecaller", "site_visit", "sales_executive",
+    "admin", "telecaller", "site_visit", "sales_executive",
     "booking", "loan", "marketing", "manager",
 })
 # In-memory mirrors of users.active_session_id (DB is source of truth across workers)
 USER_ACTIVE_SIDS: Dict[str, str] = {}
 USER_ACTIVE_DEVICES: Dict[str, str] = {}
+# Latest heartbeat per user (in-memory, newest) + throttled DB writes.
+USER_ACTIVE_LAST_SEEN: Dict[str, str] = {}
+_USER_LAST_SEEN_WRITE_AT: Dict[str, float] = {}
+# Stale sids already logged as "forced_out" so we do not spam the audit table.
+_FORCED_OUT_LOGGED: set = set()
+# Short-lived cache for the "who's logged in now" panel.
+_active_sessions_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _SID_CACHE_AT: Dict[str, float] = {}
 _SID_CACHE_TTL_SEC = 15.0
 SESSION_MOVED_DETAIL = "Session moved to another device. Please log in again."
 
 
 def role_requires_single_device(role: Optional[str]) -> bool:
-    """True for CRM employees; admins may use multiple devices."""
+    """True for every named CRM role — admins are locked to one device too.
+
+    The client explicitly asked for admins to be single-login as well, so only
+    a blank/unknown role is exempt (defensive: never lock an unidentifiable user
+    out of their own account).
+    """
     r = (role or "").strip().lower()
-    if not r or r == "admin":
+    if not r:
         return False
-    # Named employee roles + any future non-admin role
     return True
+
+
+def client_ip(request: Optional[Request]) -> Optional[str]:
+    """Best-effort client IP, Render/proxy aware (X-Forwarded-For first hop)."""
+    if request is None:
+        return None
+    try:
+        xff = request.headers.get("x-forwarded-for")
+        if xff:
+            return xff.split(",")[0].strip()[:64] or None
+        real = request.headers.get("x-real-ip")
+        if real:
+            return real.strip()[:64] or None
+        if request.client and request.client.host:
+            return request.client.host[:64] or None
+    except Exception:
+        return None
+    return None
+
+
+def _columns_exist(table: str, columns: List[str], ttl_sec: int = 600) -> bool:
+    """Network-safe ``sb_columns_exist`` — a probe failure means "not available".
+
+    Optional feature columns (login monitoring / location quality) must never
+    take a request down, so any error is treated as "columns absent" and the
+    caller falls back to the base schema.
+    """
+    try:
+        return bool(sb_columns_exist(table, columns, ttl_sec))
+    except Exception:  # noqa: BLE001 — probe failures are non-fatal
+        return False
+
+
+def log_login_event(
+    *,
+    user_id: Optional[str] = None,
+    email: Optional[str] = None,
+    employee_id: Optional[str] = None,
+    event: str = "login",
+    device_label: Optional[str] = None,
+    ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> None:
+    """Append a login/audit event without blocking the request path.
+
+    Only data already present on a normal request is recorded (device label
+    derived from User-Agent, client IP, timestamps) — no extra permissions.
+    """
+    row = {
+        "user_id": user_id,
+        "email": email,
+        "employee_id": employee_id,
+        "event": (event or "login")[:24],
+        "device_label": (device_label or None),
+        "ip": ip,
+        "user_agent": (user_agent or None)[:400] if user_agent else None,
+        "created_at": now_utc().isoformat(),
+    }
+
+    def _run() -> None:
+        try:
+            sb_insert("login_events", row)
+        except Exception as exc:  # noqa: BLE001 — best-effort audit
+            logging.warning("login_events insert failed: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def touch_active_last_seen(user_id: Optional[str]) -> None:
+    """Mark a user as seen now; throttle the DB write to once a minute."""
+    if not user_id:
+        return
+    now_iso = now_utc().isoformat()
+    USER_ACTIVE_LAST_SEEN[user_id] = now_iso
+    if time.time() - _USER_LAST_SEEN_WRITE_AT.get(user_id, 0.0) < 60:
+        return
+    _USER_LAST_SEEN_WRITE_AT[user_id] = time.time()
+    if user_id in HARDCODED_USERS:
+        return  # in-memory only for the built-in admin
+    if not _columns_exist("users", ["active_last_seen_at"]):
+        return
+
+    def _run() -> None:
+        try:
+            sb_update("users", "user_id", user_id, {"active_last_seen_at": now_iso})
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("touch_active_last_seen failed for %s: %s", user_id, exc)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 def device_label_from_request(request: Optional[Request], override: Optional[str] = None) -> str:
@@ -2068,22 +2178,41 @@ def load_active_session(user_id: str, *, force_db: bool = False) -> Tuple[Option
     return sid, label
 
 
-def persist_active_session(user_id: str, session_id: str, device_label: str) -> None:
+def persist_active_session(
+    user_id: str,
+    session_id: str,
+    device_label: str,
+    *,
+    login_at: Optional[str] = None,
+    ip: Optional[str] = None,
+    user_agent: Optional[str] = None,
+) -> None:
     """Write active session to memory + users table (best-effort if columns missing)."""
     _cache_active_session(user_id, session_id, device_label)
+    now_iso = now_utc().isoformat()
+    USER_ACTIVE_LAST_SEEN[user_id] = now_iso
+    _USER_LAST_SEEN_WRITE_AT[user_id] = time.time()
     if user_id in HARDCODED_USERS:
         return
+    payload: Dict[str, Any] = {
+        "active_session_id": session_id,
+        "active_device_label": device_label,
+        "session_updated_at": now_iso,
+    }
+    # Login metadata columns may not exist until login_monitoring.sql is run.
+    if _columns_exist(
+        "users",
+        ["active_login_at", "active_last_seen_at", "last_login_at"],
+    ):
+        payload.update({
+            "active_login_at": login_at or now_iso,
+            "active_last_seen_at": now_iso,
+            "last_login_at": login_at or now_iso,
+        })
+    if _columns_exist("users", ["active_ip", "active_user_agent"]):
+        payload.update({"active_ip": ip, "active_user_agent": user_agent})
     try:
-        sb_update(
-            "users",
-            "user_id",
-            user_id,
-            {
-                "active_session_id": session_id,
-                "active_device_label": device_label,
-                "session_updated_at": now_utc().isoformat(),
-            },
-        )
+        sb_update("users", "user_id", user_id, payload)
     except Exception as exc:
         logging.warning("persist_active_session failed for %s: %s", user_id, exc)
 
@@ -2093,21 +2222,21 @@ def clear_active_session(user_id: str, only_if_sid: Optional[str] = None) -> Non
     if only_if_sid and current and current != only_if_sid:
         return
     _cache_active_session(user_id, None)
+    USER_ACTIVE_LAST_SEEN.pop(user_id, None)
 
     def _clear() -> None:
         if user_id in HARDCODED_USERS:
             return
+        now_iso = now_utc().isoformat()
+        patch: Dict[str, Any] = {
+            "active_session_id": None,
+            "active_device_label": None,
+            "session_updated_at": now_iso,
+        }
+        if _columns_exist("users", ["last_logout_at"]):
+            patch["last_logout_at"] = now_iso
         try:
-            sb_update(
-                "users",
-                "user_id",
-                user_id,
-                {
-                    "active_session_id": None,
-                    "active_device_label": None,
-                    "session_updated_at": now_utc().isoformat(),
-                },
-            )
+            sb_update("users", "user_id", user_id, patch)
         except Exception as exc:
             logging.warning("clear_active_session failed for %s: %s", user_id, exc)
 
@@ -2145,6 +2274,16 @@ def validate_jwt_session_id(user_id: str, role: Optional[str], jwt_sid: Optional
         # Pre-migration / no lock yet — allow.
         return
     if not jwt_sid or jwt_sid != active_sid:
+        key = f"{user_id}:{jwt_sid}"
+        if key not in _FORCED_OUT_LOGGED:
+            _FORCED_OUT_LOGGED.add(key)
+            if len(_FORCED_OUT_LOGGED) > 5000:
+                _FORCED_OUT_LOGGED.clear()
+            log_login_event(
+                user_id=user_id,
+                employee_id=(HARDCODED_USERS.get(user_id) or {}).get("employee_id"),
+                event="forced_out",
+            )
         raise HTTPException(status_code=401, detail=SESSION_MOVED_DETAIL)
 
 
@@ -2259,14 +2398,35 @@ def issue_session(
     uid = user["user_id"]
     label = device_label_from_request(request, device_label)
     session_id = str(uuid.uuid4())
+    ip = client_ip(request)
+    ua = (request.headers.get("user-agent") if request is not None else None)
+    login_at = now_utc().isoformat()
 
+    had_prior = False
+    if role_requires_single_device(user.get("role")) or force_shift:
+        prior_sid, _ = load_active_session(uid, force_db=True)
+        had_prior = bool(prior_sid)
     if role_requires_single_device(user.get("role")):
         # Drop prior JWTs so the previous device is forced out immediately.
         # Keep DB lock until we overwrite it below (avoid a conflict gap).
         invalidate_sessions_for_user(uid, clear_device_lock=False)
-        persist_active_session(uid, session_id, label)
+        persist_active_session(
+            uid, session_id, label, login_at=login_at, ip=ip, user_agent=ua,
+        )
     elif force_shift:
-        persist_active_session(uid, session_id, label)
+        persist_active_session(
+            uid, session_id, label, login_at=login_at, ip=ip, user_agent=ua,
+        )
+
+    log_login_event(
+        user_id=uid,
+        email=user.get("email"),
+        employee_id=user.get("employee_id"),
+        event="shift" if had_prior else "login",
+        device_label=label,
+        ip=ip,
+        user_agent=ua,
+    )
 
     token, expires = create_jwt({
         "sub": uid,
@@ -2600,6 +2760,7 @@ async def get_current_user(request: Request) -> User:
             sess["user"] = u
         sid = jwt_sid or sess.get("sid")
         validate_jwt_session_id(u.get("user_id") or "", u.get("role"), sid)
+        touch_active_last_seen(u.get("user_id") or "")
         act_as = request.headers.get("X-Acting-As")
         if act_as:
             u = {**u, "acting_as_employee_id": act_as}
@@ -2612,6 +2773,7 @@ async def get_current_user(request: Request) -> User:
         u = user_from_jwt_payload(jwt_payload)
         if u:
             validate_jwt_session_id(u.get("user_id") or "", u.get("role"), jwt_sid)
+            touch_active_last_seen(u.get("user_id") or "")
             u["_session_ready"] = True
             LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": jwt_sid}
             act_as = request.headers.get("X-Acting-As")
@@ -2621,6 +2783,7 @@ async def get_current_user(request: Request) -> User:
         uid = jwt_payload["sub"]
         u = _resolve_user_by_id(uid, exp)
         validate_jwt_session_id(uid, u.get("role"), jwt_sid)
+        touch_active_last_seen(uid)
         LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": jwt_sid}
         act_as = request.headers.get("X-Acting-As")
         if act_as:
@@ -2641,6 +2804,7 @@ async def get_current_user(request: Request) -> User:
     u = _resolve_user_by_id(uid, exp)
     # Legacy tokens have no sid — if an active lock exists, treat as moved.
     validate_jwt_session_id(uid, u.get("role"), None)
+    touch_active_last_seen(uid)
     LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": None}
     act_as = request.headers.get("X-Acting-As")
     if act_as:
@@ -2764,17 +2928,140 @@ async def auth_logout(request: Request, response: Response):
     if t:
         jwt_payload = decode_jwt(t) if t.count(".") == 2 else None
         cached = LOCAL_SESSIONS.get(t) or {}
-        uid = (jwt_payload or {}).get("sub") or (cached.get("user") or {}).get("user_id")
+        cached_user = cached.get("user") or {}
+        uid = (jwt_payload or {}).get("sub") or cached_user.get("user_id")
         sid = (jwt_payload or {}).get("sid") or cached.get("sid")
-        role = (jwt_payload or {}).get("role") or (cached.get("user") or {}).get("role")
+        role = (jwt_payload or {}).get("role") or cached_user.get("role")
         if not role and uid:
             role = (HARDCODED_USERS.get(uid) or {}).get("role")
+        email = (jwt_payload or {}).get("email") or cached_user.get("email")
+        emp_id = (jwt_payload or {}).get("employee_id") or cached_user.get("employee_id")
         sb_delete("sessions", "session_token", t)
         LOCAL_SESSIONS.pop(t, None)
         if uid and role_requires_single_device(role):
             clear_active_session(uid, only_if_sid=sid)
+        if uid:
+            log_login_event(
+                user_id=uid,
+                email=email,
+                employee_id=emp_id,
+                event="logout",
+                device_label=device_label_from_request(request),
+                ip=client_ip(request),
+                user_agent=request.headers.get("user-agent"),
+            )
     response.delete_cookie("session_token", path="/")
     return {"ok": True}
+
+
+@api_router.get("/auth/heartbeat")
+async def auth_heartbeat(request: Request, cu: User = Depends(get_current_user)):
+    """Cheap liveness ping so the monitoring panel knows who is online now.
+
+    get_current_user already updates last-seen; this just acknowledges it.
+    """
+    touch_active_last_seen(cu.user_id)
+    return {"ok": True, "at": now_utc().isoformat()}
+
+
+def _active_sessions_online_cutoff() -> float:
+    return time.time() - max(30, ACTIVE_SESSION_ONLINE_SEC)
+
+
+def _fetch_active_session_rows() -> List[Dict[str, Any]]:
+    """Users holding an active session, with the newest metadata available."""
+    base_cols = [
+        "user_id", "email", "name", "role", "employee_id",
+        "active_session_id", "active_device_label", "session_updated_at",
+    ]
+    extra = [
+        c for c in ("active_login_at", "active_last_seen_at", "active_ip", "last_login_at")
+        if _columns_exist("users", [c])
+    ]
+    select = ",".join([*base_cols, *extra])
+    rows = sb_select(
+        "users",
+        {
+            "select": select,
+            "active_session_id": "not.is.null",
+            "limit": "500",
+        },
+    )
+    if not rows and extra:
+        # Retry without the optional columns (older DB before login_monitoring.sql).
+        rows = sb_select(
+            "users",
+            {
+                "select": ",".join(base_cols),
+                "active_session_id": "not.is.null",
+                "limit": "500",
+            },
+        )
+    return rows
+
+
+@api_router.get("/auth/active-sessions")
+async def auth_active_sessions(cu: User = Depends(get_current_user)):
+    """Admin/manager view: who is logged in right now (minimal, opt-in-free data)."""
+    ensure_roles(cu, ["admin", "manager"])
+    cached = _active_sessions_cache.get("data")
+    if cached is not None and (time.time() - float(_active_sessions_cache.get("ts", 0))) < ACTIVE_SESSIONS_CACHE_TTL_SEC:
+        return cached
+
+    rows = _fetch_active_session_rows()
+    employees = sb_select("employees", {
+        "select": "employee_id,name,role,department,active,last_lat,last_lng,last_seen_at",
+    })
+    emp_by_id = {e.get("employee_id"): e for e in employees if e.get("employee_id")}
+
+    cutoff = _active_sessions_online_cutoff()
+    out: List[Dict[str, Any]] = []
+    now_ts = time.time()
+    for row in rows:
+        uid = row.get("user_id")
+        if not uid:
+            continue
+        mem_seen = USER_ACTIVE_LAST_SEEN.get(uid)
+        db_seen = row.get("active_last_seen_at")
+        last_seen = max(
+            [v for v in (mem_seen, db_seen) if v],
+            key=_parse_iso_ts,
+            default=None,
+        )
+        last_seen_ts = _parse_iso_ts(last_seen) or now_ts
+        emp_id = row.get("employee_id")
+        emp = emp_by_id.get(emp_id) or {}
+        loc_seen = emp.get("last_seen_at")
+        loc_online = bool(_parse_iso_ts(loc_seen) and _parse_iso_ts(loc_seen) > time.time() - 5 * 60)
+        out.append({
+            "user_id": uid,
+            "name": row.get("name") or emp.get("name") or row.get("email") or uid,
+            "email": row.get("email"),
+            "role": row.get("role"),
+            "employee_id": emp_id,
+            "department": emp.get("department"),
+            "device": row.get("active_device_label") or "Unknown device",
+            "login_at": row.get("active_login_at") or row.get("session_updated_at"),
+            "last_seen_at": last_seen,
+            "ip": row.get("active_ip"),
+            "logged_in": True,
+            "online": last_seen_ts > cutoff,
+            "session_age_sec": int(max(0, now_ts - (_parse_iso_ts(row.get("session_updated_at")) or now_ts))),
+            "location_live": loc_online,
+            "last_lat": emp.get("last_lat"),
+            "last_lng": emp.get("last_lng"),
+            "location_seen_at": loc_seen,
+        })
+
+    out.sort(key=lambda r: _parse_iso_ts(r.get("last_seen_at")), reverse=True)
+    payload = {
+        "count": len(out),
+        "online_count": sum(1 for r in out if r.get("online")),
+        "generated_at": now_utc().isoformat(),
+        "sessions": out,
+    }
+    _active_sessions_cache.update({"ts": time.time(), "data": payload})
+    return payload
 
 @api_router.post("/auth/set-role")
 async def auth_set_role(payload: RoleSet, cu: User = Depends(get_current_user)):
@@ -2787,20 +3074,177 @@ async def auth_set_role(payload: RoleSet, cu: User = Depends(get_current_user)):
     merged = {**cu.model_dump(mode="json"), **updated}
     return User(**_finalize_user_session(merged)).model_dump(mode="json")
 
-def upsert_employee_location(employee_id: str, lat: float, lng: float, updated_at: Optional[str] = None) -> Optional[Dict[str, Any]]:
+def upsert_employee_location(
+    employee_id: str,
+    lat: float,
+    lng: float,
+    updated_at: Optional[str] = None,
+    *,
+    accuracy: Optional[float] = None,
+    source: str = "gps",
+    captured_at: Optional[str] = None,
+    address: Optional[str] = None,
+    ip: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """Save latest GPS for one employee — upsert so we never create duplicate rows."""
     ts = updated_at or now_utc().isoformat()
-    row = {
+    row: Dict[str, Any] = {
         "employee_id": employee_id,
         "latitude": float(lat),
         "longitude": float(lng),
         "updated_at": ts,
     }
+    extras: Dict[str, Any] = {}
+    if accuracy is not None:
+        extras["accuracy"] = float(accuracy)
+    if source:
+        extras["source"] = source[:16]
+    if captured_at:
+        extras["captured_at"] = captured_at
+    if address:
+        extras["address"] = address[:300]
+    if ip:
+        extras["ip"] = ip[:64]
+    if extras and _columns_exist("employee_locations", list(extras.keys())):
+        row.update(extras)
     saved = sb_upsert("employee_locations", row, on_conflict="employee_id")
     if saved:
         return saved if isinstance(saved, dict) else row
     # Fallback if employee_locations table is missing: keep legacy columns working.
     return None
+
+
+def _haversine_m(lat1: Any, lng1: Any, lat2: Any, lng2: Any) -> Optional[float]:
+    """Great-circle distance in metres; None when any input is unusable."""
+    try:
+        r = 6371000.0
+        p1, p2 = math.radians(float(lat1)), math.radians(float(lat2))
+        dphi = math.radians(float(lat2) - float(lat1))
+        dlam = math.radians(float(lng2) - float(lng1))
+        a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlam / 2) ** 2
+        return 2 * r * math.asin(min(1.0, math.sqrt(a)))
+    except Exception:
+        return None
+
+
+_GEOCODE_CACHE: Dict[str, Tuple[float, Optional[str]]] = {}
+_GEOCODE_LAST_AT = {"t": 0.0}
+_GEOCODE_LOCK = threading.Lock()
+
+
+def reverse_geocode(lat: float, lng: float) -> Optional[str]:
+    """OSM Nominatim reverse geocode → short area/address label (cached).
+
+    Rounded to ~11 m so repeated pings at the same spot reuse one lookup. The
+    free endpoint requires a descriptive User-Agent and <=1 req/s, so calls are
+    serialised with a small min-gap. Failures are cached briefly to avoid storms.
+    """
+    if not GEOCODE_ENABLED:
+        return None
+    try:
+        key = f"{round(float(lat), 4)},{round(float(lng), 4)}"
+    except Exception:
+        return None
+    hit = _GEOCODE_CACHE.get(key)
+    if hit and (time.time() - hit[0]) < 86400:
+        return hit[1]
+    with _GEOCODE_LOCK:
+        hit = _GEOCODE_CACHE.get(key)
+        if hit and (time.time() - hit[0]) < 86400:
+            return hit[1]
+        gap = time.time() - _GEOCODE_LAST_AT["t"]
+        if gap < GEOCODE_MIN_GAP_SEC:
+            return None  # too soon — skip, next ping will try again
+        _GEOCODE_LAST_AT["t"] = time.time()
+        label: Optional[str] = None
+        try:
+            r = httpx.get(
+                NOMINATIM_URL,
+                params={
+                    "format": "jsonv2",
+                    "lat": float(lat),
+                    "lon": float(lng),
+                    "zoom": "16",
+                    "addressdetails": "1",
+                },
+                headers={"User-Agent": GEOCODE_USER_AGENT, "Accept": "application/json"},
+                timeout=5.0,
+            )
+            if r.status_code < 400:
+                data = r.json() or {}
+                addr = data.get("address") or {}
+                parts = [
+                    addr.get("road") or addr.get("pedestrian") or addr.get("footway"),
+                    addr.get("suburb") or addr.get("neighbourhood") or addr.get("city_district"),
+                    addr.get("city") or addr.get("town") or addr.get("village") or addr.get("county"),
+                    addr.get("state"),
+                ]
+                label = ", ".join([p for p in parts if p]) or (data.get("display_name") or "")[:160] or None
+        except Exception as exc:  # noqa: BLE001 — geocoding is best-effort
+            logging.warning("reverse_geocode failed: %s", exc)
+        if len(_GEOCODE_CACHE) > 5000:
+            _GEOCODE_CACHE.clear()
+        _GEOCODE_CACHE[key] = (time.time(), label)
+        return label
+
+
+_HIST_WRITE_AT: Dict[str, float] = {}
+_HIST_PRUNE_AT = {"t": 0.0}
+
+
+def _maybe_record_location_history(
+    employee_id: str,
+    lat: float,
+    lng: float,
+    *,
+    accuracy: Optional[float],
+    source: str,
+    address: Optional[str],
+    captured_at: Optional[str],
+    moved_m: Optional[float],
+) -> None:
+    """Append a breadcrumb (throttled by time + distance). Never blocks caller."""
+    if not _columns_exist("employee_location_history", ["employee_id", "latitude", "longitude"]):
+        return
+    last = _HIST_WRITE_AT.get(employee_id, 0.0)
+    fresh_time = (time.time() - last) < LOCATION_HISTORY_MIN_GAP_SEC
+    small_move = moved_m is not None and moved_m < LOCATION_HISTORY_MIN_DISTANCE_M
+    if fresh_time and small_move:
+        return
+    _HIST_WRITE_AT[employee_id] = time.time()
+    row: Dict[str, Any] = {
+        "employee_id": employee_id,
+        "latitude": float(lat),
+        "longitude": float(lng),
+        "accuracy": float(accuracy) if accuracy is not None else None,
+        "source": (source or "gps")[:16],
+        "captured_at": captured_at,
+        "created_at": now_utc().isoformat(),
+    }
+    if address:
+        row["address"] = address[:300]
+
+    def _run() -> None:
+        try:
+            sb_insert("employee_location_history", row)
+        except Exception as exc:  # noqa: BLE001
+            logging.warning("location history insert failed: %s", exc)
+
+    threading.Thread(target=_run, daemon=True).start()
+
+
+def _maybe_prune_location_history() -> None:
+    """Drop breadcrumbs older than the retention window (at most hourly)."""
+    if time.time() - _HIST_PRUNE_AT["t"] < 3600:
+        return
+    _HIST_PRUNE_AT["t"] = time.time()
+    if not _columns_exist("employee_location_history", ["created_at"]):
+        return
+    cutoff = (now_utc() - timedelta(days=max(1, LOCATION_HISTORY_RETENTION_DAYS))).isoformat()
+    try:
+        sb_delete_filter("employee_location_history", {"created_at": f"lt.{cutoff}"})
+    except Exception as exc:  # noqa: BLE001
+        logging.warning("location history prune failed: %s", exc)
 
 
 def _parse_iso_ts(value: Any) -> float:
@@ -2843,28 +3287,192 @@ def current_lead_for_employee(employee: Dict[str, Any], all_leads: List[Dict[str
 
 @api_router.post("/auth/ping-location")
 async def ping_location(request: Request, cu: User = Depends(get_current_user)):
-    body = await request.json()
+    """Receive a device GPS ping.
+
+    Quality gates (never overwrite good data with junk):
+      * reject out-of-range coordinates;
+      * reject a fix whose accuracy radius is worse than LOCATION_MAX_ACCURACY_M
+        when we already have a stored reading;
+      * ignore clearly stale device timestamps.
+    Accepted pings update the latest row, append a throttled breadcrumb, and
+    (if the employee has moved enough) refresh the reverse-geocoded address.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return {"ok": False, "reason": "bad_body"}
     lat, lng = body.get("lat"), body.get("lng")
     if lat is None or lng is None:
         return {"ok": False, "reason": "missing_coordinates"}
+    try:
+        lat = float(lat)
+        lng = float(lng)
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "bad_coordinates"}
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+        return {"ok": False, "reason": "out_of_range"}
+
+    accuracy: Optional[float] = None
+    try:
+        if body.get("accuracy") is not None:
+            accuracy = float(body.get("accuracy"))
+            if accuracy < 0 or accuracy > 100000:
+                accuracy = None
+    except (TypeError, ValueError):
+        accuracy = None
+    source = str(body.get("source") or "gps")[:16]
+    captured_at = body.get("captured_at")
+    if captured_at is not None:
+        captured_at = str(captured_at)[:40]
 
     emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
     if not emp_id:
         return {"ok": False, "reason": "no_employee_linked"}
 
     now_iso = now_utc().isoformat()
-    update: Dict[str, Any] = {
-        "last_lat": float(lat),
-        "last_lng": float(lng),
-        "last_seen_at": now_iso,
+    ip = client_ip(request)
+
+    existing = sb_select(
+        "employee_locations",
+        {
+            "employee_id": f"eq.{emp_id}",
+            "select": ",".join([
+                "latitude", "longitude", "updated_at",
+                *[c for c in ("accuracy", "address") if _columns_exist("employee_locations", [c])],
+            ]),
+            "limit": "1",
+        },
+    )
+    ex = existing[0] if existing else None
+
+    # Gate 1 — poor accuracy: keep the last good reading instead of a wild jump.
+    if accuracy is not None and accuracy > LOCATION_MAX_ACCURACY_M and ex is not None:
+        return {
+            "ok": True,
+            "employee_id": emp_id,
+            "accepted": False,
+            "reason": "low_accuracy",
+            "accuracy": accuracy,
+        }
+    # Gate 2 — stale device timestamp (clock skew / cached fix).
+    if ex and captured_at:
+        cap_ts, ex_ts = _parse_iso_ts(captured_at), _parse_iso_ts(ex.get("updated_at"))
+        if cap_ts and ex_ts and cap_ts < ex_ts - 5:
+            return {"ok": True, "employee_id": emp_id, "accepted": False, "reason": "stale"}
+
+    moved_m = _haversine_m(ex.get("latitude"), ex.get("longitude"), lat, lng) if ex else None
+    address: Optional[str] = (ex or {}).get("address")
+    if address is None or moved_m is None or moved_m >= GEOCODE_MIN_MOVE_M:
+        refreshed = reverse_geocode(lat, lng)
+        if refreshed:
+            address = refreshed
+
+    upsert_employee_location(
+        emp_id, lat, lng, now_iso,
+        accuracy=accuracy, source=source, captured_at=captured_at, address=address, ip=ip,
+    )
+    _maybe_record_location_history(
+        emp_id, lat, lng,
+        accuracy=accuracy, source=source, address=address,
+        captured_at=captured_at, moved_m=moved_m,
+    )
+    # Dual-write legacy columns so older clients/queries still see last seen.
+    sb_update("employees", "employee_id", emp_id, {
+        "last_lat": lat, "last_lng": lng, "last_seen_at": now_iso,
+    })
+    invalidate_employees_cache()
+    _maybe_prune_location_history()
+    return {
+        "ok": True,
+        "employee_id": emp_id,
+        "accepted": True,
+        "accuracy": accuracy,
+        "address": address,
+        "moved_m": round(moved_m, 1) if moved_m is not None else None,
     }
 
-    # Primary store: one row per employee in employee_locations (upsert).
-    upsert_employee_location(emp_id, float(lat), float(lng), now_iso)
-    # Dual-write legacy columns so older clients/queries still see last seen.
-    sb_update("employees", "employee_id", emp_id, update)
+
+class EmployeeLocationSet(BaseModel):
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    address: Optional[str] = None
+    clear: Optional[bool] = False
+
+
+@api_router.patch("/employees/{eid}/location")
+async def set_employee_location(
+    eid: str,
+    p: EmployeeLocationSet,
+    request: Request,
+    cu: User = Depends(get_current_user),
+):
+    """Admin/manager: manually correct or clear an employee's live location.
+
+    Manual fixes are stored with source='manual' so they are distinguishable
+    from device GPS, and (when coordinates are given) are logged to history.
+    """
+    ensure_roles(cu, ["admin", "manager"])
+    rows = sb_select("employees", {"employee_id": f"eq.{eid}", "select": "employee_id,name", "limit": "1"})
+    if not rows:
+        raise HTTPException(status_code=404, detail="Employee not found")
+
+    now_iso = now_utc().isoformat()
+    if p.clear:
+        sb_delete("employee_locations", "employee_id", eid)
+        sb_update("employees", "employee_id", eid, {"last_lat": None, "last_lng": None, "last_seen_at": None})
+        invalidate_employees_cache()
+        log_activity(cu, "employee_location_cleared", f"Cleared location for {rows[0].get('name') or eid}", lead_id=None)
+        return {"ok": True, "employee_id": eid, "cleared": True}
+
+    if p.latitude is None or p.longitude is None:
+        raise HTTPException(status_code=400, detail="latitude and longitude are required")
+    try:
+        lat, lng = float(p.latitude), float(p.longitude)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="latitude and longitude must be numbers")
+    if not (-90.0 <= lat <= 90.0 and -180.0 <= lng <= 180.0):
+        raise HTTPException(status_code=400, detail="Coordinates are out of range")
+
+    address = (p.address or "").strip()[:300] or reverse_geocode(lat, lng)
+    upsert_employee_location(
+        eid, lat, lng, now_iso,
+        accuracy=None, source="manual", captured_at=None, address=address, ip=client_ip(request),
+    )
+    _maybe_record_location_history(
+        eid, lat, lng, accuracy=None, source="manual", address=address, captured_at=None, moved_m=None,
+    )
+    sb_update("employees", "employee_id", eid, {"last_lat": lat, "last_lng": lng, "last_seen_at": now_iso})
     invalidate_employees_cache()
-    return {"ok": True, "employee_id": emp_id}
+    log_activity(cu, "employee_location_set", f"Manually set location for {rows[0].get('name') or eid}", lead_id=None)
+    return {
+        "ok": True,
+        "employee_id": eid,
+        "latitude": lat,
+        "longitude": lng,
+        "address": address,
+        "source": "manual",
+    }
+
+
+@api_router.get("/employees/{eid}/location-history")
+async def employee_location_history(
+    eid: str, limit: int = 50, cu: User = Depends(get_current_user),
+):
+    """Admin/manager: recent GPS breadcrumbs for one employee (newest first)."""
+    ensure_roles(cu, ["admin", "manager"])
+    if not _columns_exist("employee_location_history", ["employee_id", "created_at"]):
+        return {"employee_id": eid, "points": []}
+    try:
+        capped = max(1, min(int(limit or 50), 200))
+    except (TypeError, ValueError):
+        capped = 50
+    rows = sb_select("employee_location_history", {
+        "employee_id": f"eq.{eid}",
+        "select": "latitude,longitude,accuracy,source,address,captured_at,created_at",
+        "order": "created_at.desc",
+        "limit": str(capped),
+    })
+    return {"employee_id": eid, "points": rows or []}
 
 @api_router.post("/auth/act-as")
 async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
@@ -9537,8 +10145,12 @@ async def list_employee_locations(cu: User = Depends(get_current_user)):
     """Admin/manager map feed: latest GPS + employee name + current lead."""
     ensure_roles(cu, ["admin", "manager"])
 
+    extra_loc_cols = [
+        c for c in ("accuracy", "source", "address", "captured_at")
+        if _columns_exist("employee_locations", [c])
+    ]
     locations = sb_select("employee_locations", {
-        "select": "employee_id,latitude,longitude,updated_at",
+        "select": ",".join(["employee_id", "latitude", "longitude", "updated_at", *extra_loc_cols]),
         "order": "updated_at.desc",
     })
     employees = sb_select("employees", {
@@ -9590,6 +10202,10 @@ async def list_employee_locations(cu: User = Depends(get_current_user)):
             "last_lng": loc.get("longitude"),
             "last_seen_at": updated_at,
             "updated_at": updated_at,
+            "accuracy": loc.get("accuracy"),
+            "source": loc.get("source"),
+            "address": loc.get("address"),
+            "captured_at": loc.get("captured_at"),
             "current_lead": current,
             "current_lead_name": (current or {}).get("name"),
             "online": online,

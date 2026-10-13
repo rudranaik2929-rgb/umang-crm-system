@@ -65,9 +65,13 @@ def test_ping_location_upserts_and_dual_writes_legacy(monkeypatch):
     updates = []
 
     monkeypatch.setattr(main, "resolve_employee_id", lambda _cu: "emp_track_1")
+    monkeypatch.setattr(main, "sb_select", lambda *a, **k: [])
+    monkeypatch.setattr(main, "_columns_exist", lambda *a, **k: False)
+    monkeypatch.setattr(main, "reverse_geocode", lambda lat, lng: None)
 
-    def fake_upsert_loc(eid, lat, lng, updated_at=None):
-        upserts.append({"employee_id": eid, "latitude": lat, "longitude": lng, "updated_at": updated_at})
+    def fake_upsert_loc(eid, lat, lng, updated_at=None, **kwargs):
+        upserts.append({"employee_id": eid, "latitude": lat, "longitude": lng,
+                        "updated_at": updated_at, "kwargs": kwargs})
         return {"employee_id": eid}
 
     monkeypatch.setattr(main, "upsert_employee_location", fake_upsert_loc)
@@ -81,17 +85,69 @@ def test_ping_location_upserts_and_dual_writes_legacy(monkeypatch):
     monkeypatch.setattr(main, "invalidate_employees_cache", lambda: None)
 
     class Req:
+        headers = {}
+        client = None
+
         async def json(self):
             return {"lat": 19.4, "lng": 72.8}
 
     result = asyncio.run(main.ping_location(Req(), _user()))
     assert result["ok"] is True
     assert result["employee_id"] == "emp_track_1"
+    assert result["accepted"] is True
     assert len(upserts) == 1
     assert upserts[0]["latitude"] == 19.4
     assert len(updates) == 1
     assert updates[0]["table"] == "employees"
     assert updates[0]["data"]["last_lat"] == 19.4
+
+
+def test_ping_location_rejects_poor_accuracy(monkeypatch):
+    """A wild fix (> LOCATION_MAX_ACCURACY_M) must not overwrite a good reading."""
+    monkeypatch.setattr(main, "resolve_employee_id", lambda _cu: "emp_track_1")
+    monkeypatch.setattr(
+        main, "sb_select",
+        lambda *a, **k: [{"latitude": 19.0, "longitude": 72.0,
+                          "accuracy": 20, "updated_at": "2026-07-27T10:00:00+00:00"}],
+    )
+    called = {"upsert": 0}
+    monkeypatch.setattr(main, "upsert_employee_location",
+                        lambda *a, **k: called.__setitem__("upsert", called["upsert"] + 1))
+
+    class Req:
+        headers = {}
+        client = None
+
+        async def json(self):
+            return {"lat": 21.0, "lng": 79.0, "accuracy": 5000}
+
+    result = asyncio.run(main.ping_location(Req(), _user()))
+    assert result["ok"] is True
+    assert result["accepted"] is False
+    assert result["reason"] == "low_accuracy"
+    assert called["upsert"] == 0
+
+
+def test_ping_location_rejects_out_of_range(monkeypatch):
+    monkeypatch.setattr(main, "resolve_employee_id", lambda _cu: "emp_track_1")
+
+    class Req:
+        headers = {}
+        client = None
+
+        async def json(self):
+            return {"lat": 999, "lng": 72.8}
+
+    result = asyncio.run(main.ping_location(Req(), _user()))
+    assert result["ok"] is False
+    assert result["reason"] == "out_of_range"
+
+
+def test_haversine_distance_known_pair():
+    # ~1.11 km per 0.01° of latitude near the equator-ish latitudes.
+    d = main._haversine_m(19.00, 72.00, 19.01, 72.00)
+    assert d is not None and 1100 < d < 1120
+    assert main._haversine_m(19.0, 72.0, 19.0, 72.0) == 0
 
 
 def test_current_lead_for_employee_picks_newest_active(monkeypatch):
@@ -148,3 +204,66 @@ def test_list_employee_locations_admin_only(monkeypatch):
 
     out = asyncio.run(main.list_employee_locations(_user(role="admin", employee_id="emp_admin")))
     assert out == []
+
+
+def test_set_employee_location_manual(monkeypatch):
+    monkeypatch.setattr(
+        main, "sb_select",
+        lambda *a, **k: [{"employee_id": "emp_track_1", "name": "Tracker Emp"}],
+    )
+    monkeypatch.setattr(main, "_columns_exist", lambda *a, **k: False)
+    upserts = []
+    monkeypatch.setattr(
+        main, "upsert_employee_location",
+        lambda eid, lat, lng, ts=None, **kw: upserts.append(kw) or {"employee_id": eid},
+    )
+    monkeypatch.setattr(main, "sb_update", lambda *a, **k: {})
+    monkeypatch.setattr(main, "invalidate_employees_cache", lambda: None)
+    monkeypatch.setattr(main, "log_activity", lambda *a, **k: None)
+
+    class Req:
+        headers = {}
+        client = None
+
+    payload = main.EmployeeLocationSet(latitude=19.1, longitude=72.9, address="Andheri, Mumbai")
+    out = asyncio.run(main.set_employee_location("emp_track_1", payload, Req(), _user(role="admin")))
+    assert out["ok"] is True
+    assert out["source"] == "manual"
+    assert upserts and upserts[0]["source"] == "manual"
+    assert upserts[0]["address"] == "Andheri, Mumbai"
+
+
+def test_set_employee_location_rejects_bad_coords(monkeypatch):
+    monkeypatch.setattr(
+        main, "sb_select",
+        lambda *a, **k: [{"employee_id": "emp_track_1", "name": "Tracker Emp"}],
+    )
+    class Req:
+        headers = {}
+        client = None
+
+    payload = main.EmployeeLocationSet(latitude=999, longitude=72.9)
+    try:
+        asyncio.run(main.set_employee_location("emp_track_1", payload, Req(), _user(role="admin")))
+        assert False, "expected 400"
+    except main.HTTPException as exc:
+        assert exc.status_code == 400
+
+
+def test_employee_location_history_admin_only(monkeypatch):
+    monkeypatch.setattr(main, "_columns_exist", lambda *a, **k: True)
+    monkeypatch.setattr(
+        main, "sb_select",
+        lambda *a, **k: [{"latitude": 1, "longitude": 2, "source": "gps",
+                          "created_at": "2026-07-27T10:00:00+00:00"}],
+    )
+
+    try:
+        asyncio.run(main.employee_location_history("emp_track_1", 10, _user(role="telecaller")))
+        assert False, "expected 403"
+    except main.HTTPException as exc:
+        assert exc.status_code == 403
+
+    out = asyncio.run(main.employee_location_history("emp_track_1", 10, _user(role="admin")))
+    assert out["employee_id"] == "emp_track_1"
+    assert out["points"][0]["latitude"] == 1

@@ -1,12 +1,13 @@
 -- Single-device login (session lock / transfer)
 -- Run once in Supabase SQL editor.
 --
--- Policy: all non-admin CRM roles (telecaller, site_visit, sales_executive,
--- booking, loan, marketing, manager) may hold only one active session.
--- Admins are exempt and may stay logged in on multiple devices.
+-- Policy: every named CRM role — including admin — may hold only one active
+-- session. On a second login the API returns 409 { requires_shift: true }.
+-- Choosing "Shift" stores a new active_session_id and invalidates the old
+-- session. (Only a blank/unknown role is exempt, defensively.)
 --
--- On a second login attempt the API returns 409 { requires_shift: true }.
--- Choosing "Shift" stores a new active_session_id and invalidates the old session.
+-- NOTE: the extra login-monitoring columns and the login_events audit table
+-- live in supabase/login_monitoring.sql — run that too.
 
 alter table users
   add column if not exists active_session_id text;

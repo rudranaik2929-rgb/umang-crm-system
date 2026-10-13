@@ -140,6 +140,10 @@ def _match_condition(row: Dict[str, Any], column: str, expr: str) -> bool:
         want_null = raw.lower() == "null"
         return (row.get(column) is None) == want_null
 
+    if op == "not":
+        # PostgREST `not.<op>.<value>`, e.g. `not.is.null` (column IS NOT NULL).
+        return not _match_condition(row, column, raw)
+
     if op == "in":
         inner = raw.strip()
         if inner.startswith("(") and inner.endswith(")"):

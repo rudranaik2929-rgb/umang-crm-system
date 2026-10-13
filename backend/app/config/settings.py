@@ -86,3 +86,30 @@ HOUSING_AUTO_SYNC_ENABLED = os.environ.get("HOUSING_AUTO_SYNC_ENABLED", "true").
 HOUSING_AUTO_SYNC_INTERVAL_SEC = int(os.environ.get("HOUSING_AUTO_SYNC_INTERVAL_SEC", "30"))
 CRON_SECRET = os.environ.get("CRON_SECRET", "")
 INTEGRATION_LEAD_START = os.environ.get("INTEGRATION_LEAD_START", "2026-08-01T00:00:00+05:30")
+
+# ---- Login monitoring ------------------------------------------------------
+# "Who's logged in now" panel is admin/manager only. Online = last request seen
+# within this many seconds (heartbeat + any API call updates it).
+ACTIVE_SESSION_ONLINE_SEC = int(os.environ.get("ACTIVE_SESSION_ONLINE_SEC", "300"))
+ACTIVE_SESSIONS_CACHE_TTL_SEC = int(os.environ.get("ACTIVE_SESSIONS_CACHE_TTL_SEC", "8"))
+
+# ---- Employee location quality / history -----------------------------------
+# A GPS fix worse than this many metres is rejected when we already have a
+# fresher, better reading (prevents "jumped to the next city" markers).
+LOCATION_MAX_ACCURACY_M = float(os.environ.get("LOCATION_MAX_ACCURACY_M", "150"))
+# Breadcrumbs older than this are pruned (opportunistically, hourly).
+LOCATION_HISTORY_RETENTION_DAYS = int(os.environ.get("LOCATION_HISTORY_RETENTION_DAYS", "90"))
+# A new breadcrumb is only written after this gap OR this much movement.
+LOCATION_HISTORY_MIN_GAP_SEC = int(os.environ.get("LOCATION_HISTORY_MIN_GAP_SEC", "60"))
+LOCATION_HISTORY_MIN_DISTANCE_M = float(os.environ.get("LOCATION_HISTORY_MIN_DISTANCE_M", "40"))
+# Reverse geocoding (area/address names) via OSM Nominatim — free, no API key.
+GEOCODE_ENABLED = os.environ.get("GEOCODE_ENABLED", "true").lower() not in {"0", "false", "no"}
+NOMINATIM_URL = os.environ.get(
+    "NOMINATIM_URL", "https://nominatim.openstreetmap.org/reverse"
+)
+GEOCODE_USER_AGENT = os.environ.get(
+    "GEOCODE_USER_AGENT", "UmangHometechCRM/1.0 (+https://umanghometechllp.in)"
+)
+GEOCODE_MIN_GAP_SEC = float(os.environ.get("GEOCODE_MIN_GAP_SEC", "1.1"))
+# Re-geocode only after the employee moves at least this far from the last fix.
+GEOCODE_MIN_MOVE_M = float(os.environ.get("GEOCODE_MIN_MOVE_M", "60"))
