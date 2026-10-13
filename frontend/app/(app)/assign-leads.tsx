@@ -354,11 +354,13 @@ export default function AssignLeads() {
   }, [filters, authLoading, user, canAccessAssign]);
 
   const employeeOptions = useMemo(
-    () => employees.map((e) => ({
-      key: e.employee_id,
-      label: e.name,
-      sublabel: roleLabel(e.role),
-    })),
+    () => employees
+      .filter((e) => e && e.employee_id)
+      .map((e) => ({
+        key: String(e.employee_id),
+        label: e.name || e.email || 'Employee',
+        sublabel: roleLabel(e.role),
+      })),
     [employees],
   );
 

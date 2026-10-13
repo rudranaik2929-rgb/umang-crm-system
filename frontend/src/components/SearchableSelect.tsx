@@ -45,11 +45,23 @@ export function SearchableSelect({
     const q = query.trim().toLowerCase();
     if (!q) return options;
     return options.filter((o) =>
-      o.label.toLowerCase().includes(q)
-      || (o.sublabel || '').toLowerCase().includes(q)
-      || o.key.toLowerCase().includes(q)
+      String(o.label ?? '').toLowerCase().includes(q)
+      || String(o.sublabel ?? '').toLowerCase().includes(q)
+      || String(o.key ?? '').toLowerCase().includes(q)
     );
   }, [options, query]);
+
+  // On web the picker used to portal to document.body, which sits *outside* any
+  // react-native-web Modal's DOM subtree. That modal's ModalFocusTrap re-focuses
+  // its own content on every focus event, so the nested search input could never
+  // keep focus (typing did nothing) and options felt unclickable. Portal into the
+  // top-most open modal instead so the picker lives inside the trap; fall back to
+  // document.body when the select is used outside a modal.
+  const webPortalTarget = useMemo(() => {
+    if (Platform.OS !== 'web' || typeof document === 'undefined') return null;
+    const modals = document.querySelectorAll('[aria-modal="true"]');
+    return modals.length ? (modals[modals.length - 1] as HTMLElement) : document.body;
+  }, [open]);
 
   const pick = (key: string) => {
     onChange(key);
@@ -130,9 +142,9 @@ export function SearchableSelect({
       </Pressable>
 
       {Platform.OS === 'web' && typeof document !== 'undefined'
-        ? (picker ? createPortal(
+        ? (picker && webPortalTarget ? createPortal(
             <View style={[styles.webOverlay, { zIndex: modalZIndex }]}>{picker}</View>,
-            document.body,
+            webPortalTarget,
           ) : null)
         : (
             <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
