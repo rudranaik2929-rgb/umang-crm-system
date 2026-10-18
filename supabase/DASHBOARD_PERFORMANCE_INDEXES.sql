@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — DASHBOARD PERFORMANCE INDEXES (run once in Supabase)
+-- UMANG PROPERTIES CRM — DASHBOARD PERFORMANCE INDEXES (run once in Supabase)
 -- Safe to re-run. Complements FINAL_RUN_THIS.sql.
 -- =====================================================================
 

@@ -1,4 +1,4 @@
-"""Umang Hometech LLP – Real Estate CRM Backend (Supabase Production)"""
+"""Umang Properties CRM – Real Estate CRM Backend (Supabase Production)"""
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends, UploadFile, File
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 from starlette.middleware.cors import CORSMiddleware
@@ -79,7 +79,7 @@ def _resolve_user_id_for_employee(employee: Dict[str, Any], email: str) -> Optio
 def normalize_email(email: Optional[str]) -> str:
     return (email or "").strip().lower()
 
-app = FastAPI(title="Umang Hometech LLP CRM")
+app = FastAPI(title="Umang Properties CRM")
 
 # Compress large JSON responses (e.g. full lead lists) to cut transfer time.
 app.add_middleware(GZipMiddleware, minimum_size=1024)
@@ -116,7 +116,7 @@ async def rate_limit_middleware(request: Request, call_next):
 
 @app.get("/")
 async def root_health():
-    return {"status": "online", "message": "Umang Hometech LLP CRM Backend is running", "timestamp": datetime.now().isoformat()}
+    return {"status": "online", "message": "Umang Properties CRM Backend is running", "timestamp": datetime.now().isoformat()}
 
 @app.get("/debug-config")
 async def debug_config():
@@ -3510,7 +3510,7 @@ class AIService:
                 {
                     "role": "system",
                     "content": """
-You are a professional real estate assistant for Umang Hometech LLP.
+You are a professional real estate assistant for Umang Properties CRM.
 Your goal:
 - Sound human and friendly
 - Ask about budget, location, requirement
@@ -11260,7 +11260,7 @@ async def stats_employees(cu: User=Depends(get_current_user)):
 
 # ---- Health & Wiring ----
 @api_router.get("/")
-async def root(): return {"app": "Umang Hometech LLP CRM", "status": "ok", "database": "supabase"}
+async def root(): return {"app": "Umang Properties CRM", "status": "ok", "database": "supabase"}
 
 from app.routers import register_routers
 

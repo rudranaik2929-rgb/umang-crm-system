@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — NOTIFICATIONS user_id FIX (run once in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — NOTIFICATIONS user_id FIX (run once in Supabase SQL Editor)
 -- Fixes slow dashboard: notifications stored with employee NAME instead of employee_id
 -- =====================================================================
 

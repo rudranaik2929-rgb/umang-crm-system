@@ -129,7 +129,7 @@ export default function Index() {
                 style={styles.logoImage}
                 resizeMode="contain"
               />
-              <Text style={styles.heroBrandTitle}>Umang Hometech LLP</Text>
+              <Text style={styles.heroBrandTitle}>Umang Properties CRM</Text>
             </View>
             <View style={{ flex: 1 }} />
             <Text style={styles.heroTitle}>Premium real estate{`\n`}workflow, end-to-end.</Text>
@@ -161,7 +161,7 @@ export default function Index() {
                 style={styles.logoImageSm}
                 resizeMode="contain"
               />
-              <Text style={[styles.brandText, { color: colors.text }]}>Umang Hometech LLP</Text>
+              <Text style={[styles.brandText, { color: colors.text }]}>Umang Properties CRM</Text>
             </View>
             <Pressable
               onPress={toggle}
@@ -174,8 +174,8 @@ export default function Index() {
 
           <View style={{ flex: 1, minHeight: 40 }} />
 
-          <Text style={[styles.kicker, { color: colors.textMuted }]}>UMANG HOMETECH</Text>
-          <Text style={[styles.headline, { color: colors.text }]}>Log in to Umang</Text>
+          <Text style={[styles.kicker, { color: colors.textMuted }]}>UMANG PROPERTIES CRM</Text>
+          <Text style={[styles.headline, { color: colors.text }]}>Log in to Umang Properties CRM</Text>
           <Text style={[styles.subhead, { color: colors.textSecondary, marginBottom: 20 }]}>
             Enter the email and password provided by your manager. Each employee has a separate login.
           </Text>
@@ -227,7 +227,7 @@ export default function Index() {
             {isLoggingIn ? (
               <ActivityIndicator color="#fff" size="small" />
             ) : (
-              <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to Umang</Text>
+              <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to Umang Properties CRM</Text>
             )}
           </Pressable>
 
@@ -247,7 +247,7 @@ export default function Index() {
 
           <View style={{ flex: 1 }} />
           <Text style={[styles.footer, { color: colors.textMuted }]}>
-            © {new Date().getFullYear()} Umang Hometech LLP — Enterprise CRM
+            © {new Date().getFullYear()} Umang Properties — Enterprise CRM
           </Text>
         </View>
       </ScrollView>

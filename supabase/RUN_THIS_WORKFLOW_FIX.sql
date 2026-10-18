@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — FINAL WORKFLOW + EMPLOYEE DASHBOARD FIX
+-- UMANG PROPERTIES CRM — FINAL WORKFLOW + EMPLOYEE DASHBOARD FIX
 -- Run this ONCE in Supabase SQL Editor (safe to re-run)
 --
 -- Fixes reported issues:

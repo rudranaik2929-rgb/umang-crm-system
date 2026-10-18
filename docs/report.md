@@ -1,6 +1,6 @@
-# Umang CRM — Full Project Audit Report
+# Umang Properties CRM — Full Project Audit Report
 
-**System:** Umang Hometech LLP Real Estate CRM  
+**System:** Umang Properties Real Estate CRM  
 **Repository:** `/Users/rohitjadhav/Documents/crm/umang-crm-system`  
 **Audit date:** 27 July 2026  
 **Audience:** Client stakeholders and engineering leadership  
@@ -25,7 +25,7 @@
 
 ## 1. Executive summary
 
-Umang CRM is a single-tenant real-estate workflow system: public/website and portal enquiries flow through assignment, telecaller/sales workspaces, exclusive dashboard status buckets (open / missed / ringing / follow-up / hot / cold / visited / not interested), booking and loan departments, broker pool, and push notifications. Production hosting is **Vercel (Expo web)** + **Render (FastAPI Docker)** + **Supabase (Postgres/PostgREST)**. Active API implementation lives in `backend/app/legacy_core.py` (aliased via `backend/app/main.py` and `backend/server.py`).
+Umang Properties CRM is a single-tenant real-estate workflow system: public/website and portal enquiries flow through assignment, telecaller/sales workspaces, exclusive dashboard status buckets (open / missed / ringing / follow-up / hot / cold / visited / not interested), booking and loan departments, broker pool, and push notifications. Production hosting is **Vercel (Expo web)** + **Render (FastAPI Docker)** + **Supabase (Postgres/PostgREST)**. Active API implementation lives in `backend/app/legacy_core.py` (aliased via `backend/app/main.py` and `backend/server.py`).
 
 ### Maturity
 
@@ -565,6 +565,6 @@ Auth, leads (public/import/filtered/assign/bulk), visits, bookings, loans, custo
 
 ## Closing statement
 
-Umang CRM is a **working, domain-aware production CRM** for a single real-estate organization, with thoughtful exclusive lead accounting and live portal integrations. It is **not yet production-grade in security posture or structural scalability**. Treat the Immediate roadmap as a **change-control gate**: remove demo backdoors and role self-elevation before further feature investment. Then invest in SQL-side aggregations and modularization so daily use at 2× load remains predictable.
+Umang Properties CRM is a **working, domain-aware production CRM** for a single real-estate organization, with thoughtful exclusive lead accounting and live portal integrations. It is **not yet production-grade in security posture or structural scalability**. Treat the Immediate roadmap as a **change-control gate**: remove demo backdoors and role self-elevation before further feature investment. Then invest in SQL-side aggregations and modularization so daily use at 2× load remains predictable.
 
 *End of report.*

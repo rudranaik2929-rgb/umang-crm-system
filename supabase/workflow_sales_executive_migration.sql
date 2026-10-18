@@ -1,5 +1,5 @@
 -- ============================================================================
--- Umang CRM — Sales Executive workflow (replaces Site Visits in navigation)
+-- Umang Properties CRM — Sales Executive workflow (replaces Site Visits in navigation)
 -- Run once in Supabase SQL Editor. Safe to re-run.
 -- ============================================================================
 

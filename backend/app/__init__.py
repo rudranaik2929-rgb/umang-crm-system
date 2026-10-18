@@ -1,1 +1,1 @@
-"""Backend application package for Umang Hometech LLP CRM."""
+"""Backend application package for Umang Properties CRM."""

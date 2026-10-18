@@ -1,4 +1,4 @@
--- Umang Hometech LLP Real Estate CRM Supabase schema
+-- Umang Properties CRM Supabase schema
 -- Run this file in the Supabase SQL Editor for a fresh setup or migration.
 -- Backend table names currently used by FastAPI:
 -- users, sessions, employees, leads, activities, visits, bookings, loans,

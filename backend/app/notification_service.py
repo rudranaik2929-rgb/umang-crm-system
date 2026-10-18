@@ -1,4 +1,4 @@
-"""Central notification service — in-app + FCM push for Umang CRM."""
+"""Central notification service — in-app + FCM push for Umang Properties CRM."""
 from __future__ import annotations
 
 import json

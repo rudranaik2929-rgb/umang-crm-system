@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — AUG 1 LEADS ONLY SCHEMA
+-- UMANG PROPERTIES CRM — AUG 1 LEADS ONLY SCHEMA
 -- ---------------------------------------------------------------------
 -- WHAT THIS DOES (safe to run even if you already ran the delete script):
 --   1. Deletes EVERY lead whose real enquiry date (external_created_at,

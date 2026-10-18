@@ -1,4 +1,4 @@
-"""Umang Hometech LLP – Real Estate CRM Backend"""
+"""Umang Properties CRM – Real Estate CRM Backend"""
 from fastapi import FastAPI, APIRouter, HTTPException, Request, Response, Depends
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -21,7 +21,7 @@ db = client[os.getenv('DB_NAME', 'umang')]
 
 
 
-app = FastAPI(title="Umang Hometech LLP CRM")
+app = FastAPI(title="Umang Properties CRM")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:8081", "http://localhost:19006", "http://localhost:3000", "https://umang-home-tech.vercel.app"],
@@ -932,7 +932,7 @@ async def stats_employees(current_user: User = Depends(get_current_user)):
 # ============================================================
 @api_router.get("/")
 async def root():
-    return {"app": "Umang Hometech LLP CRM", "status": "ok"}
+    return {"app": "Umang Properties CRM", "status": "ok"}
 
 # ============================================================
 # WIRING

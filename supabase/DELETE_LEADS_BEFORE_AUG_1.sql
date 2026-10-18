@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — DELETE ALL LEADS BEFORE 1 AUG 2026 (run ONCE in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — DELETE ALL LEADS BEFORE 1 AUG 2026 (run ONCE in Supabase SQL Editor)
 -- ---------------------------------------------------------------------
 -- What is deleted:
 --   Every lead whose real enquiry date (external_created_at, else created_at)

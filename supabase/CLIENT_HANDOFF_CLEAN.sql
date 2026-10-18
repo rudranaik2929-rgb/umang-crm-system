@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — CLIENT HANDOFF CLEAN (run ONCE in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — CLIENT HANDOFF CLEAN (run ONCE in Supabase SQL Editor)
 -- ---------------------------------------------------------------------
 -- KEEPS:
 --   customers (clients)

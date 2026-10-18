@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — EXCEL IMPORT AUTO-ASSIGN FIX (run in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — EXCEL IMPORT AUTO-ASSIGN FIX (run in Supabase SQL Editor)
 -- =====================================================================
 -- Safe to re-run (idempotent).
 --

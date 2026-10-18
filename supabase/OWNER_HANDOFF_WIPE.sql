@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — OWNER HANDOFF WIPE
+-- UMANG PROPERTIES CRM — OWNER HANDOFF WIPE
 -- ---------------------------------------------------------------------
 -- Run in Supabase SQL Editor BEFORE shipping a clean CRM to the owner.
 -- Safe to re-run. Does NOT drop tables, columns, indexes, or views.

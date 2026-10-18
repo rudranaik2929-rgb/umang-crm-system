@@ -1,5 +1,5 @@
 -- ============================================================================
--- Umang Hometech CRM - Remove all dummy / demo data
+-- Umang Properties CRM - Remove all dummy / demo data
 -- ----------------------------------------------------------------------------
 -- Run this ONCE in the Supabase SQL Editor.
 -- It deletes all demo workflow records (bookings, visits, loans, customers,

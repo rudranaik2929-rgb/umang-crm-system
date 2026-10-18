@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — EMPLOYEE LIVE GPS LOCATIONS
+-- UMANG PROPERTIES CRM — EMPLOYEE LIVE GPS LOCATIONS
 -- Run in Supabase SQL Editor (safe to re-run).
 -- =====================================================================
 -- One row per employee (latest location only). Backend upserts on

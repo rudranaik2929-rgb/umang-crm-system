@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG HOMETECH LLP CRM — FINAL SUPABASE SQL (run once in SQL Editor)
+-- UMANG PROPERTIES CRM — FINAL SUPABASE SQL (run once in SQL Editor)
 -- =====================================================================
 -- Safe to re-run (idempotent). Covers ALL current app features:
 --

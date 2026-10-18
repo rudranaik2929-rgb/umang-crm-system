@@ -59,7 +59,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
         />
         {!effectiveCollapsed && (
           <View style={{ flex: 1 }}>
-            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Hometech LLP</Text>
+            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Properties CRM</Text>
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>Real Estate CRM</Text>
           </View>
         )}

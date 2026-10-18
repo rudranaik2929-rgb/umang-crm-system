@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG HOMETECH LLP — CRM FINAL SCHEMA (single source of truth)
+-- UMANG PROPERTIES CRM — FINAL SCHEMA (single source of truth)
 -- ---------------------------------------------------------------------
 -- Run this ONCE in the Supabase SQL Editor. It is fully idempotent:
 -- safe to re-run on an existing project (create ... if not exists +

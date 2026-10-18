@@ -1,4 +1,4 @@
-/* Umang CRM — PWA shell + Firebase Cloud Messaging (single service worker) */
+/* Umang Properties CRM — PWA shell + Firebase Cloud Messaging (single service worker) */
 importScripts('/firebase-config.js');
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.14.1/firebase-messaging-compat.js');
@@ -47,7 +47,7 @@ if (firebaseConfig.apiKey && firebaseConfig.projectId) {
   const messaging = firebase.messaging();
 
   messaging.onBackgroundMessage((payload) => {
-    const title = payload.notification?.title || payload.data?.title || 'Umang CRM';
+    const title = payload.notification?.title || payload.data?.title || 'Umang Properties CRM';
     const body = payload.notification?.body || payload.data?.body || '';
     const leadId = payload.data?.lead_id || '';
     const url =

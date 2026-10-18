@@ -1,5 +1,5 @@
 -- =============================================================================
--- Umang CRM — Supabase UPDATE script (existing database)
+-- Umang Properties CRM — Supabase UPDATE script (existing database)
 -- Run once in: Supabase Dashboard → SQL Editor → Run
 -- Safe to re-run: uses IF NOT EXISTS / IF NOT EXISTS columns
 -- Full new project: use supabase/schema.sql instead

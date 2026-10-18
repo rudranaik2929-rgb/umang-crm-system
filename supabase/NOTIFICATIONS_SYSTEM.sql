@@ -1,5 +1,5 @@
 -- =============================================================================
--- Umang CRM — FINAL notification system (paste this whole file in Supabase SQL Editor)
+-- Umang Properties CRM — FINAL notification system (paste this whole file in Supabase SQL Editor)
 -- Safe to run many times. It creates tables, fixes data, and removes old spam.
 -- After running once, notifications work like this:
 --   * Assign 1 lead   -> employee gets ONE message: "Manager assigned 1 lead to you."

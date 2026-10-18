@@ -1,4 +1,4 @@
-# Umang CRM — Notification System
+# Umang Properties CRM — Notification System
 
 Production mobile-first notifications for telecallers and sales teams on **Android Chrome** and **installed PWA**.
 

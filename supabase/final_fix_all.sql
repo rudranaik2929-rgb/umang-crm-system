@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG HOMETECH LLP — FINAL FIX ALL (run once in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — FINAL FIX ALL (run once in Supabase SQL Editor)
 -- ---------------------------------------------------------------------
 -- 1. Ensures full schema + indexes (safe to re-run)
 -- 2. Backfills assignment + follow-up data so dashboard counts match lists

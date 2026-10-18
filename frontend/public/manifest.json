@@ -1,7 +1,7 @@
 {
-  "name": "Umang CRM",
-  "short_name": "Umang CRM",
-  "description": "Umang Hometech LLP — mobile CRM for telecallers and sales teams",
+  "name": "Umang Properties CRM",
+  "short_name": "Umang Properties CRM",
+  "description": "Umang Properties CRM — mobile CRM for telecallers and sales teams",
   "start_url": "/",
   "display": "standalone",
   "orientation": "portrait-primary",

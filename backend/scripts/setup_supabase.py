@@ -157,7 +157,7 @@ SQLS = [
     );""",
     # Seed admin user
     """INSERT INTO users (user_id, email, password_hash, name, role)
-       VALUES ('user_admin001', 'htshpatil13@gmail.com', 'umang@admin', 'Umang Hometech LLP', 'admin')
+       VALUES ('user_admin001', 'htshpatil13@gmail.com', 'umang@admin', 'Umang Properties CRM', 'admin')
        ON CONFLICT (user_id) DO UPDATE SET password_hash = 'umang@admin';""",
     # Seed demo employees
     """INSERT INTO employees (employee_id, name, email, phone, role, department)

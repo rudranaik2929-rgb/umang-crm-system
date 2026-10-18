@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — FULL CLEAN START FRESH (run ONCE in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — FULL CLEAN START FRESH (run ONCE in Supabase SQL Editor)
 -- ---------------------------------------------------------------------
 -- Clears ALL dashboard numbers to 0:
 --   loans, bookings, follow-ups, assignments, employee stats, activities

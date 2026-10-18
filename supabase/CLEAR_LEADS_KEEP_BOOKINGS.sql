@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — CLEAR ALL LEADS, KEEP BOOKINGS (run ONCE in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — CLEAR ALL LEADS, KEEP BOOKINGS (run ONCE in Supabase SQL Editor)
 -- ---------------------------------------------------------------------
 -- KEEPS:
 --   bookings (booking details — NOT deleted)

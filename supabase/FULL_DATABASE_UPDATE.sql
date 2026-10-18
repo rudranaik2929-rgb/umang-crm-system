@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG HOMETECH LLP CRM — FULL DATABASE UPDATE (run once in Supabase)
+-- UMANG PROPERTIES CRM — FULL DATABASE UPDATE (run once in Supabase)
 -- =====================================================================
 -- Safe to re-run (idempotent). Covers ALL current app features:
 --

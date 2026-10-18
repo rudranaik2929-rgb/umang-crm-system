@@ -145,7 +145,7 @@ export function usePushNotifications(enabled: boolean, onForegroundMessage?: () 
 
         unsubscribe = onMessage(getMessaging(app), (payload) => {
           const title =
-            payload.notification?.title || String(payload.data?.title || 'Umang CRM');
+            payload.notification?.title || String(payload.data?.title || 'Umang Properties CRM');
           const body =
             payload.notification?.body || String(payload.data?.body || '');
           showBrowserNotification(title, body, String(payload.data?.notification_id || ''));

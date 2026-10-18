@@ -1,5 +1,5 @@
 -- ============================================================================
--- Umang CRM — Lead call / ringing status
+-- Umang Properties CRM — Lead call / ringing status
 -- Run once in Supabase SQL Editor (safe to re-run).
 -- Stores telecaller outcome: ringing, out_of_service, call_back, disconnect.
 -- ============================================================================

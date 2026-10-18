@@ -1,5 +1,5 @@
 -- ============================================================================
--- Umang CRM — Employee login columns (run once in Supabase SQL Editor)
+-- Umang Properties CRM — Employee login columns (run once in Supabase SQL Editor)
 -- ----------------------------------------------------------------------------
 -- Fixes "Invalid email or password" after manager creates an employee.
 -- Adds every column the backend needs to store login email, password hash,

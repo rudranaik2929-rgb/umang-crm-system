@@ -44,7 +44,7 @@ export default function Enquire() {
             resizeMode="contain" 
           />
           <View>
-            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Hometech LLP</Text>
+            <Text style={[styles.brandTitle, { color: colors.text }]}>Umang Properties CRM</Text>
             <Text style={[styles.brandSub, { color: colors.textMuted }]}>New Property Enquiry</Text>
           </View>
         </View>

@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — BOOKINGS BROKERAGE DASHBOARD FIX (run ONCE in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — BOOKINGS BROKERAGE DASHBOARD FIX (run ONCE in Supabase SQL Editor)
 -- ---------------------------------------------------------------------
 -- WHY THIS EXISTS:
 --   The Dashboard reads brokerage_amount, brokerage_received AND

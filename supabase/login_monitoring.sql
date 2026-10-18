@@ -1,5 +1,5 @@
 -- ============================================================================
--- UMANG CRM — LOGIN MONITORING (single-device metadata + audit log)
+-- UMANG PROPERTIES CRM — LOGIN MONITORING (single-device metadata + audit log)
 -- Run once in Supabase SQL Editor. Safe to re-run (IF NOT EXISTS everywhere).
 -- ----------------------------------------------------------------------------
 -- Extends the existing single-device lock (SINGLE_DEVICE_LOGIN.sql) with the

@@ -1,5 +1,5 @@
 -- ============================================================================
--- UMANG CRM — EMPLOYEE LOCATION QUALITY + HISTORY
+-- UMANG PROPERTIES CRM — EMPLOYEE LOCATION QUALITY + HISTORY
 -- Run once in Supabase SQL Editor. Safe to re-run (IF NOT EXISTS everywhere).
 -- ----------------------------------------------------------------------------
 -- Adds:

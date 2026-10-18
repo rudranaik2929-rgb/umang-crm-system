@@ -1,5 +1,5 @@
 -- =====================================================================
--- UMANG CRM — EMPLOYEE LOCATION COLUMN (run in Supabase SQL Editor)
+-- UMANG PROPERTIES CRM — EMPLOYEE LOCATION COLUMN (run in Supabase SQL Editor)
 -- =====================================================================
 -- Safe to re-run (idempotent).
 --

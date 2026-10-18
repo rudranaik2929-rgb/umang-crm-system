@@ -1,5 +1,5 @@
 -- ============================================================================
--- Umang CRM — Booking cost fields + hide auto skeleton rows cleanup
+-- Umang Properties CRM — Booking cost fields + hide auto skeleton rows cleanup
 -- Run once in Supabase SQL Editor (safe to re-run).
 -- ============================================================================
 
