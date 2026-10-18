@@ -4096,32 +4096,37 @@ def normalize_booking_completed_tasks(booking: Dict[str, Any]) -> List[str]:
 def booking_current_stage_key(booking: Dict[str, Any]) -> Optional[str]:
     """The single pipeline box a booking currently sits in (exclusive).
 
-    A booking is counted in exactly ONE box = the FIRST pipeline task that is
-    still pending ("the stage the file is being worked on"). Completing a task
-    moves the booking out of its box into the next one, e.g. completing
-    "Login File" moves it into "Sanctioned" (Login File −1, Sanctioned +1).
+    A booking is counted in exactly ONE box = the FURTHEST pipeline step it has
+    completed. So a file whose bill is submitted shows under "Bill Submitted",
+    a sanctioned file under "Sanctioned", a logged-in file under "Login File",
+    etc. It only leaves a box once the NEXT step is completed — e.g. a file in
+    "Login File" moves to "Sanctioned" when its sanction is done
+    (Login File −1, Sanctioned +1).
 
-    ``status`` is honoured too: a booking whose status is already a pipeline
-    stage is treated as having reached it, so records written before
-    ``completed_tasks`` existed still land in the correct box.
+    Both representations are accepted: ``completed_tasks`` may hold task keys
+    ("bill_submitted") or stage statuses ("bill submitted"), and ``status`` is
+    honoured too, so records written before ``completed_tasks`` existed still
+    land in the correct box.
 
-    Returns ``None`` for cancelled / legacy-skeleton bookings, or when every
-    task is done (nothing left pending, so it no longer appears in a box).
+    Returns ``None`` for cancelled / legacy-skeleton bookings, or for bookings
+    that have not reached any step yet (brand new files are not in a pipeline
+    box — they show under Total Leads / Active Bookings).
     """
     if is_cancelled_booking_record(booking) or is_legacy_skeleton_booking(booking):
         return None
-    completed = set(normalize_booking_completed_tasks(booking))
-    reached = -1
-    for index, key in enumerate(BOOKING_TASK_KEYS):
-        if key in completed:
-            reached = max(reached, index)
-    status_key = BOOKING_TASK_KEY_BY_STATUS.get(str(booking.get("status") or "").lower().strip())
+    reached = set()
+    for entry in normalize_booking_completed_tasks(booking):
+        low = entry.lower()
+        key = low if low in BOOKING_TASK_KEYS else BOOKING_TASK_KEY_BY_STATUS.get(low)
+        if key:
+            reached.add(BOOKING_TASK_KEYS.index(key))
+    status_raw = str(booking.get("status") or "").lower().strip()
+    status_key = BOOKING_TASK_KEY_BY_STATUS.get(status_raw) or (status_raw if status_raw in BOOKING_TASK_KEYS else None)
     if status_key:
-        reached = max(reached, BOOKING_TASK_KEYS.index(status_key))
-    next_index = reached + 1
-    if next_index < len(BOOKING_TASK_KEYS):
-        return BOOKING_TASK_KEYS[next_index]
-    return None
+        reached.add(BOOKING_TASK_KEYS.index(status_key))
+    if not reached:
+        return None
+    return BOOKING_TASK_KEYS[max(reached)]
 
 
 def booking_matches_task(booking: Dict[str, Any], task_key: str) -> bool:

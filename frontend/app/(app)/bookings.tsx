@@ -69,9 +69,10 @@ function completedTasksFor(booking: any): string[] {
 export default function Bookings() {
   const { colors } = useTheme();
   const { user } = useAuth();
-  const params = useLocalSearchParams<{ task?: string }>();
+  const params = useLocalSearchParams<{ task?: string; box?: string }>();
   const router = useRouter();
   const taskFilter = String(params.task || '').trim() as BookingTaskKey | '';
+  const boxFilter = String(params.box || '').trim().toLowerCase();
   const cachedBookings = getSnapshot<any>('bookings-page');
   const [bookings, setBookings] = useState<any[]>(cachedBookings?.bookings ?? []);
   const [leads, setLeads] = useState<any[]>(cachedBookings?.leads ?? []);
@@ -198,6 +199,11 @@ export default function Bookings() {
   const filteredActiveBookings = taskFilter && BOOKING_TASKS.some((t) => t.key === taskFilter)
     ? activeBookings.filter((b) => bookingMatchesTask(b, taskFilter))
     : activeBookings;
+  // Box filters: `total` = every booking file (incl. cancelled); `active` = non-cancelled.
+  const showAllBox = boxFilter === 'total';
+  const showActiveOnlyBox = boxFilter === 'active';
+  const boxNarrowed = Boolean(taskFilter) || showActiveOnlyBox;
+  const listedBookings = showAllBox ? bookings : filteredActiveBookings;
 
   const renderBookingCard = (b: any, cancelled = false) => {
     const rawAgreement = b.agreement_status || 'pending';
@@ -539,8 +545,11 @@ export default function Bookings() {
           <View style={styles.taskSummaryGrid}>
             <Pressable
               testID="booking-summary-total"
-              onPress={() => router.replace('/(app)/bookings' as any)}
-              style={[styles.taskSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={() => router.replace((showAllBox ? '/(app)/bookings' : '/(app)/bookings?box=total') as any)}
+              style={[styles.taskSummaryCard, {
+                backgroundColor: showAllBox ? colors.info + '14' : colors.surface,
+                borderColor: showAllBox ? colors.info : colors.border,
+              }]}
             >
               <Ionicons name="albums-outline" size={16} color={colors.info} />
               <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', marginTop: 6 }}>TOTAL LEADS</Text>
@@ -548,8 +557,11 @@ export default function Bookings() {
             </Pressable>
             <Pressable
               testID="booking-summary-active"
-              onPress={() => router.replace('/(app)/bookings' as any)}
-              style={[styles.taskSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+              onPress={() => router.replace((showActiveOnlyBox ? '/(app)/bookings' : '/(app)/bookings?box=active') as any)}
+              style={[styles.taskSummaryCard, {
+                backgroundColor: showActiveOnlyBox ? colors.warning + '14' : colors.surface,
+                borderColor: showActiveOnlyBox ? colors.warning : colors.border,
+              }]}
             >
               <Ionicons name="bookmark-outline" size={16} color={colors.warning} />
               <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', marginTop: 6 }}>ACTIVE BOOKINGS</Text>
@@ -561,7 +573,7 @@ export default function Bookings() {
                 <Pressable
                   key={task.key}
                   testID={`booking-task-summary-${task.key}`}
-                  onPress={() => router.replace(taskFilter === task.key ? '/(app)/bookings' as any : `/(app)/bookings?task=${task.key}` as any)}
+                  onPress={() => router.replace((taskFilter === task.key ? '/(app)/bookings' : `/(app)/bookings?task=${task.key}`) as any)}
                   style={[styles.taskSummaryCard, {
                     backgroundColor: active ? task.color + '14' : colors.surface,
                     borderColor: active ? task.color : colors.border,
@@ -606,24 +618,45 @@ export default function Bookings() {
             />
           ) : (
             <>
-              {filteredActiveBookings.length > 0 ? (
+              {showAllBox ? (
                 <>
                   <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>
-                    ACTIVE BOOKINGS ({filteredActiveBookings.length}{taskFilter ? ` · ${BOOKING_TASKS.find((t) => t.key === taskFilter)?.label}` : ''})
+                    ALL BOOKINGS ({listedBookings.length})
                   </Text>
-                  {filteredActiveBookings.map((b) => renderBookingCard(b, false))}
+                  {listedBookings.length > 0 ? (
+                    listedBookings.map((b) => renderBookingCard(b, isCancelledBooking(b)))
+                  ) : (
+                    <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', paddingVertical: 24 }}>
+                      No bookings yet.
+                    </Text>
+                  )}
                 </>
-              ) : taskFilter ? (
-                <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', paddingVertical: 24 }}>
-                  No bookings in {BOOKING_TASKS.find((t) => t.key === taskFilter)?.label || taskFilter}.
-                </Text>
-              ) : null}
-              {cancelledBookings.length > 0 ? (
+              ) : (
                 <>
-                  <Text style={[styles.sectionTitle, { color: colors.textMuted, marginTop: 12 }]}>CANCELLED — NOT INTERESTED ({cancelledBookings.length})</Text>
-                  {cancelledBookings.map((b) => renderBookingCard(b, true))}
+                  {filteredActiveBookings.length > 0 ? (
+                    <>
+                      <Text style={[styles.sectionTitle, { color: colors.textMuted }]}>
+                        ACTIVE BOOKINGS ({filteredActiveBookings.length}{taskFilter ? ` · ${BOOKING_TASKS.find((t) => t.key === taskFilter)?.label}` : ''})
+                      </Text>
+                      {filteredActiveBookings.map((b) => renderBookingCard(b, false))}
+                    </>
+                  ) : taskFilter ? (
+                    <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', paddingVertical: 24 }}>
+                      No bookings in {BOOKING_TASKS.find((t) => t.key === taskFilter)?.label || taskFilter}.
+                    </Text>
+                  ) : showActiveOnlyBox ? (
+                    <Text style={{ color: colors.textMuted, fontSize: 13, textAlign: 'center', paddingVertical: 24 }}>
+                      No active bookings.
+                    </Text>
+                  ) : null}
+                  {!boxNarrowed && cancelledBookings.length > 0 ? (
+                    <>
+                      <Text style={[styles.sectionTitle, { color: colors.textMuted, marginTop: 12 }]}>CANCELLED — NOT INTERESTED ({cancelledBookings.length})</Text>
+                      {cancelledBookings.map((b) => renderBookingCard(b, true))}
+                    </>
+                  ) : null}
                 </>
-              ) : null}
+              )}
             </>
           )}
           </>
