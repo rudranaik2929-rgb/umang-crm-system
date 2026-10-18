@@ -115,3 +115,50 @@ def test_booking_new_bookings_box_matches_popup():
     stats = main.compute_booking_employee_stats(employee, bookings)
     popup = main.filter_new_bookings([b for b in bookings if b.get("booking_officer_id") == "emp1"])
     assert stats["emp_new_leads"] == len(popup) == 2
+
+
+def test_booking_pipeline_boxes_are_exclusive_and_move_forward():
+    """Completing Login File moves a file into Sanctioned (Login File −1,
+    Sanctioned +1) instead of counting it in both boxes."""
+    fresh = {"booking_id": "b1", "status": "active", "completed_tasks": []}
+    logged_in = {"booking_id": "b2", "status": "login file", "completed_tasks": ["login_file"]}
+    sanctioned = {
+        "booking_id": "b3",
+        "status": "sanctioned",
+        "completed_tasks": ["login_file", "sanctioned"],
+    }
+
+    assert main.booking_current_stage_key(fresh) == "login_file"
+    assert main.booking_current_stage_key(logged_in) == "sanctioned"
+    assert main.booking_current_stage_key(sanctioned) == "registration"
+
+    counts = main.compute_booking_task_counts([fresh, logged_in, sanctioned])
+    assert counts["login_file"] == 1
+    assert counts["sanctioned"] == 1
+    assert counts["registration"] == 1
+    # Exclusive: every active booking lands in exactly one box.
+    assert sum(counts.values()) == 3
+
+
+def test_booking_box_count_matches_filtered_list_and_ignores_cancelled():
+    rows = [
+        {"booking_id": "b1", "status": "active", "completed_tasks": []},
+        {"booking_id": "b2", "status": "active", "completed_tasks": []},
+        {"booking_id": "b3", "status": "sanctioned", "completed_tasks": ["login_file", "sanctioned"]},
+        {"booking_id": "b4", "status": "cancellation", "agreement_status": "cancelled", "completed_tasks": []},
+    ]
+    counts = main.compute_booking_task_counts(rows)
+    listed = main.filter_bookings_by_task(rows, "login_file")
+    assert counts["login_file"] == len(listed) == 2
+    assert {b["booking_id"] for b in listed} == {"b1", "b2"}
+    assert main.booking_current_stage_key(rows[3]) is None
+
+
+def test_booking_fully_completed_leaves_all_boxes():
+    done = {
+        "booking_id": "b1",
+        "status": "amount received",
+        "completed_tasks": list(main.BOOKING_TASK_KEYS),
+    }
+    assert main.booking_current_stage_key(done) is None
+    assert sum(main.compute_booking_task_counts([done]).values()) == 0

@@ -9,7 +9,6 @@ export const BOOKING_TASKS = [
 
 export type BookingTaskKey = typeof BOOKING_TASKS[number]['key'];
 
-const STATUS_BY_KEY = Object.fromEntries(BOOKING_TASKS.map((t) => [t.key, t.status]));
 const KEY_BY_STATUS = Object.fromEntries(BOOKING_TASKS.map((t) => [t.status, t.key]));
 
 export function normalizeCompletedTasks(booking: any): string[] {
@@ -21,12 +20,33 @@ export function normalizeCompletedTasks(booking: any): string[] {
   return key ? [key] : [];
 }
 
-export function bookingMatchesTask(booking: any, taskKey: string): boolean {
+/**
+ * The single pipeline box a booking currently sits in (exclusive), mirroring
+ * the backend `booking_current_stage_key`. It is the FIRST task that is still
+ * pending, so completing "Login File" moves the file into "Sanctioned"
+ * (Login File −1, Sanctioned +1) instead of counting it in both.
+ *
+ * Returns `null` for cancelled bookings, or once every task is done.
+ */
+export function bookingCurrentStageKey(booking: any): string | null {
   const status = String(booking?.status || '').toLowerCase().trim();
-  if (status === 'cancellation' || status === 'cancelled') return false;
-  const completed = normalizeCompletedTasks(booking);
-  if (completed.includes(taskKey)) return true;
-  return STATUS_BY_KEY[taskKey] === status;
+  if (status === 'cancellation' || status === 'cancelled') return null;
+  if (String(booking?.agreement_status || '').toLowerCase().trim() === 'cancelled') return null;
+  const completed = new Set(normalizeCompletedTasks(booking));
+  let reached = -1;
+  BOOKING_TASKS.forEach((task, index) => {
+    if (completed.has(task.key)) reached = Math.max(reached, index);
+  });
+  const statusKey = KEY_BY_STATUS[status];
+  if (statusKey) {
+    reached = Math.max(reached, BOOKING_TASKS.findIndex((task) => task.key === statusKey));
+  }
+  const nextIndex = reached + 1;
+  return nextIndex < BOOKING_TASKS.length ? BOOKING_TASKS[nextIndex].key : null;
+}
+
+export function bookingMatchesTask(booking: any, taskKey: string): boolean {
+  return bookingCurrentStageKey(booking) === taskKey;
 }
 
 export function countBookingTasks(bookings: any[]): Record<BookingTaskKey, number> {

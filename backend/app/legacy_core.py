@@ -4093,17 +4093,47 @@ def normalize_booking_completed_tasks(booking: Dict[str, Any]) -> List[str]:
     return [key] if key else []
 
 
-def booking_matches_task(booking: Dict[str, Any], task_key: str) -> bool:
+def booking_current_stage_key(booking: Dict[str, Any]) -> Optional[str]:
+    """The single pipeline box a booking currently sits in (exclusive).
+
+    A booking is counted in exactly ONE box = the FIRST pipeline task that is
+    still pending ("the stage the file is being worked on"). Completing a task
+    moves the booking out of its box into the next one, e.g. completing
+    "Login File" moves it into "Sanctioned" (Login File −1, Sanctioned +1).
+
+    ``status`` is honoured too: a booking whose status is already a pipeline
+    stage is treated as having reached it, so records written before
+    ``completed_tasks`` existed still land in the correct box.
+
+    Returns ``None`` for cancelled / legacy-skeleton bookings, or when every
+    task is done (nothing left pending, so it no longer appears in a box).
+    """
     if is_cancelled_booking_record(booking) or is_legacy_skeleton_booking(booking):
-        return False
+        return None
+    completed = set(normalize_booking_completed_tasks(booking))
+    reached = -1
+    for index, key in enumerate(BOOKING_TASK_KEYS):
+        if key in completed:
+            reached = max(reached, index)
+    status_key = BOOKING_TASK_KEY_BY_STATUS.get(str(booking.get("status") or "").lower().strip())
+    if status_key:
+        reached = max(reached, BOOKING_TASK_KEYS.index(status_key))
+    next_index = reached + 1
+    if next_index < len(BOOKING_TASK_KEYS):
+        return BOOKING_TASK_KEYS[next_index]
+    return None
+
+
+def booking_matches_task(booking: Dict[str, Any], task_key: str) -> bool:
+    """True only when ``task_key`` is the booking's CURRENT pipeline box.
+
+    Boxes are mutually exclusive (see ``booking_current_stage_key``), so a file
+    that advanced past "Login File" no longer matches it.
+    """
     key = (task_key or "").strip().lower()
     if key not in BOOKING_TASK_KEYS:
         return False
-    completed = normalize_booking_completed_tasks(booking)
-    if key in completed:
-        return True
-    status = str(booking.get("status") or "").lower().strip()
-    return BOOKING_TASK_STATUS_BY_KEY.get(key) == status
+    return booking_current_stage_key(booking) == key
 
 
 def filter_bookings_by_task(bookings: List[Dict[str, Any]], task_key: str) -> List[Dict[str, Any]]:

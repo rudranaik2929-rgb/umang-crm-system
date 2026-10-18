@@ -535,8 +535,26 @@ export default function Bookings() {
         }
       />
       <ScrollView contentContainerStyle={{ padding: 24, gap: 14 }}>
-        {!loading && activeBookings.length > 0 ? (
+        {!loading && bookings.length > 0 ? (
           <View style={styles.taskSummaryGrid}>
+            <Pressable
+              testID="booking-summary-total"
+              onPress={() => router.replace('/(app)/bookings' as any)}
+              style={[styles.taskSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            >
+              <Ionicons name="albums-outline" size={16} color={colors.info} />
+              <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', marginTop: 6 }}>TOTAL LEADS</Text>
+              <Text style={{ color: colors.info, fontSize: 22, fontWeight: '800', marginTop: 2 }}>{bookings.length}</Text>
+            </Pressable>
+            <Pressable
+              testID="booking-summary-active"
+              onPress={() => router.replace('/(app)/bookings' as any)}
+              style={[styles.taskSummaryCard, { backgroundColor: colors.surface, borderColor: colors.border }]}
+            >
+              <Ionicons name="bookmark-outline" size={16} color={colors.warning} />
+              <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', marginTop: 6 }}>ACTIVE BOOKINGS</Text>
+              <Text style={{ color: colors.warning, fontSize: 22, fontWeight: '800', marginTop: 2 }}>{activeBookings.length}</Text>
+            </Pressable>
             {BOOKING_TASKS.map((task) => {
               const active = taskFilter === task.key;
               return (
