@@ -176,6 +176,62 @@ def test_second_device_must_pass_otp_again_and_then_shift(client, mailbox):
     assert shifted.json()["user"]["email"] == "mukesh@umang.com"
 
 
+class _FakeSMTP:
+    """Stand-in for smtplib.SMTP that records what would have been sent."""
+
+    instances: list = []
+
+    def __init__(self, host, port, timeout=None):
+        self.host = host
+        self.port = port
+        self.messages = []
+        self.logged_in = None
+        _FakeSMTP.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def ehlo(self):
+        pass
+
+    def starttls(self, context=None):
+        pass
+
+    def login(self, user, password):
+        self.logged_in = (user, password)
+
+    def send_message(self, msg):
+        self.messages.append(msg)
+
+
+def test_send_otp_email_delivers_to_the_administration_mailbox(monkeypatch):
+    monkeypatch.setenv("SMTP_USER", ADMIN_MAILBOX)
+    monkeypatch.setenv("SMTP_PASSWORD", "app-password")
+    monkeypatch.delenv("OTP_EMAIL", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    _FakeSMTP.instances = []
+    monkeypatch.setattr(main.email_service.smtplib, "SMTP", _FakeSMTP)
+
+    sent = main.email_service.send_otp_email("123456", "mukesh@umang.com", "Mobile · Chrome")
+    assert sent is True
+
+    assert len(_FakeSMTP.instances) == 1
+    server = _FakeSMTP.instances[0]
+    assert server.host == "smtp.gmail.com"
+    assert server.port == 587
+    assert server.logged_in == (ADMIN_MAILBOX, "app-password")
+
+    msg = server.messages[0]
+    assert msg["To"] == ADMIN_MAILBOX
+    assert "123456" in msg["Subject"]
+    plain = msg.get_body(preferencelist=("plain",)).get_content()
+    assert "123456" in plain
+    assert "mukesh@umang.com" in plain
+
+
 def test_email_service_defaults_to_the_administration_mailbox(monkeypatch):
     for var in ("OTP_EMAIL", "RESEND_API_KEY", "SMTP_USER", "SMTP_PASSWORD"):
         monkeypatch.delenv(var, raising=False)
