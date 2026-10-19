@@ -6,7 +6,7 @@ from starlette.middleware.gzip import GZipMiddleware
 from concurrent.futures import ThreadPoolExecutor
 import asyncio
 import threading
-import uuid, logging, random, os, httpx, csv, io, openpyxl
+import uuid, logging, random, os, httpx, csv, io, openpyxl, secrets
 import base64, hashlib, hmac, json, re, time, math
 from io import BytesIO
 from passlib.context import CryptContext
@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from app import notification_service as notify_svc
+from app import email_service
 from app.fcm_client import init_firebase, set_invalid_token_handler
 from app.config.settings import *  # noqa: F401,F403
 from app.core.cache import *  # noqa: F401,F403
@@ -2884,8 +2885,185 @@ def _authenticate_credentials(email: str, password: str) -> Dict[str, Any]:
     return u
 
 
+# ---------------------------------------------------------------------------
+# Login OTP — every login code is delivered to the administration mailbox
+# ---------------------------------------------------------------------------
+# Plan B: admin *and* every employee must pass a one-time code on every fresh
+# sign-in. The code NEVER goes to the person typing the password — it always
+# goes to a single administration mailbox (OTP_EMAIL, default
+# Umanghometechllp@gmail.com). Staying logged in on the same device is handled
+# by the normal session cookie, so no OTP is needed until they sign in again
+# (or sign in from another device).
+#
+# OTP is enforced only once a mail transport is actually configured. Until then
+# the CRM keeps working with the normal login (self-healing: set SMTP_USER +
+# SMTP_PASSWORD, or RESEND_API_KEY, and OTP turns on automatically). This avoids
+# locking everyone out of the CRM while mail credentials are being set up.
+OTP_LOGIN_ENABLED = (os.environ.get("OTP_LOGIN_ENABLED", "true").strip().lower() not in ("0", "false", "no", "off"))
+try:
+    OTP_TTL_SECONDS = max(60, int(os.environ.get("OTP_TTL_SECONDS") or "600"))
+except (TypeError, ValueError):
+    OTP_TTL_SECONDS = 600
+try:
+    OTP_MAX_ATTEMPTS = max(1, int(os.environ.get("OTP_MAX_ATTEMPTS") or "5"))
+except (TypeError, ValueError):
+    OTP_MAX_ATTEMPTS = 5
+
+_OTP_CHALLENGES: Dict[str, Dict[str, Any]] = {}
+_OTP_LOCK = threading.Lock()
+
+
+def _otp_enforced() -> bool:
+    """OTP is on only when it is enabled *and* mail is actually configured.
+
+    Without a mail transport the code could never reach the administrator, so we
+    keep the normal login working instead of locking everyone out. The moment
+    SMTP/RESEND is configured, OTP turns itself on.
+    """
+    return bool(OTP_LOGIN_ENABLED and email_service.email_configured())
+
+
+def _otp_hash_for(challenge_id: str, code: str) -> str:
+    return hashlib.sha256(f"{challenge_id}:{code}:{JWT_SECRET}".encode("utf-8")).hexdigest()
+
+
+def _new_otp_challenge(user: Dict[str, Any], *, device_label=None, ip=None, user_agent=None) -> Dict[str, str]:
+    code = f"{secrets.randbelow(1000000):06d}"
+    challenge_id = gen_id("otp")
+    now = time.time()
+    entry = {
+        "challenge_id": challenge_id,
+        "code_hash": _otp_hash_for(challenge_id, code),
+        "user": user,
+        "email": user.get("email"),
+        "created_at": now,
+        "expires_at": now + OTP_TTL_SECONDS,
+        "attempts": 0,
+        "consumed": False,
+        "device_label": device_label,
+        "ip": ip,
+        "user_agent": user_agent,
+    }
+    with _OTP_LOCK:
+        for stale in [k for k, v in _OTP_CHALLENGES.items() if v["expires_at"] < now]:
+            _OTP_CHALLENGES.pop(stale, None)
+        _OTP_CHALLENGES[challenge_id] = entry
+    return {"challenge_id": challenge_id, "code": code}
+
+
+def _check_otp(challenge_id: str, code: str) -> Dict[str, Any]:
+    """Validate a code without consuming it (so a Shift retry can reuse it)."""
+    with _OTP_LOCK:
+        entry = _OTP_CHALLENGES.get((challenge_id or "").strip())
+    if not entry:
+        raise HTTPException(400, "This login code has expired. Please sign in again.")
+    if entry["consumed"] or entry["expires_at"] < time.time():
+        raise HTTPException(400, "This login code has expired. Please sign in again.")
+    if entry["attempts"] >= OTP_MAX_ATTEMPTS:
+        raise HTTPException(429, "Too many attempts. Please sign in again.")
+    entry["attempts"] += 1
+    if not secrets.compare_digest(_otp_hash_for(challenge_id, (code or "").strip()), entry["code_hash"]):
+        raise HTTPException(401, "Incorrect login code. Please check the email and try again.")
+    return entry
+
+
+def _consume_otp(challenge_id: str) -> None:
+    with _OTP_LOCK:
+        entry = _OTP_CHALLENGES.get(challenge_id or "")
+        if entry:
+            entry["consumed"] = True
+
+
+class OtpRequestBodyModel(BaseModel):
+    email: str
+    password: str = ""
+    device_label: Optional[str] = None
+
+
+class OtpVerifyBodyModel(BaseModel):
+    challenge_id: str
+    code: str
+    device_label: Optional[str] = None
+    force_shift: Optional[bool] = False
+
+
+def _mask_email(email: Optional[str]) -> str:
+    email = email or ""
+    local, sep, domain = email.partition("@")
+    if not sep:
+        return email
+    if len(local) <= 2:
+        shown = (local[:1] or "") + "*"
+    else:
+        shown = local[0] + "*" * (len(local) - 2) + local[-1]
+    return f"{shown}@{domain}"
+
+
+@api_router.post("/auth/otp/request")
+async def auth_otp_request(p: OtpRequestBodyModel, request: Request):
+    """Step 1 — verify email/password, then email a code to the ADMIN mailbox."""
+    if not OTP_LOGIN_ENABLED:
+        raise HTTPException(403, "OTP login is disabled. Use the standard login.")
+    email = normalize_email(p.email)
+    user = _authenticate_credentials(email, p.password or "")
+    label = device_label_from_request(request, p.device_label)
+    if not email_service.email_configured():
+        logging.error("OTP requested for %s but no mail transport is configured", email)
+        raise HTTPException(
+            503,
+            "Email is not configured on the server, so the login code cannot be sent. "
+            "An administrator must set SMTP_USER + SMTP_PASSWORD (Gmail App Password) "
+            "or RESEND_API_KEY in the backend environment.",
+        )
+    challenge = _new_otp_challenge(
+        user,
+        device_label=label,
+        ip=client_ip(request),
+        user_agent=request.headers.get("user-agent"),
+    )
+    sent = await asyncio.to_thread(email_service.send_otp_email, challenge["code"], email, label)
+    if not sent:
+        logging.warning("OTP email delivery failed for %s", email)
+        raise HTTPException(502, "Could not send the login code email. Please try again in a moment.")
+    return {
+        "otp_required": True,
+        "challenge_id": challenge["challenge_id"],
+        "sent_to": email_service.otp_recipient(),
+        "sent_to_masked": _mask_email(email_service.otp_recipient()),
+        "expires_in": OTP_TTL_SECONDS,
+        "message": "A login code has been sent to the administrator email.",
+    }
+
+
+@api_router.post("/auth/otp/verify")
+async def auth_otp_verify(p: OtpVerifyBodyModel, request: Request, response: Response):
+    """Step 2 — check the code, then issue the session (with the usual Shift gate)."""
+    if not OTP_LOGIN_ENABLED:
+        raise HTTPException(403, "OTP login is disabled. Use the standard login.")
+    challenge = _check_otp(p.challenge_id, p.code)
+    user = challenge["user"]
+    force_shift = bool(p.force_shift)
+    # May raise 409 (session already active elsewhere) — the code stays valid so
+    # the "Already logged in elsewhere → Shift" retry can reuse it.
+    raise_if_session_conflict(user, force_shift=force_shift)
+    result = issue_session(
+        user,
+        response,
+        request=request,
+        device_label=p.device_label or challenge.get("device_label"),
+        force_shift=force_shift,
+    )
+    _consume_otp(challenge["challenge_id"])
+    return result
+
+
 @api_router.post("/auth/session")
 async def auth_session(request: Request, response: Response):
+    if _otp_enforced():
+        raise HTTPException(
+            403,
+            "A one-time login code is now required. Refresh the app and sign in again.",
+        )
     body = await request.json()
     email = normalize_email(body.get("email"))
     password = body.get("password") or ""
@@ -2905,6 +3083,11 @@ async def auth_session(request: Request, response: Response):
 @api_router.post("/auth/shift-session")
 async def auth_shift_session(request: Request, response: Response):
     """Transfer the active session to this device (login with force_shift)."""
+    if _otp_enforced():
+        raise HTTPException(
+            403,
+            "A one-time login code is now required. Refresh the app and sign in again.",
+        )
     body = await request.json()
     email = normalize_email(body.get("email"))
     password = body.get("password") or ""

@@ -333,7 +333,7 @@ api.interceptors.request.use(async (config) => {
     const actAs = await getActAsId();
     config.headers = config.headers || {};
     const url = String(config.url || '');
-    if (url.includes('/auth/session') || url.includes('/auth/me') || url.includes('/auth/shift-session')) {
+    if (url.includes('/auth/session') || url.includes('/auth/me') || url.includes('/auth/shift-session') || url.includes('/auth/otp')) {
         config.timeout = Math.max(Number(config.timeout) || 0, AUTH_TIMEOUT_MS);
     }
     if (url.includes('/stats/dashboard-bundle') || url.includes('/stats/me-bundle') || url.includes('/stats/dashboard')) {

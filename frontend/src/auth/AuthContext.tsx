@@ -21,6 +21,11 @@ export type ExchangeResult =
   | { status: 'invalid' }
   | { status: 'shift_required'; active_device?: string; message?: string };
 
+/** Result of the first step of the OTP login: credentials checked, code emailed. */
+export type OtpRequestResult =
+  | { status: 'sent'; challengeId: string; sentTo: string; message: string }
+  | { status: 'invalid' };
+
 interface AuthContextType {
   user: User | null;
   loading: boolean;
@@ -34,6 +39,17 @@ interface AuthContextType {
     force_shift?: boolean;
     device_label?: string;
   }) => Promise<ExchangeResult>;
+  requestOtp: (credentials: {
+    email: string;
+    password: string;
+    device_label?: string;
+  }) => Promise<OtpRequestResult>;
+  verifyOtp: (params: {
+    challengeId: string;
+    code: string;
+    device_label?: string;
+    force_shift?: boolean;
+  }) => Promise<ExchangeResult>;
   setRole: (role: string) => Promise<void>;
   actAs: (employeeId: string | null) => Promise<void>;
 }
@@ -46,6 +62,8 @@ const AuthContext = createContext<AuthContextType>({
   refresh: async () => {},
   logout: async () => {},
   exchangeSession: async () => ({ status: 'invalid' }),
+  requestOtp: async () => ({ status: 'invalid' }),
+  verifyOtp: async () => ({ status: 'invalid' }),
   setRole: async () => {},
   actAs: async () => {},
 });
@@ -224,6 +242,85 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     throw new Error(typeof detail === 'string' ? detail : 'Could not sign in. Check email/password and try again.');
   }, []);
 
+  const requestOtp = useCallback(async (credentials: {
+    email: string;
+    password: string;
+    device_label?: string;
+  }): Promise<OtpRequestResult> => {
+    await warmUpBackend();
+    try {
+      const r = await api.post(
+        '/auth/otp/request',
+        {
+          email: credentials.email,
+          password: credentials.password,
+          device_label: credentials.device_label,
+        },
+        { timeout: 90000 },
+      );
+      return {
+        status: 'sent',
+        challengeId: String(r.data?.challenge_id || ''),
+        sentTo: String(r.data?.sent_to || r.data?.sent_to_masked || ''),
+        message: String(r.data?.message || 'A login code has been sent to the administrator email.'),
+      };
+    } catch (e: any) {
+      const status = e?.response?.status;
+      if (status === 401) return { status: 'invalid' };
+      const detail = e?.response?.data?.detail;
+      if (e?.response && typeof detail === 'string') {
+        // Surfaces actionable server messages (e.g. email not configured).
+        throw new Error(detail);
+      }
+      if (!e?.response) {
+        throw new Error('Cannot reach the CRM server. Check your internet connection and try again.');
+      }
+      throw new Error('Could not start sign-in. Please try again.');
+    }
+  }, []);
+
+  const verifyOtp = useCallback(async (params: {
+    challengeId: string;
+    code: string;
+    device_label?: string;
+    force_shift?: boolean;
+  }): Promise<ExchangeResult> => {
+    try {
+      const r = await api.post(
+        '/auth/otp/verify',
+        {
+          challenge_id: params.challengeId,
+          code: params.code,
+          device_label: params.device_label,
+          force_shift: !!params.force_shift,
+        },
+        { timeout: 90000 },
+      );
+      if (r.data?.session_token) {
+        await setToken(r.data.session_token);
+      }
+      setUser(r.data.user);
+      setSnapshot(USER_SNAPSHOT_KEY, r.data.user);
+      return { status: 'ok', user: r.data.user as User };
+    } catch (e: any) {
+      const status = e?.response?.status;
+      const shift = parseShiftDetail(e?.response?.data?.detail);
+      if (status === 409 && shift) {
+        return {
+          status: 'shift_required',
+          active_device: shift.active_device,
+          message: shift.message,
+        };
+      }
+      const detail = e?.response?.data?.detail;
+      if (typeof detail === 'string') throw new Error(detail);
+      if (!e?.response) {
+        throw new Error('Cannot reach the CRM server. Check your internet connection and try again.');
+      }
+      throw new Error('Could not verify the code. Please try again.');
+    }
+  }, []);
+
   const setRoleFn = useCallback(async (role: string) => {
     const r = await api.post('/auth/set-role', { role });
     setUser(r.data);
@@ -239,7 +336,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider value={{
-      user, loading, locationStatus, requestLocationAccess, refresh, logout, exchangeSession, setRole: setRoleFn, actAs,
+      user, loading, locationStatus, requestLocationAccess, refresh, logout, exchangeSession,
+      requestOtp, verifyOtp, setRole: setRoleFn, actAs,
     }}>
       {children}
     </AuthContext.Provider>

@@ -11,7 +11,7 @@ const HERO_IMG = 'https://static.prod-images.emergentagent.com/jobs/bcbec8c6-82b
 
 export default function Index() {
   const router = useRouter();
-  const { user, loading, exchangeSession } = useAuth();
+  const { user, loading, exchangeSession, requestOtp, verifyOtp } = useAuth();
   const { colors, themeName, toggle } = useTheme();
   const { width } = Dimensions.get('window');
   const isWide = width >= 900;
@@ -24,6 +24,12 @@ export default function Index() {
   const [shiftVisible, setShiftVisible] = useState(false);
   const [shiftDevice, setShiftDevice] = useState<string | undefined>();
   const [isShifting, setIsShifting] = useState(false);
+  // Login OTP (step 2). A code is always emailed to the administration mailbox.
+  const [otpStep, setOtpStep] = useState(false);
+  const [otpCode, setOtpCode] = useState('');
+  const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [sentTo, setSentTo] = useState('');
+  const [isVerifying, setIsVerifying] = useState(false);
 
   useEffect(() => {
     setLoginStatus('Connecting…');
@@ -55,13 +61,65 @@ export default function Index() {
     }
 
     setIsLoggingIn(true);
-    setLoginStatus('Signing in…');
+    setLoginStatus('Checking your email and password…');
     try {
       await warmUpBackend(true);
-      const result = await exchangeSession({
-        email: trimmedEmail,
-        password: trimmedPassword,
-      });
+      const result = await requestOtp({ email: trimmedEmail, password: trimmedPassword });
+      if (result.status === 'sent' && result.challengeId) {
+        setChallengeId(result.challengeId);
+        setSentTo(result.sentTo);
+        setOtpCode('');
+        setOtpStep(true);
+        setLoginStatus(null);
+      } else if (result.status === 'invalid') {
+        setLoginStatus(null);
+        alert('Invalid email or password. Use the login created by your manager.');
+      } else {
+        setLoginStatus('Could not start sign-in. Please try again in a moment.');
+      }
+    } catch (e: any) {
+      const message = e?.message || 'Could not sign in. Try again in a minute.';
+      // Escape hatch: if OTP is off (or mail is not configured yet), fall back to
+      // the direct login so nobody is locked out of the CRM.
+      if (/otp login is disabled|email is not configured/i.test(message)) {
+        try {
+          const direct = await exchangeSession({ email: trimmedEmail, password: trimmedPassword });
+          if (direct.status === 'ok') {
+            completeLogin(direct.user);
+          } else if (direct.status === 'shift_required') {
+            setLoginStatus(null);
+            setShiftDevice(direct.active_device);
+            setShiftVisible(true);
+          } else {
+            setLoginStatus(null);
+            alert('Invalid email or password. Use the login created by your manager.');
+          }
+        } catch (directErr: any) {
+          setLoginStatus(directErr?.message || 'Could not sign in.');
+        }
+        return;
+      }
+      setLoginStatus(message);
+    } finally {
+      setIsLoggingIn(false);
+    }
+  };
+
+  const onVerifyOtp = async () => {
+    const code = otpCode.replace(/\D/g, '');
+    if (!challengeId) {
+      setOtpStep(false);
+      setLoginStatus('Please sign in again.');
+      return;
+    }
+    if (code.length !== 6) {
+      alert('Enter the 6-digit code from the email sent to the administrator.');
+      return;
+    }
+    setIsVerifying(true);
+    setLoginStatus('Verifying the code…');
+    try {
+      const result = await verifyOtp({ challengeId, code });
       if (result.status === 'ok') {
         completeLogin(result.user);
       } else if (result.status === 'shift_required') {
@@ -70,13 +128,42 @@ export default function Index() {
         setShiftVisible(true);
       } else {
         setLoginStatus(null);
-        alert('Invalid email or password. Use the login created by your manager.');
+        alert('Could not verify the code. Please try again.');
       }
     } catch (e: any) {
-      setLoginStatus(e?.message || 'Could not sign in. Try again in a minute.');
+      setLoginStatus(e?.message || 'Could not verify the code.');
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  const onResendOtp = async () => {
+    const trimmedEmail = email.trim().toLowerCase();
+    const trimmedPassword = password.trim();
+    setIsLoggingIn(true);
+    setLoginStatus('Sending a new code…');
+    try {
+      const result = await requestOtp({ email: trimmedEmail, password: trimmedPassword });
+      if (result.status === 'sent' && result.challengeId) {
+        setChallengeId(result.challengeId);
+        setSentTo(result.sentTo);
+        setOtpCode('');
+        setLoginStatus('A new code was sent to the administrator email.');
+      } else {
+        setLoginStatus('Could not send a new code. Please try again.');
+      }
+    } catch (e: any) {
+      setLoginStatus(e?.message || 'Could not send a new code.');
     } finally {
       setIsLoggingIn(false);
     }
+  };
+
+  const backToCredentials = () => {
+    setOtpStep(false);
+    setOtpCode('');
+    setChallengeId(null);
+    setLoginStatus(null);
   };
 
   const onShift = async () => {
@@ -85,18 +172,22 @@ export default function Index() {
     setIsShifting(true);
     setLoginStatus('Shifting session…');
     try {
-      const result = await exchangeSession({
-        email: trimmedEmail,
-        password: trimmedPassword,
-        force_shift: true,
-      });
+      const result = challengeId
+        ? await verifyOtp({ challengeId, code: otpCode.trim(), force_shift: true })
+        : await exchangeSession({
+            email: trimmedEmail,
+            password: trimmedPassword,
+            force_shift: true,
+          });
       if (result.status === 'ok') {
         completeLogin(result.user);
       } else if (result.status === 'invalid') {
         setShiftVisible(false);
         alert('Invalid email or password. Use the login created by your manager.');
-      } else {
+      } else if (result.status === 'shift_required') {
         alert(result.message || 'Could not shift session. Try again.');
+      } else {
+        alert('Could not shift session. Try again.');
       }
     } catch (e: any) {
       setLoginStatus(e?.message || 'Could not shift session.');
@@ -175,9 +266,13 @@ export default function Index() {
           <View style={{ flex: 1, minHeight: 40 }} />
 
           <Text style={[styles.kicker, { color: colors.textMuted }]}>UMANG PROPERTIES CRM</Text>
-          <Text style={[styles.headline, { color: colors.text }]}>Log in to Umang Properties CRM</Text>
+          <Text style={[styles.headline, { color: colors.text }]}>
+            {otpStep ? 'Enter the login code' : 'Log in to Umang Properties CRM'}
+          </Text>
           <Text style={[styles.subhead, { color: colors.textSecondary, marginBottom: 20 }]}>
-            Enter the email and password provided by your manager. Each employee has a separate login.
+            {otpStep
+              ? `For security, a 6-digit login code was sent to the administrator email${sentTo ? ` (${sentTo})` : ''}. Get the code from the administrator and enter it below.`
+              : 'Enter the email and password provided by your manager. A one-time code is then sent to the administrator email before you are signed in.'}
           </Text>
           {loginStatus ? (
             <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 8 }}>
@@ -185,51 +280,91 @@ export default function Index() {
             </Text>
           ) : null}
 
-          <View style={{ width: '100%', gap: 12, marginBottom: 12 }}>
-            <TextInput
-              style={[styles.input, { borderColor: colors.border, color: colors.text }]}
-              placeholder="Email Address"
-              placeholderTextColor={colors.textMuted}
-              value={email}
-              onChangeText={setEmail}
-              autoCapitalize="none"
-              keyboardType="email-address"
-            />
-            <View style={styles.passwordRow}>
+          {otpStep ? (
+            <View style={{ width: '100%', gap: 12, marginBottom: 12 }}>
               <TextInput
-                testID="login-password"
-                style={[styles.input, styles.passwordInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
-                placeholder="Password"
+                testID="login-otp"
+                style={[styles.input, styles.otpInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+                placeholder="6-digit code"
                 placeholderTextColor={colors.textMuted}
-                value={password}
-                onChangeText={setPassword}
-                secureTextEntry={!showPassword}
-                autoCapitalize="none"
-                autoComplete="current-password"
+                value={otpCode}
+                onChangeText={(v) => setOtpCode(v.replace(/[^0-9]/g, '').slice(0, 6))}
+                keyboardType="number-pad"
+                maxLength={6}
+                autoFocus
+                onSubmitEditing={onVerifyOtp}
               />
               <Pressable
-                testID="login-password-toggle"
-                onPress={() => setShowPassword((v) => !v)}
-                style={[styles.eyeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
-                accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                testID="login-verify-btn"
+                onPress={onVerifyOtp}
+                disabled={isVerifying || isLoggingIn}
+                style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isVerifying || isLoggingIn ? 0.7 : 1 }]}
               >
-                <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+                {isVerifying ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={[styles.primaryText, { color: '#fff' }]}>Verify &amp; log in</Text>
+                )}
               </Pressable>
+              <View style={styles.otpActionsRow}>
+                <Pressable onPress={onResendOtp} disabled={isLoggingIn} testID="login-otp-resend">
+                  <Text style={[styles.linkText, { color: colors.primary, opacity: isLoggingIn ? 0.6 : 1 }]}>Resend code</Text>
+                </Pressable>
+                <Pressable onPress={backToCredentials} disabled={isVerifying} testID="login-otp-back">
+                  <Text style={[styles.linkText, { color: colors.textSecondary }]}>Use a different email</Text>
+                </Pressable>
+              </View>
             </View>
-          </View>
+          ) : (
+            <>
+              <View style={{ width: '100%', gap: 12, marginBottom: 12 }}>
+                <TextInput
+                  testID="login-email"
+                  style={[styles.input, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+                  placeholder="Email Address"
+                  placeholderTextColor={colors.textMuted}
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                />
+                <View style={styles.passwordRow}>
+                  <TextInput
+                    testID="login-password"
+                    style={[styles.input, styles.passwordInput, { borderColor: colors.border, color: colors.text, backgroundColor: colors.surfaceAlt }]}
+                    placeholder="Password"
+                    placeholderTextColor={colors.textMuted}
+                    value={password}
+                    onChangeText={setPassword}
+                    secureTextEntry={!showPassword}
+                    autoCapitalize="none"
+                    autoComplete="current-password"
+                  />
+                  <Pressable
+                    testID="login-password-toggle"
+                    onPress={() => setShowPassword((v) => !v)}
+                    style={[styles.eyeBtn, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}
+                    accessibilityLabel={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <Ionicons name={showPassword ? 'eye-off-outline' : 'eye-outline'} size={20} color={colors.textSecondary} />
+                  </Pressable>
+                </View>
+              </View>
 
-          <Pressable
-            onPress={onLogin}
-            disabled={isLoggingIn}
-            testID="login-btn"
-            style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
-          >
-            {isLoggingIn ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to Umang Properties CRM</Text>
-            )}
-          </Pressable>
+              <Pressable
+                onPress={onLogin}
+                disabled={isLoggingIn}
+                testID="login-btn"
+                style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: isLoggingIn ? 0.7 : 1 }]}
+              >
+                {isLoggingIn ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={[styles.primaryText, { color: '#fff' }]}>Log in to Umang Properties CRM</Text>
+                )}
+              </Pressable>
+            </>
+          )}
 
           <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
@@ -260,7 +395,7 @@ export default function Index() {
       >
         <View style={styles.modalBackdrop}>
           <View style={[styles.modalCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}>
-            <Text style={[styles.modalTitle, { color: colors.text }]}>Already logged in elsewhere</Text>
+            <Text style={[styles.modalTitle, { color: colors.text }]}>Already connected on another device</Text>
             <Text style={[styles.modalBody, { color: colors.textSecondary }]}>
               This account is active on {shiftDevice || 'another device'}. Shift moves your session here and signs out the other device.
             </Text>
@@ -329,6 +464,9 @@ const styles = StyleSheet.create({
   },
   primaryText: { fontSize: 14, fontWeight: '600' },
   input: { height: 48, borderWidth: 1, borderRadius: 10, paddingHorizontal: 16, fontSize: 15 },
+  otpInput: { textAlign: 'center', letterSpacing: 8, fontSize: 20, fontWeight: '700' },
+  otpActionsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 6 },
+  linkText: { fontSize: 13, fontWeight: '600' },
   passwordRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   passwordInput: { flex: 1 },
   eyeBtn: {
