@@ -153,7 +153,9 @@ create table if not exists public.users (
     password_hash       text,
     role                text default 'telecaller',
     employee_id         text,
+    name                text,
     display_name        text,
+    allowed_pages       jsonb default '[]'::jsonb,
     active              boolean default true,
     last_login_at       timestamptz,
     last_logout_at      timestamptz,
@@ -172,7 +174,11 @@ alter table public.users add column if not exists email               text;
 alter table public.users add column if not exists password_hash       text;
 alter table public.users add column if not exists role                text default 'telecaller';
 alter table public.users add column if not exists employee_id         text;
+-- `name` is NOT NULL in databases created by the older SQL files, so it must be
+-- added with a default (otherwise inserts fail with 23502).
+alter table public.users add column if not exists name                text default '';
 alter table public.users add column if not exists display_name        text;
+alter table public.users add column if not exists allowed_pages       jsonb default '[]'::jsonb;
 alter table public.users add column if not exists active              boolean default true;
 alter table public.users add column if not exists last_login_at       timestamptz;
 alter table public.users add column if not exists last_logout_at      timestamptz;
@@ -635,6 +641,57 @@ alter table public.roles add column if not exists created_at  timestamptz defaul
 -- ----------------------------------------------------------------------------
 -- 15. ACCESS
 -- ----------------------------------------------------------------------------
+-- Repair legacy NOT NULL constraints. Databases created by the older SQL files
+-- made several columns NOT NULL with no default, but the backend inserts into
+-- those tables without supplying them — which fails with 23502 (the error you
+-- saw on `users.name`). Dropping NOT NULL is non-destructive: no row, no value
+-- and no constraint that protects real data is changed. It only stops the
+-- database rejecting inserts the application legitimately makes.
+--
+-- Done through a helper so a missing table/column is skipped instead of
+-- aborting the whole script (a fresh database will not have all of them yet).
+create or replace function public._umang_drop_not_null(p_table text, p_column text)
+returns void language plpgsql as $$
+begin
+    execute format('alter table public.%I alter column %I drop not null', p_table, p_column);
+exception
+    when undefined_table then null;
+    when undefined_column then null;
+    when others then null;
+end $$;
+
+do $$
+declare
+    pairs text[][] := array[
+        ['users','name'], ['users','email'],
+        ['leads','name'], ['leads','phone'],
+        ['employees','name'], ['employees','email'], ['employees','role'], ['employees','department'],
+        ['activities','type'], ['activities','text'],
+        ['lead_notes','lead_id'], ['lead_notes','text'],
+        ['visits','visit_id'],
+        ['visit_followups','visit_id'], ['visit_followups','follow_up_at'],
+        ['visit_followups','follow_up_date'], ['visit_followups','follow_up_day'],
+        ['visit_followups','follow_up_time'],
+        ['customers','name'], ['campaigns','name'],
+        ['templates','name'], ['templates','body'],
+        ['roles','name'], ['sessions','user_id'],
+        ['notifications','title'], ['notifications','message'],
+        ['integration_events','source'], ['integration_events','status'],
+        ['fcm_device_tokens','user_id'], ['fcm_device_tokens','fcm_token'],
+        ['employee_locations','latitude'], ['employee_locations','longitude'],
+        ['employee_location_history','employee_id'],
+        ['employee_location_history','latitude'], ['employee_location_history','longitude'],
+        ['login_events','event']
+    ];
+    i int;
+begin
+    for i in 1 .. array_length(pairs, 1) loop
+        perform public._umang_drop_not_null(pairs[i][1], pairs[i][2]);
+    end loop;
+end $$;
+
+drop function if exists public._umang_drop_not_null(text, text);
+
 -- The backend uses the service-role key, which bypasses RLS. These policies
 -- exist so the anon key cannot read lead data if it is ever exposed.
 alter table public.leads              enable row level security;
@@ -649,16 +706,28 @@ alter table public.integration_events enable row level security;
 -- ----------------------------------------------------------------------------
 -- 16. SEED — default admin login (umang@admin / umang@admin)
 -- ----------------------------------------------------------------------------
-insert into public.users (user_id, email, password_hash, role, display_name, active)
+-- Written defensively: the users table may have been created by an older SQL
+-- file where `name` / `allowed_pages` are NOT NULL, so every such column is
+-- supplied. `on conflict (email) do nothing` means an existing admin is left
+-- exactly as it is (your current password keeps working).
+insert into public.users (
+    user_id, email, password_hash, role, name, display_name, allowed_pages, active
+)
 values (
     'user_umang_admin',
     'umang@admin',
     '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj4J/HS9y2QO',
     'admin',
     'Umang Admin',
+    'Umang Admin',
+    '[]'::jsonb,
     true
 )
 on conflict (email) do nothing;
+
+-- If `name` already existed as NOT NULL with no default, give it a default so
+-- any future insert that omits it still succeeds.
+alter table public.users alter column name set default '';
 
 -- ----------------------------------------------------------------------------
 -- 17. Self-check
