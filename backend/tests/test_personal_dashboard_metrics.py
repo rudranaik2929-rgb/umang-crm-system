@@ -38,13 +38,20 @@ def test_personal_dashboard_counts_match_drill_down_lists():
         assert len(items) == count, f"{metric}: count {count} != list {len(items)}"
 
 
-def test_total_only_includes_actioned_leads():
+def test_total_includes_every_assigned_lead():
+    """Total Leads counts all assigned leads (untouched included) so it matches
+    the Assign Leads workspace; New Leads is the untouched subset of it."""
     leads = [_lead(f"untouched{i}", 30 + i) for i in range(24)]
     leads += [_lead("ringing1", 5, call_status="ringing")]
     counts = main.build_personal_dashboard_counts(leads, "telecaller", [])
-    assert counts["total"] == 1
+    assert counts["total"] == 25
     assert counts["new_leads"] == 24
-    assert len(main.personal_dashboard_metric_items("total", leads, "telecaller", [])) == 1
+    assert len(main.personal_dashboard_metric_items("total", leads, "telecaller", [])) == 25
+    assert len(main.personal_dashboard_metric_items("new_leads", leads, "telecaller", [])) == 24
+    # New + Updated always adds up to Total — no lead disappears.
+    updated = main.personal_dashboard_metric_items("updated", leads, "telecaller", [])
+    assert len(updated) == 1
+    assert counts["new_leads"] + len(updated) == counts["total"]
 
 
 def test_today_follow_ups_only_includes_due_today():

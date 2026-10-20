@@ -292,7 +292,7 @@ export default function MyDashboard() {
               <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>TOTAL LEADS</Text>
               <Text style={[styles.backlogVal, { color: colors.text }]}>{backlogTotal}</Text>
               <Text style={[styles.scoreSub, { color: colors.textSecondary, textAlign: 'center' }]}>
-                Ringing, visited, hot & more
+                All assigned = New + Updated
               </Text>
             </Pressable>
           </View>

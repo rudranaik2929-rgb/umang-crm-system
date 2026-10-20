@@ -198,11 +198,11 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
       { key: 'all', label: 'All employees' },
       { key: 'unassigned', label: 'Unassigned only' },
       ...employees
-        .filter((e) => e && e.employee_id)
+        .filter((e) => e && e.employee_id && e.active !== false)
         .map((e) => ({
           key: String(e.employee_id),
           label: e.name || e.email || 'Employee',
-          sublabel: roleLabel(e.role),
+          sublabel: (e.active === false ? 'Inactive · ' : '') + roleLabel(e.role),
         })),
     ],
     [employees],

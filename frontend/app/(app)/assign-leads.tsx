@@ -289,6 +289,7 @@ export default function AssignLeads() {
       if (reqId !== loadRequestRef.current) return;
       const nextLeads = ws.data?.leads || [];
       const nextEmployees = ws.data?.employees || [];
+      const nextAssignable = ws.data?.assignable || [];
       const nextTotal = Number(ws.data?.total ?? 0);
       const nextFacets = ws.data?.facets || null;
       const nextHasMore = Boolean(ws.data?.has_more);
@@ -299,7 +300,7 @@ export default function AssignLeads() {
         });
       } else {
         setLeads(nextLeads);
-        setEmployees(nextEmployees);
+        setEmployees(nextAssignable.length ? nextAssignable : nextEmployees);
         setFacets(nextFacets);
         if (statsRes) setAssignmentStats(statsRes.data?.employees || []);
       }
@@ -321,7 +322,9 @@ export default function AssignLeads() {
       if (isDefault && !append) {
         setSnapshot('assign-leads-page', {
           leads: nextLeads,
-          employees: nextEmployees.length ? nextEmployees : employeesRef.current,
+          employees: (nextAssignable.length ? nextAssignable : nextEmployees).length
+            ? (nextAssignable.length ? nextAssignable : nextEmployees)
+            : employeesRef.current,
           total: nextTotal,
           facets: nextFacets,
           assignmentStats: statsRes ? (statsRes.data?.employees || []) : assignmentStatsRef.current,

@@ -33,8 +33,13 @@ LEADS_CANONICAL_SELECT = (
 # and classify_employee_performance_metric (ringing/follow_up), so counts diverge from lists.
 DASHBOARD_BUCKET_LEAD_SELECT = LEADS_CANONICAL_SELECT
 
+# Every employee-counting screen (Assign Leads, Team snapshot, Dashboard
+# employee card, My Dashboard, drill-down popups) must select the SAME columns,
+# otherwise phone/email dedupe and the broker-lead exclusion silently count one
+# screen's leads and skip them on another — which is how a single employee could
+# show 327 leads here and 314 there.
 EMPLOYEE_WORKFLOW_LEAD_SELECT = (
-    "lead_id,name,phone,email,source,assigned_to,status,stage,priority,call_status,"
+    "lead_id,name,phone,email,external_lead_id,source,assigned_to,status,stage,priority,call_status,"
     "follow_up_at,assigned_at,last_employee_action_at,created_at,updated_at,lead_type,"
     "site_visitor_id,site_visit_assigned_by,site_visit_assigned_at,"
     "budget,location,property_type,raw_payload"

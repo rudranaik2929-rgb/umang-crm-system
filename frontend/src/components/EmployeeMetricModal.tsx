@@ -9,7 +9,8 @@ import { formatPhoneDisplay } from '../lib/leadContact';
 import { platformLabel } from '../lib/constants';
 
 const METRIC_LABELS: Record<string, string> = {
-  total: 'Total Leads (Backlog)',
+  total: 'Total Leads — All Assigned',
+  updated: 'Updated — In a Status Box',
   new_leads: 'New Leads — Not Yet Updated',
   missed_leads: 'Missed Lead',
   hot: 'Hot',

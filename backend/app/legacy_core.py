@@ -894,9 +894,20 @@ def filter_employee_new_leads(emp_leads: List[Dict[str, Any]], hours: int = MISS
 
 
 def filter_employee_backlog_leads(emp_leads: List[Dict[str, Any]], hours: int = MISSED_LEAD_HOURS) -> List[Dict[str, Any]]:
-    """Leads where employee took action (ringing, visited, not interested, hot, etc.) — Total Leads."""
+    """Leads where employee took action (ringing, visited, not interested, hot, etc.)."""
     rows = normalize_employee_leads(emp_leads)
     return dedupe_leads([l for l in rows if has_employee_workflow_action(l)])
+
+
+def filter_employee_all_assigned_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """EVERY lead assigned to the employee — the canonical "Total Leads".
+
+    This is deliberately the same universe the Assign Leads workspace shows when
+    it is filtered to one employee, so the workspace and the Dashboard can never
+    report different numbers for the same person. Untouched leads count here too:
+    no lead is ever dropped from a total, it just also appears in New Leads.
+    """
+    return dedupe_leads(normalize_employee_leads(emp_leads))
 
 
 def filter_employee_missed_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -1057,9 +1068,12 @@ def employee_metric_items(
 
     Both the box count (_stats_employees_sync / compute_employee_assignment_stats)
     and the drill-down popup (/leads/employee/{id}/metric/{key}) use this, so a
-    box count and its popup list can never disagree. Mirrors the dashboard's
-    semantics: missed + new are counted over ALL assigned leads, while the
-    exclusive workflow pills are counted over actioned (backlog) leads.
+    box count and its popup list can never disagree.
+
+    "total" is EVERY assigned lead — the same set the Assign Leads workspace
+    shows for this employee, so the two screens always agree. Missed and new
+    are subsets of it, while the exclusive workflow pills (ringing, visited,
+    hot, cold, …) partition the leads the employee has acted on.
     """
     key = (metric_key or "").strip().lower()
     rows = normalize_employee_leads(emp_leads)
@@ -1067,7 +1081,12 @@ def employee_metric_items(
         return filter_employee_missed_leads(rows)
     if key in ("new_leads", "new", "assigned_new"):
         return filter_employee_new_leads(rows)
-    if key in ("total", "all", "leads_total", "assigned_total", "backlog"):
+    if key in ("total", "all", "leads_total", "assigned_total"):
+        # Same list the Assign Leads workspace shows for this employee, so the
+        # box count can never disagree with that screen.
+        return filter_employee_all_assigned_leads(rows)
+    if key in ("updated", "backlog", "assigned_updated", "updated_by_employee"):
+        # Subset of Total the employee has actually worked on.
         return filter_employee_backlog_leads(rows)
     if key in ("site_visit_assigned", "assigned_for_visit"):
         source = all_leads if all_leads is not None else rows
@@ -1108,10 +1127,19 @@ def compute_site_visit_assigned_count(
 
 
 def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Optional[str] = None) -> Dict[str, int]:
-    """Per-employee counts — New = untouched; Total = employee has updated status."""
+    """Per-employee counts.
+
+    ``assigned_total`` is EVERY assigned lead (untouched ones included), so it
+    always matches the Assign Leads workspace filtered to that employee and no
+    lead is ever missing from a total. ``assigned_updated`` is the subset the
+    employee has actually worked on, and ``emp_new_leads`` the untouched subset.
+    """
+    # Partition the deduped set (not each side separately) so the arithmetic is
+    # exact: emp_new_leads + assigned_updated == assigned_total, always.
+    all_rows = filter_employee_all_assigned_leads(emp_leads)
     rows = normalize_employee_leads(emp_leads)
-    new_rows = filter_employee_new_leads(rows)
-    backlog_rows = filter_employee_backlog_leads(rows)
+    new_rows = [l for l in all_rows if not has_employee_workflow_action(l)]
+    backlog_rows = [l for l in all_rows if has_employee_workflow_action(l)]
     queue_rows = filter_employee_queue_leads(rows, role)
     follow_rows = filter_employee_metric_leads(backlog_rows, "follow_ups")
     in_progress = sum(
@@ -1122,7 +1150,8 @@ def compute_employee_assignment_stats(emp_leads: List[Dict[str, Any]], role: Opt
     )
     workflow = compute_employee_workflow_stats(rows)
     return {
-        "assigned_total": len(backlog_rows),
+        "assigned_total": len(all_rows),
+        "assigned_updated": len(backlog_rows),
         "emp_new_leads": len(new_rows),
         "assigned_queue": len(queue_rows),
         "assigned_in_progress": in_progress,
@@ -7856,7 +7885,12 @@ def sort_dashboard_leads(
 
 
 def sum_employee_status_buckets(stats: Dict[str, int]) -> int:
-    """Sum exclusive employee workflow pills that partition Total Leads (backlog)."""
+    """Sum of the exclusive workflow pills (Hot/Cold/Visited/…).
+
+    They partition the leads the employee has ACTED on, i.e. ``assigned_updated``.
+    ``assigned_total`` is every assigned lead, so
+    ``emp_new_leads + sum_employee_status_buckets(stats) == assigned_total``.
+    """
     return sum(int(stats.get(EMPLOYEE_STATUS_BUCKET_STAT_KEYS[key], 0) or 0) for key in EMPLOYEE_STATUS_BUCKET_KEYS)
 
 
@@ -8140,29 +8174,39 @@ async def list_assign_workspace(
 
     limit = min(max(limit, 1), ASSIGN_WORKSPACE_MAX_LIMIT)
     offset = max(offset, 0)
+    # Same columns every other employee-counting screen selects: lead_type and
+    # external_lead_id are what is_pipeline_lead / dedupe_leads_by_external_id
+    # need, so a broker lead or an imported duplicate is either counted on every
+    # screen or on none — never counted on one and skipped on another.
     select = (
-        "lead_id,name,phone,email,source,stage,status,priority,call_status,"
+        "lead_id,name,phone,email,lead_type,external_lead_id,source,stage,status,priority,call_status,"
         "budget,location,property_type,assigned_to,assigned_at,assigned_by,created_at,updated_at,"
         "follow_up_at,last_employee_action_at"
     )
     all_leads = fetch_all_leads_merged(select)
-    employees = sb_select("employees", {
+    # Load EVERY employee (not just active ones) for matching, names and facets:
+    # the Dashboard and the Team snapshot both show inactive people too, so
+    # filtering here would make the same employee total differently per screen.
+    all_employees = sb_select("employees", {
         "select": "employee_id,name,email,role,department,active",
-        "active": "eq.true",
         "order": "name.asc",
     })
-    assignable = [e for e in employees if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") in {"admin", "manager"}]
-    assignable = assignable or employees
+    assignable = [
+        e for e in all_employees
+        if e.get("active", True) and (e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") in {"admin", "manager"})
+    ]
+    assignable = assignable or [e for e in all_employees if e.get("active", True)] or all_employees
 
-    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location, assignable)
-    page = enrich_leads_with_employee_names(filtered[offset:offset + limit], assignable)
-    facets = compute_assign_workspace_facets(all_leads, assignable)
+    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location, all_employees)
+    page = enrich_leads_with_employee_names(filtered[offset:offset + limit], all_employees)
+    facets = compute_assign_workspace_facets(all_leads, all_employees)
     total_filtered = len(filtered)
 
     return {
         "total": total_filtered,
         "leads": page,
-        "employees": assignable,
+        "employees": all_employees,
+        "assignable": assignable,
         "facets": facets,
         "offset": offset,
         "limit": limit,
@@ -8319,13 +8363,29 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
     if _assignment_stats_cache["data"] is not None and (now - float(_assignment_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
         return _assignment_stats_cache["data"]
     employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id", "order": "name.asc"})
-    all_leads = fetch_all_leads_merged(
-        "lead_id,assigned_to,status,stage,priority,call_status,created_at,updated_at,follow_up_at,assigned_at,last_employee_action_at"
+    # Identical lead shape to _stats_employees_sync (Dashboard) — a narrower
+    # select here meant source/lead_type were missing, so broker leads were
+    # counted in the Team snapshot but excluded from the Dashboard card.
+    all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
+    all_bookings = fetch_all_bookings_merged(
+        "booking_id,lead_id,lead_name,status,completed_tasks,booking_officer_id,agreement_status,property_name,created_at"
     )
     rows = []
     for e in employees:
         eid = e.get("employee_id")
         emp_leads = leads_for_employee_record(e, all_leads)
+        stats = compute_employee_assignment_stats(emp_leads, e.get("role"))
+        if str(e.get("role") or "").lower() == "booking":
+            # Booking officers are counted in bookings on the Dashboard; mirror
+            # that here so both screens report the same person identically.
+            booking_stats = compute_booking_employee_stats(e, all_bookings)
+            stats["assigned_total"] = booking_stats["assigned_total"]
+            stats["emp_new_leads"] = booking_stats["emp_new_leads"]
+            stats["assigned_updated"] = max(
+                0, int(booking_stats["assigned_total"]) - int(booking_stats["emp_new_leads"])
+            )
+            for key in BOOKING_TASK_KEYS:
+                stats[f"emp_{key}"] = booking_stats.get(f"emp_{key}", 0)
         rows.append({
             "employee_id": eid,
             "name": e.get("name"),
@@ -8333,7 +8393,7 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
             "role": e.get("role"),
             "department": e.get("department"),
             "active": e.get("active", True),
-            **compute_employee_assignment_stats(emp_leads, e.get("role")),
+            **stats,
         })
     unassigned = compute_unassigned_queue(all_leads)
     payload = {
@@ -10831,6 +10891,10 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
             booking_stats = compute_booking_employee_stats(e, all_bookings)
             assignment["assigned_total"] = booking_stats["assigned_total"]
             assignment["emp_new_leads"] = booking_stats["emp_new_leads"]
+            # Same New + Updated = Total arithmetic as every other role.
+            assignment["assigned_updated"] = max(
+                0, int(booking_stats["assigned_total"]) - int(booking_stats["emp_new_leads"])
+            )
             for key in BOOKING_TASK_KEYS:
                 assignment[f"emp_{key}"] = booking_stats.get(f"emp_{key}", 0)
         last_activity = max([a["created_at"] for a in emp_acts]) if emp_acts else None
@@ -11117,6 +11181,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "actions_total": len(activities),
             "leads_total": metric_counts["total"],
             "emp_new_leads": metric_counts["new_leads"],
+            "assigned_updated": assignment["assigned_updated"],
             "assigned_active": assignment["assigned_active"],
             "assigned_completed": assignment["assigned_completed"],
             "assigned_queue": assignment["assigned_queue"],
@@ -11155,7 +11220,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
     }
 
 EMPLOYEE_METRIC_KEYS = [
-    "total", "active", "hot", "cold", "visited", "not_interested", "booking_done", "low_budget",
+    "total", "updated", "active", "hot", "cold", "visited", "not_interested", "booking_done", "low_budget",
     "ringing", "follow_ups", "today_follow_ups", "missed_leads", "new_leads", "today_activity",
     "site_visit_assigned", "assigned_for_visit",
 ] + BOOKING_TASK_KEYS
@@ -11232,6 +11297,10 @@ def personal_dashboard_metric_items(
             return filter_site_visit_assigned_leads(source, employee)
         return [l for l in dedupe_leads(source) if clean_text(l.get("site_visitor_id"))]
     if key in ("total", "all", "leads_total", "assigned_total"):
+        # Every lead assigned to me — same number the Assign Leads workspace
+        # shows when filtered to this employee.
+        return filter_employee_all_assigned_leads(rows)
+    if key in ("updated", "backlog", "assigned_updated", "updated_by_me"):
         return backlog
     if key in ("new_leads", "new", "assigned_new"):
         return filter_employee_new_leads(rows)
@@ -11412,19 +11481,19 @@ async def list_employee_metric_leads(
     employee = employees[0] if employees else {"employee_id": employee_id}
     emp_leads = leads_for_employee_record(employee, all_leads)
     emp_role = str(employee.get("role") or "").lower()
-    if key in BOOKING_TASK_KEYS or (emp_role == "booking" and key in ("new_leads", "new", "assigned_new", "total", "backlog", "assigned_total")):
+    if key in BOOKING_TASK_KEYS or (emp_role == "booking" and key in ("new_leads", "new", "assigned_new", "total", "backlog", "assigned_total", "updated", "assigned_updated", "updated_by_employee")):
         all_bookings = fetch_all_bookings_merged(
             "booking_id,lead_id,lead_name,property_name,status,completed_tasks,booking_officer_id,agreement_status,created_at"
         )
         emp_bookings = bookings_for_employee_record(employee, all_bookings)
         if key in ("new_leads", "new", "assigned_new"):
             filtered_bookings = filter_new_bookings(emp_bookings)
-        elif key in ("total", "backlog", "assigned_total"):
-            filtered_bookings = emp_bookings
         elif key in BOOKING_TASK_KEYS:
             filtered_bookings = filter_bookings_by_task(emp_bookings, key)
         else:
-            filtered_bookings = []
+            # total / updated — every booking assigned to this officer (the
+            # Dashboard card shows the same number).
+            filtered_bookings = emp_bookings
         filtered_bookings.sort(key=lambda b: b.get("created_at") or "", reverse=True)
         return {
             "employee_id": employee_id,

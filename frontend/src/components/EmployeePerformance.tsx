@@ -146,8 +146,23 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                     </Text>
                   </Pressable>
                   <Pressable
+                    onPress={onMetricPress ? () => onMetricPress(employee, 'updated') : undefined}
+                    style={{ flex: 1, alignItems: 'center' }}
+                    disabled={!onMetricPress}
+                  >
+                    <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>
+                      {isBookingRole ? 'IN PROGRESS' : 'UPDATED'}
+                    </Text>
+                    <Text style={{ color: colors.info, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>
+                      {employee.assigned_updated ?? 0}
+                    </Text>
+                    <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>
+                      {isBookingRole ? 'Work started' : 'In a status box below'}
+                    </Text>
+                  </Pressable>
+                  <Pressable
                     onPress={onMetricPress ? () => onMetricPress(employee, 'total') : undefined}
-                    style={{ alignItems: 'flex-end' }}
+                    style={{ flex: 1, alignItems: 'flex-end' }}
                     disabled={!onMetricPress}
                   >
                     <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 1.2 }}>
@@ -155,7 +170,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                     </Text>
                     <Text style={{ color: colors.text, fontSize: 22, fontWeight: '700', letterSpacing: 0 }}>{employee.assigned_total ?? employee.leads_total ?? 0}</Text>
                     <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2 }}>
-                      {isBookingRole ? 'Active pipeline' : 'Each lead in one status box (Due Today is part of Follow Up)'}
+                      {isBookingRole ? 'All bookings assigned' : 'All assigned = New + Updated'}
                     </Text>
                   </Pressable>
                 </View>

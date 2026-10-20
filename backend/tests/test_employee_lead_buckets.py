@@ -37,11 +37,15 @@ def test_new_and_total_leads_are_mutually_exclusive_by_action():
 
 
 def test_bulk_assign_stays_in_new_until_employee_updates():
+    """Untouched leads are never hidden: they sit in New AND in the total."""
     untouched = [_lead(f"old{i}", 30 + i) for i in range(24)]
     fresh = [_lead(f"new{i}", 0.1) for i in range(56)]
     stats = main.compute_employee_assignment_stats(untouched + fresh, "telecaller")
-    assert stats["assigned_total"] == 0
     assert stats["emp_new_leads"] == 80
+    assert stats["assigned_updated"] == 0
+    # Total is every assigned lead — it must match the Assign Leads screen.
+    assert stats["assigned_total"] == 80
+    assert stats["emp_new_leads"] + stats["assigned_updated"] == stats["assigned_total"]
 
 
 def test_workflow_pills_use_actioned_leads_only():
@@ -54,7 +58,9 @@ def test_workflow_pills_use_actioned_leads_only():
     stats = main.compute_employee_assignment_stats(leads, "telecaller")
     assert stats["emp_ringing"] == 2
     assert stats["emp_not_interested"] == 1
-    assert stats["assigned_total"] == 3
+    # Pills only cover actioned leads; Total additionally counts the untouched one.
+    assert stats["assigned_updated"] == 3
+    assert stats["assigned_total"] == 4
     assert stats["emp_new_leads"] == 1
 
 
@@ -73,7 +79,7 @@ def test_status_boxes_do_not_double_count_ringing_plus_follow_up():
     ]
     # Simulate Dhwani-style mix: 3 ringing (2 also have FU), 2 pure FU, 3 NI = 8 total worked
     stats = main.compute_employee_assignment_stats(leads, "telecaller")
-    assert stats["assigned_total"] == 8
+    assert stats["assigned_updated"] == 8
     assert stats["emp_ringing"] == 3
     assert stats["emp_follow_ups"] == 2  # exclusive — not the 2 overlapping ringing+FU
     assert stats["emp_not_interested"] == 3
@@ -297,8 +303,11 @@ def test_employee_status_boxes_sum_to_total():
     ]
     stats = main.compute_employee_assignment_stats(leads, "telecaller")
     assert stats["emp_new_leads"] == 2  # untouched + missed (both no workflow action)
-    assert stats["assigned_total"] == 10  # all actioned except missed + untouched
-    assert main.sum_employee_status_buckets(stats) == stats["assigned_total"]
+    assert stats["assigned_updated"] == 10  # all actioned except missed + untouched
+    # Total = everything assigned: no lead is ever dropped from a total.
+    assert stats["assigned_total"] == 12
+    assert stats["emp_new_leads"] + stats["assigned_updated"] == stats["assigned_total"]
+    assert main.sum_employee_status_buckets(stats) == stats["assigned_updated"]
 
 
 def test_lead_bucket_counts_match_filter_length():

@@ -48,9 +48,14 @@ def test_emp_missed_leads_box_count_matches_popup():
     popup = main.employee_metric_items("missed_leads", leads)
     assert {l["lead_id"] for l in popup} == {"missed1", "missed2"}
     assert stats["emp_missed_leads"] == len(popup) == 2
-    # Missed stays outside the exclusive status-box sum (it is part of New Leads).
-    assert main.sum_employee_status_buckets(stats) == stats["assigned_total"]
+    # Missed stays outside the exclusive status-box sum (it is part of New Leads);
+    # those pills cover actioned leads, which is exactly assigned_updated.
+    assert main.sum_employee_status_buckets(stats) == stats["assigned_updated"]
+    assert stats["assigned_updated"] == 2  # ringing + neg
     assert stats["emp_new_leads"] == 3  # missed1 + missed2 + fresh all untouched
+    # Nothing is lost: New + Updated is the full Total.
+    assert stats["assigned_total"] == 5
+    assert stats["emp_new_leads"] + stats["assigned_updated"] == stats["assigned_total"]
 
 
 def test_workflow_box_counts_match_drill_down_lists():
@@ -90,6 +95,11 @@ def test_workflow_box_counts_match_drill_down_lists():
         assert stats[stat_key] == len(items), (
             f"box {metric_key}: count {stats[stat_key]} does not match popup list {len(items)}"
         )
+    # The Updated box must also have a matching drill-down list.
+    assert stats["assigned_updated"] == len(
+        main.employee_metric_items("updated", leads, role="telecaller")
+    )
+    assert stats["emp_new_leads"] + stats["assigned_updated"] == stats["assigned_total"]
 
 
 def test_site_visit_assigned_box_count_matches_popup():
