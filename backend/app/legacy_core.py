@@ -134,6 +134,84 @@ async def debug_config():
         "frontend_url": FRONTEND_URL,
     }
 
+
+# Columns the running code reads or writes. If a column here is missing from
+# Supabase, the matching screen silently shows a wrong/zero number — which is
+# exactly what made a total disagree between pages. Open /schema-check to see
+# which ones your database is actually missing.
+REQUIRED_COLUMNS: Dict[str, tuple] = {
+    "leads": (
+        "lead_id", "name", "phone", "email", "external_lead_id", "source", "stage",
+        "status", "lead_type", "priority", "call_status", "budget", "location",
+        "property_type", "assigned_to", "assigned_at", "last_employee_action_at",
+        "site_visitor_id", "site_visit_assigned_by", "site_visit_assigned_at",
+        "follow_up_at", "created_at", "updated_at", "starred", "brokerage_amount",
+        "raw_payload",
+    ),
+    "employees": (
+        "employee_id", "name", "email", "role", "department", "active", "user_id",
+        "last_assigned_at", "last_seen_at", "last_lat", "last_lng",
+    ),
+    "users": (
+        "user_id", "email", "employee_id", "last_login_at", "active_session_id",
+        "active_login_at", "active_last_seen_at", "active_device_label",
+        "session_updated_at",
+    ),
+    "bookings": (
+        "booking_id", "lead_id", "lead_name", "property_name", "status",
+        "completed_tasks", "booking_officer_id", "agreement_status", "created_at",
+    ),
+    "activities": ("activity_id", "user_id", "lead_id", "type", "text", "created_at"),
+    "visits": ("visit_id", "status"),
+    "loans": ("loan_id", "lead_id"),
+    "customers": ("customer_id", "lead_id"),
+    "sessions": ("session_token", "user_id", "created_at", "expires_at"),
+    "notifications": ("notification_id", "user_id"),
+    "integration_events": (
+        "event_id", "source", "external_id", "lead_id", "status", "error",
+        "raw_payload", "created_at",
+    ),
+    "fcm_device_tokens": ("user_id", "fcm_token"),
+    "notification_preferences": ("user_id",),
+    "employee_locations": ("employee_id", "accepted", "accuracy", "ok", "reason"),
+}
+
+
+@app.get("/schema-check")
+async def schema_check():
+    """Report which code-required columns your Supabase database is missing.
+
+    Read-only. Uses PostgREST's column exactness so a missing column shows up as
+    an error instead of being silently ignored.
+    """
+    report: Dict[str, Any] = {"ok": True, "tables": {}, "missing": {}, "errors": {}}
+    for table, columns in REQUIRED_COLUMNS.items():
+        try:
+            rows = sb_select(table, {"select": ",".join(columns), "limit": "1"})
+            report["tables"][table] = {"status": "ok", "columns_checked": len(columns), "rows": len(rows)}
+        except Exception as exc:  # noqa: BLE001 - report, never crash the check
+            message = str(exc)
+            report["ok"] = False
+            report["errors"][table] = message[:300]
+            # Narrow down: test each column alone to name the missing ones.
+            missing = []
+            for column in columns:
+                try:
+                    sb_select(table, {"select": column, "limit": "1"})
+                except Exception:  # noqa: BLE001
+                    missing.append(column)
+            if missing:
+                report["missing"][table] = missing
+    if report["missing"]:
+        report["message"] = (
+            "Missing columns found. Run supabase/SCHEMA_MASTER.sql in the Supabase "
+            "SQL Editor — it is idempotent and only adds what is absent."
+        )
+    else:
+        report["message"] = "All code-required columns exist."
+    return report
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CORS_ORIGINS,
@@ -1465,6 +1543,22 @@ def is_lead_unassigned(lead: Dict[str, Any], employees: Optional[List[Dict[str, 
     return resolve_lead_assignee_employee(lead, employees) is None
 
 
+def pipeline_lead_universe(all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """THE definition of "a lead" for every total in the product.
+
+    Assign Leads, the Dashboard Total Leads box, the employee cards and My
+    Dashboard all start from this exact list, so no two screens can disagree
+    about how many leads exist.
+
+    Only two things are removed, and both are deliberate:
+      * broker-pool rows (a separate pool, never part of the sales pipeline)
+      * true sync duplicates (same external_lead_id from Housing/Meta)
+    Everything else counts — including booking/registration/loan leads, which
+    the Dashboard used to hide from its total.
+    """
+    return [l for l in dedupe_leads_by_external_id(all_leads) if is_pipeline_lead(l)]
+
+
 def filter_assign_workspace_leads(
     all_leads: List[Dict[str, Any]],
     inquiry_status: str = "all",
@@ -1475,9 +1569,8 @@ def filter_assign_workspace_leads(
     employees: Optional[List[Dict[str, Any]]] = None,
 ) -> List[Dict[str, Any]]:
     rows = [
-        l for l in dedupe_leads_by_external_id(all_leads)
-        if is_pipeline_lead(l)
-        and lead_matches_inquiry_filter(l, inquiry_status, employees)
+        l for l in pipeline_lead_universe(all_leads)
+        if lead_matches_inquiry_filter(l, inquiry_status, employees)
         and lead_matches_assign_source(l, source)
         and lead_matches_search_query(l, q)
         and lead_matches_location_filter(l, location)
@@ -7979,9 +8072,11 @@ def filter_lead_bucket(all_leads: List[Dict[str, Any]], bucket_key: str, today: 
             if is_unassigned_new_lead(l) and (l.get("created_at") or "")[:10] == today
         ]
     elif bucket_key == "all":
-        # Total Leads = Lead Overview only — exclude Booking department.
-        cleaned = clean_leads_for_platform_stats(all_leads)
-        filtered = [l for l in cleaned if not is_booking_department_lead(l)]
+        # Total Leads = the SAME list Assign Leads counts, so the two pages can
+        # never disagree. Booking/registration leads are included here and are
+        # also shown separately in Booking Overview (that is a different view of
+        # the same leads, not an extra set of leads).
+        return pipeline_lead_universe(all_leads)
     elif bucket_key in DASHBOARD_PARTITION_BUCKETS or bucket_key in DASHBOARD_BOOKING_BUCKETS:
         cleaned = clean_leads_for_platform_stats(all_leads)
         filtered = [l for l in cleaned if classify_company_dashboard_bucket(l) == bucket_key]
@@ -7999,13 +8094,19 @@ def compute_lead_bucket_counts(
     all_leads: Optional[List[Dict[str, Any]]] = None,
     today: Optional[str] = None,
 ) -> Dict[str, int]:
-    """Single source of truth for dashboard box counts — same filter+dedupe as /leads/filtered."""
+    """Single source of truth for dashboard box counts — same filter+dedupe as /leads/filtered.
+
+    Every bucket is a slice of `all` (the same universe Assign Leads counts), so
+    Lead Overview + Booking Overview together add up to Total Leads exactly.
+    """
     leads = all_leads if all_leads is not None else fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
     day = today or now_utc().date().isoformat()
     counts = {key: len(filter_lead_bucket(leads, key, day)) for key in LEAD_BUCKET_KEYS}
     # Invariant helpers for API consumers / tests.
     counts["partition_sum"] = sum_dashboard_partition(counts)
     counts["booking_partition_sum"] = sum_dashboard_booking_buckets(counts)
+    # Total Leads is the whole universe: overview + booking slices cover it.
+    counts["all"] = counts["partition_sum"] + counts["booking_partition_sum"]
     return counts
 
 

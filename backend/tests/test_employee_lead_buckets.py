@@ -207,7 +207,8 @@ def test_dashboard_partition_sums_to_total():
         _lead("closed", 10, stage="closed"),
     ]
     counts = main.compute_lead_bucket_counts(leads, today)
-    assert counts["all"] == 10  # excl. booking + loan + closed + registration
+    # Total Leads = the same universe Assign Leads counts (booking included).
+    assert counts["all"] == 14
     assert counts["open_leads"] == 3  # fresh + unassigned + older_unassigned
     assert counts["missed_leads"] == 1
     assert counts["ringing"] == 1
@@ -218,15 +219,17 @@ def test_dashboard_partition_sums_to_total():
     assert counts["visited"] == 1
     assert counts["registration"] == 1
     assert counts["booking"] == 3  # booking + loan + closed
-    assert counts["partition_sum"] == counts["all"]
-    assert main.sum_dashboard_partition(counts) == counts["all"]
+    assert counts["partition_sum"] == 10  # Lead Overview slice
     assert counts["booking_partition_sum"] == 4  # booking(3) + registration(1)
+    # Lead Overview + Booking Overview together cover Total Leads exactly.
+    assert counts["partition_sum"] + counts["booking_partition_sum"] == counts["all"]
+    assert main.sum_dashboard_partition(counts) == counts["partition_sum"]
     assert main.sum_dashboard_booking_buckets(counts) == 4
-    # Booking department leads are not inside Total Leads list.
+    # Booking department leads ARE inside Total Leads (one lead, shown twice).
     total_ids = {l["lead_id"] for l in main.filter_lead_bucket(leads, "all", today)}
     booking_ids = {l["lead_id"] for l in main.filter_lead_bucket(leads, "booking", today)}
     reg_ids = {l["lead_id"] for l in main.filter_lead_bucket(leads, "registration", today)}
-    assert total_ids.isdisjoint(booking_ids | reg_ids)
+    assert (booking_ids | reg_ids) <= total_ids
     # New Today is a subset of open leads, not an extra partition member.
     assert counts["new_today"] == 1
     assert counts["new_today"] <= counts["open_leads"]

@@ -294,8 +294,8 @@ export default function Dashboard() {
               onPress={() => setLeadsBucket('all')}
               helper={
                 stats?.housing_leads != null
-                  ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · Lead Overview = ${model.partitionSum}`
-                  : `Lead Overview boxes = ${model.partitionSum} (excl. Booking dept)`
+                  ? `${stats.housing_leads} Housing · ${stats.meta_leads ?? 0} Meta · Lead Overview ${model.partitionSum} + Booking ${model.bookingPartitionSum}`
+                  : `Lead Overview ${model.partitionSum} + Booking ${model.bookingPartitionSum}`
               }
             />
             <MetricCard icon="flash-outline" label="New Today" value={model.newToday} accent="#6366F1" helper="Today's unassigned · subset of Open Leads" onPress={() => setLeadsBucket('new_today')} />
@@ -313,8 +313,8 @@ export default function Dashboard() {
         <View style={styles.metricSection}>
           <Text style={[styles.sectionLabel, { color: colors.textMuted }]}>Booking Overview</Text>
           <View style={styles.metricGrid}>
-            <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper="Booking records in system · not part of Total Leads" onPress={() => router.push('/(app)/bookings' as any)} />
-            <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Booking department · not in Total Leads" onPress={() => setLeadsBucket('registration')} />
+            <MetricCard icon="document-text-outline" label="Bookings" value={model.bookings} accent={colors.warning} helper="Booking records in system" onPress={() => router.push('/(app)/bookings' as any)} />
+            <MetricCard icon="ribbon-outline" label="Registration" value={model.registrationLeads} accent="#0891B2" helper="Booking dept · also counted in Total Leads" onPress={() => setLeadsBucket('registration')} />
             {DASHBOARD_BOOKING_TASK_KEYS.map((taskKey) => {
               const task = BOOKING_TASKS.find((t) => t.key === taskKey)!;
               return (
