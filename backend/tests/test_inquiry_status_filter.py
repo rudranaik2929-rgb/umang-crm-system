@@ -33,7 +33,15 @@ def test_lead_matches_multiple_inquiry_status_or_logic():
     assert main.lead_matches_inquiry_filter(hot, "hot,ringing") is True
 
 
-def test_unassigned_filter_matches_null_and_legacy_name_assignments():
+def test_unassigned_filter_matches_open_leads_definition():
+    """The "Unassigned" box/list counts the same leads as Dashboard "Open Leads".
+
+    It used to filter to owner-less leads only, which made the Assign Leads box
+    disagree with the Dashboard by a lead or two. Both now share the Lead
+    Overview `open_leads` classification, so a lead assigned to an employee but
+    still sitting in stage new/assigned counts in both — and a lead already
+    worked into positive/visited/booking does not.
+    """
     employees = [
         {"employee_id": "emp1", "user_id": "user1", "name": "Khyati Shah", "active": True},
     ]
@@ -42,20 +50,29 @@ def test_unassigned_filter_matches_null_and_legacy_name_assignments():
     legacy_name = _lead(lead_id="l3", assigned_to="Khyati Shah", stage="assigned")
     by_id = _lead(lead_id="l4", assigned_to="emp1", stage="assigned")
     orphan_value = _lead(lead_id="l5", assigned_to="deleted_emp", stage="new")
+    worked_positive = _lead(lead_id="l6", assigned_to=None, stage="positive", priority="hot")
 
+    # The owner-less predicate itself is unchanged.
     assert main.is_lead_unassigned(truly_unassigned, employees) is True
     assert main.is_lead_unassigned(blank_assigned, employees) is True
     assert main.is_lead_unassigned(orphan_value, employees) is True
     assert main.is_lead_unassigned(legacy_name, employees) is False
     assert main.is_lead_unassigned(by_id, employees) is False
 
+    everything = [truly_unassigned, blank_assigned, legacy_name, by_id, orphan_value, worked_positive]
     filtered = main.filter_assign_workspace_leads(
-        [truly_unassigned, blank_assigned, legacy_name, by_id, orphan_value],
+        everything,
         assigned_to="unassigned",
         employees=employees,
     )
     ids = {row["lead_id"] for row in filtered}
-    assert ids == {"l1", "l2", "l5"}
+    # Every open lead, whether or not it has an owner — but not the worked one.
+    assert ids == {"l1", "l2", "l3", "l4", "l5"}
+
+    # And it is exactly the Dashboard open-leads set.
+    today = main.now_utc().date().isoformat()
+    dashboard_ids = {l["lead_id"] for l in main.filter_lead_bucket(everything, "open_leads", today)}
+    assert ids == dashboard_ids
 
 
 def test_unassigned_filter_sorts_newest_created_first():

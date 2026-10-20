@@ -29,8 +29,11 @@ const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
 // v4: Dashboard "Total Leads" now counts the SAME universe as Assign Leads
 // (booking/registration leads are included), so both pages show one number.
 // Bumping the key stops browsers re-hydrating the old, smaller figure.
-const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v4';
-const GET_STORAGE_KEY = 'umang_get_cache_v4';
+// v5: Assign Leads "Unassigned" now counts the same leads as Dashboard
+// "Open Leads" (they used to differ by a lead). Bumping the key stops browsers
+// re-hydrating the old, slightly different box number.
+const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v5';
+const GET_STORAGE_KEY = 'umang_get_cache_v5';
 const USER_SNAPSHOT_KEY = 'auth-user';
 
 export const api = axios.create({

@@ -93,12 +93,8 @@ function isOpenLeadMatch(lead: any): boolean {
 function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilters): boolean {
   const assignee = (filters.assigned_to || 'all').trim().toLowerCase();
   if (assignee === 'unassigned') {
-    const stage = lead?.stage;
-    const pr = String(lead?.priority || '').toLowerCase();
-    if (['booking', 'loan', 'registration'].includes(stage) || ['handoff_booking', 'handoff_loan'].includes(pr)) {
-      return false;
-    }
-    return !String(lead?.assigned_to || '').trim();
+    // Same shared rule as the box, the list and the Dashboard Open Leads box.
+    return isOpenLeadMatch(lead);
   }
   if (assignee && assignee !== 'all') {
     return String(lead?.assigned_to || '') === assignee;
@@ -108,7 +104,10 @@ function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilter
   const keys = inquiryRaw.split(',').map((s) => s.trim()).filter((s) => s && s !== 'all');
   if (!keys.length) return true;
   return keys.some((inquiry) => {
-    if (inquiry === 'unassigned') return !String(lead?.assigned_to || '').trim();
+    // "Unassigned" and "Open Leads" are the SAME box on purpose: both count the
+    // open pipeline leads the Dashboard calls Open Leads, so the Assign Leads
+    // box, this list, and the Dashboard box can never disagree by a lead.
+    if (inquiry === 'unassigned') return isOpenLeadMatch(lead);
     if (inquiry === 'not_interested') {
       return lead?.status === 'negative'
         && !['low_budget', 'other_location', 'already_purchased', 'not_searching'].includes(String(lead?.priority || ''));
@@ -761,6 +760,7 @@ export default function AssignLeads() {
                 icon="time-outline"
                 active={isUnassignedView}
                 onPress={showUnassignedLeads}
+                helper="Open leads · same box as Dashboard Open Leads"
               />
               <SummaryBox colors={colors} label="Team" value={employees.length} accent="#14B8A6" icon="people-outline" />
             </View>
@@ -1076,12 +1076,15 @@ export default function AssignLeads() {
   );
 }
 
-function SummaryBox({ label, value, accent, icon, colors, onPress, active }: any) {
+function SummaryBox({ label, value, accent, icon, colors, onPress, active, helper }: any) {
   const box = (
     <>
       <Ionicons name={icon} size={16} color={accent} />
       <Text style={{ color: colors.textMuted, fontSize: 9, fontWeight: '700', letterSpacing: 0.6, marginTop: 6 }}>{label.toUpperCase()}</Text>
       <Text style={{ color: colors.text, fontSize: 20, fontWeight: '700' }}>{value}</Text>
+      {helper ? (
+        <Text style={{ color: colors.textMuted, fontSize: 9, marginTop: 2, textAlign: 'center' }}>{helper}</Text>
+      ) : null}
     </>
   );
   if (!onPress) {

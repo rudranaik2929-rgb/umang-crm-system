@@ -1559,6 +1559,20 @@ def pipeline_lead_universe(all_leads: List[Dict[str, Any]]) -> List[Dict[str, An
     return [l for l in dedupe_leads_by_external_id(all_leads) if is_pipeline_lead(l)]
 
 
+def assign_unassigned_lead(lead: Dict[str, Any]) -> bool:
+    """The "Unassigned" box on Assign Leads — the SAME leads as Dashboard "Open Leads".
+
+    These two boxes used to answer slightly different questions (one counted
+    every open pipeline lead, the other only ownerless ones), so they could
+    differ by a lead or two and look like a counting bug. They now share one
+    rule: the Lead Overview `open_leads` classification.
+
+    Keep this in sync with `classify_company_dashboard_bucket(...) == "open_leads"`
+    — that is guaranteed because it calls it directly.
+    """
+    return classify_company_dashboard_bucket(lead) == "open_leads"
+
+
 def filter_assign_workspace_leads(
     all_leads: List[Dict[str, Any]],
     inquiry_status: str = "all",
@@ -1577,7 +1591,7 @@ def filter_assign_workspace_leads(
     ]
     assignee = (assigned_to or "all").strip().lower()
     if assignee == "unassigned":
-        rows = [l for l in rows if is_lead_unassigned(l, employees)]
+        rows = [l for l in rows if assign_unassigned_lead(l)]
     elif assignee not in ("", "all"):
         emp = next((e for e in (employees or []) if e.get("employee_id") == assigned_to), None)
         if emp:
@@ -1597,6 +1611,9 @@ def compute_assign_workspace_facets(
 ) -> Dict[str, Any]:
     pipeline = [l for l in dedupe_leads_by_external_id(all_leads) if is_pipeline_lead(l)]
     inquiry: Dict[str, int] = {k: 0 for k in ASSIGN_INQUIRY_STATUSES}
+    # Diagnostic-only: how many leads have no owner. The "Unassigned" box itself
+    # uses the shared open-leads rule below, so it always equals `open_leads`.
+    inquiry["unassigned_ownerless"] = 0
     source: Dict[str, int] = {k: 0 for k in ASSIGN_SOURCE_FILTERS}
     for lead in pipeline:
         inquiry["all"] += 1
@@ -1604,11 +1621,15 @@ def compute_assign_workspace_facets(
         if bucket in inquiry:
             inquiry[bucket] += 1
         if is_lead_unassigned(lead, employees):
-            inquiry["unassigned"] += 1
+            inquiry["unassigned_ownerless"] += 1
         if is_missed_lead(lead):
             inquiry["missed_leads"] += 1
-        if classify_company_dashboard_bucket(lead) == "open_leads":
+        # ONE definition for the "Unassigned" box, shared with Dashboard
+        # "Open Leads" and with the `assigned_to=unassigned` list below, so the
+        # box number and the list it opens always agree exactly.
+        if assign_unassigned_lead(lead):
             inquiry["open_leads"] += 1
+            inquiry["unassigned"] += 1
         plat = classify_lead_platform(lead.get("source"))
         source["all"] += 1
         if plat == "housing":
@@ -8504,7 +8525,10 @@ async def stats_assignment(cu: User = Depends(get_current_user)):
         })
     unassigned = compute_unassigned_queue(all_leads)
     payload = {
-        "unassigned_count": len(unassigned),
+        # Same definition as the Assign Leads "Unassigned" box and Dashboard
+        # "Open Leads", so every screen that shows this number agrees.
+        "unassigned_count": sum(1 for l in pipeline_lead_universe(all_leads) if assign_unassigned_lead(l)),
+        "ownerless_count": len(unassigned),
         "employees": rows,
     }
     _assignment_stats_cache.update({"ts": now, "data": payload})

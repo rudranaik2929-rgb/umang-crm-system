@@ -30,7 +30,7 @@ create table if not exists public.leads (
     email                    text,
     address                  text,
     external_lead_id         text,
-    integration_uuid         text,
+    integration_uuid         text, 
     source                   text,
     platform                 text,
     stage                    text default 'new',
