@@ -1608,8 +1608,27 @@ def filter_assign_workspace_leads(
 def compute_assign_workspace_facets(
     all_leads: List[Dict[str, Any]],
     employees: Optional[List[Dict[str, Any]]] = None,
+    assigned_to: str = "all",
 ) -> Dict[str, Any]:
+    """Box counts for the Assign Leads screen.
+
+    `assigned_to` scopes the counts to one employee, so picking a person in
+    Advanced Search changes the boxes to that person's own numbers instead of
+    leaving the company-wide totals on screen. "all" keeps the company view.
+    """
     pipeline = [l for l in dedupe_leads_by_external_id(all_leads) if is_pipeline_lead(l)]
+    assignee = (assigned_to or "all").strip().lower()
+    if assignee and assignee not in ("", "all"):
+        if assignee == "unassigned":
+            # Unassigned is not an employee: show the shared open-leads universe.
+            pipeline = [l for l in pipeline if assign_unassigned_lead(l)]
+        else:
+            emp = next((e for e in (employees or []) if e.get("employee_id") == assigned_to), None)
+            if emp:
+                pipeline = [l for l in pipeline if lead_assigned_to_employee(l, emp)]
+            else:
+                pipeline = [l for l in pipeline if clean_text(l.get("assigned_to")) == assigned_to]
+
     inquiry: Dict[str, int] = {k: 0 for k in ASSIGN_INQUIRY_STATUSES}
     # Diagnostic-only: how many leads have no owner. The "Unassigned" box itself
     # uses the shared open-leads rule below, so it always equals `open_leads`.
@@ -8327,7 +8346,9 @@ async def list_assign_workspace(
 
     filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location, all_employees)
     page = enrich_leads_with_employee_names(filtered[offset:offset + limit], all_employees)
-    facets = compute_assign_workspace_facets(all_leads, all_employees)
+    # Boxes follow the employee you picked, so the counts on screen always
+    # describe the same leads as the list underneath them.
+    facets = compute_assign_workspace_facets(all_leads, all_employees, assigned_to)
     total_filtered = len(filtered)
 
     return {

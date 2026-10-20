@@ -266,6 +266,11 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
                 testID="filter-assigned-to"
               />
             </View>
+
+            <Text style={{ color: colors.textMuted, fontSize: 11, lineHeight: 16 }}>
+              Pick an employee to see only their leads — the counts above change to
+              that person&apos;s numbers, and switch again when you choose someone else.
+            </Text>
           </View>
 
           <View style={styles.actions}>

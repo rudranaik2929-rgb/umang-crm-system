@@ -383,6 +383,12 @@ export default function AssignLeads() {
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const allSelected = leads.length > 0 && selected.size === leads.length;
   const unassignedCount = facets?.inquiry_status?.unassigned ?? 0;
+  // Boxes are scoped to this employee when one is picked in Advanced Search.
+  const selectedEmployeeName = useMemo(() => {
+    if (filters.assigned_to === 'all' || filters.assigned_to === 'unassigned') return '';
+    const emp = employees.find((e) => e.employee_id === filters.assigned_to);
+    return emp?.name || '';
+  }, [filters.assigned_to, employees]);
 
   const activeFilterChips = useMemo(() => {
     const chips: string[] = [];
@@ -745,12 +751,13 @@ export default function AssignLeads() {
             <View style={styles.summaryRow}>
               <SummaryBox
                 colors={colors}
-                label="Showing"
+                label={selectedEmployeeName ? `Showing · ${selectedEmployeeName}` : 'Showing'}
                 value={total}
                 accent={colors.primary}
                 icon="list-outline"
                 active={!isUnassignedView && filters.inquiry_status === 'all' && filters.source === 'all' && !filters.q.trim() && !filters.location.trim()}
                 onPress={showAllLeads}
+                helper={selectedEmployeeName ? 'Leads assigned to this employee' : undefined}
               />
               <SummaryBox
                 colors={colors}
@@ -760,14 +767,22 @@ export default function AssignLeads() {
                 icon="time-outline"
                 active={isUnassignedView}
                 onPress={showUnassignedLeads}
-                helper="Open leads · same box as Dashboard Open Leads"
+                helper={
+                  selectedEmployeeName
+                    ? `Open leads · ${selectedEmployeeName}`
+                    : 'Open leads · same box as Dashboard Open Leads'
+                }
               />
               <SummaryBox colors={colors} label="Team" value={employees.length} accent="#14B8A6" icon="people-outline" />
             </View>
 
             <View style={[styles.panel, { backgroundColor: colors.surface, borderColor: colors.border }]}>
               <Text style={[styles.panelTitle, { color: colors.text }]}>
-                {isUnassignedView ? 'Unassigned leads' : 'Filtered leads'}
+                {isUnassignedView
+                  ? 'Unassigned leads'
+                  : selectedEmployeeName
+                    ? `${selectedEmployeeName}'s leads`
+                    : 'Filtered leads'}
               </Text>
               <Text style={[styles.panelSub, { color: colors.textMuted }]}>
                 {loading && leads.length === 0
