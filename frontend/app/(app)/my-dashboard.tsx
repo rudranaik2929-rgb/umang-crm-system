@@ -46,6 +46,7 @@ const MY_PERFORMANCE_KPIS: Array<{
   valueKey: string;
 }> = [
   { label: 'New Leads', metric: 'new_leads', icon: 'sparkles-outline', colorKey: 'primary', valueKey: 'emp_new_leads' },
+  { label: 'Updated', metric: 'updated', icon: 'sync-outline', colorKey: 'info', valueKey: 'assigned_updated' },
   { label: 'Total Leads', metric: 'total', icon: 'list-outline', colorKey: 'info', valueKey: 'leads_total' },
   { label: 'Missed Lead', metric: 'missed_leads', icon: 'alert-circle', colorKey: 'negative', valueKey: 'emp_missed_leads' },
   { label: 'Hot', metric: 'hot', icon: 'flame', colorKey: 'warning', valueKey: 'emp_hot' },
@@ -153,6 +154,7 @@ export default function MyDashboard() {
   const leads = data.leads;
   const newLeadsCount = Number(personal.emp_new_leads ?? 0);
   const backlogTotal = Number(personal.leads_total ?? 0);
+  const updatedCount = Number(personal.assigned_updated ?? 0);
   const cta = ROLE_CTA[role] || ROLE_CTA.admin;
   const missedCount = Number(data.missed_leads_total ?? personal.emp_missed_leads ?? 0);
   const missedLeads = Array.isArray(data.missed_leads) ? data.missed_leads : [];
@@ -283,6 +285,16 @@ export default function MyDashboard() {
               <Text style={[styles.newLeadsVal, { color: accent }]}>{newLeadsCount}</Text>
               <Text style={[styles.scoreSub, { color: colors.textSecondary, textAlign: 'center' }]}>
                 Not yet updated — tap to call
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => handleKpiPress('updated')}
+              style={[styles.backlogCard, { backgroundColor: colors.surfaceAlt, borderColor: colors.border }]}
+            >
+              <Text style={[styles.scoreLabel, { color: colors.textMuted }]}>UPDATED</Text>
+              <Text style={[styles.backlogVal, { color: colors.info }]}>{updatedCount}</Text>
+              <Text style={[styles.scoreSub, { color: colors.textSecondary, textAlign: 'center' }]}>
+                In a status box
               </Text>
             </Pressable>
             <Pressable

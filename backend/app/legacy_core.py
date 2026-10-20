@@ -890,13 +890,13 @@ def is_newly_assigned_lead(lead: Dict[str, Any], hours: int = MISSED_LEAD_HOURS)
 def filter_employee_new_leads(emp_leads: List[Dict[str, Any]], hours: int = MISSED_LEAD_HOURS) -> List[Dict[str, Any]]:
     """Assigned leads with no employee workflow update yet — My Dashboard New Leads."""
     rows = normalize_employee_leads(emp_leads)
-    return dedupe_leads([l for l in rows if not has_employee_workflow_action(l)])
+    return [l for l in rows if not has_employee_workflow_action(l)]
 
 
 def filter_employee_backlog_leads(emp_leads: List[Dict[str, Any]], hours: int = MISSED_LEAD_HOURS) -> List[Dict[str, Any]]:
     """Leads where employee took action (ringing, visited, not interested, hot, etc.)."""
     rows = normalize_employee_leads(emp_leads)
-    return dedupe_leads([l for l in rows if has_employee_workflow_action(l)])
+    return [l for l in rows if has_employee_workflow_action(l)]
 
 
 def filter_employee_all_assigned_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -904,22 +904,28 @@ def filter_employee_all_assigned_leads(emp_leads: List[Dict[str, Any]]) -> List[
 
     This is deliberately the same universe the Assign Leads workspace shows when
     it is filtered to one employee, so the workspace and the Dashboard can never
-    report different numbers for the same person. Untouched leads count here too:
-    no lead is ever dropped from a total, it just also appears in New Leads.
+    report different numbers for the same person.
+
+    Counting only ever collapses TRUE sync duplicates (same external_lead_id).
+    Two different leads that happen to share a phone number or an email are
+    separate leads and each one is counted — a walk-in re-entry, a manual add of
+    someone already imported, two family members on one number, or the same
+    person entered twice are all real rows the team typed in, so dropping them
+    here is what made Assign Leads say 6084 while the cards said 6051.
     """
-    return dedupe_leads(normalize_employee_leads(emp_leads))
+    return normalize_employee_leads(emp_leads)
 
 
 def filter_employee_missed_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Leads assigned 24h+ ago with no employee status update — My Dashboard Missed Lead box."""
     rows = normalize_employee_leads(emp_leads)
-    return dedupe_leads([l for l in rows if is_missed_lead(l)])
+    return [l for l in rows if is_missed_lead(l)]
 
 
 def filter_employee_my_queue_leads(emp_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """My Queue — assigned pipeline leads excluding missed (missed has its own box)."""
     rows = normalize_employee_leads(emp_leads)
-    return dedupe_leads([l for l in rows if not is_missed_lead(l)])
+    return [l for l in rows if not is_missed_lead(l)]
 
 
 def filter_employee_queue_leads(emp_leads: List[Dict[str, Any]], role: Optional[str]) -> List[Dict[str, Any]]:
@@ -1092,7 +1098,7 @@ def employee_metric_items(
         source = all_leads if all_leads is not None else rows
         if employee is not None:
             return filter_site_visit_assigned_leads(source, employee)
-        return [l for l in dedupe_leads(source) if clean_text(l.get("site_visitor_id"))]
+        return [l for l in normalize_employee_leads(source) if clean_text(l.get("site_visitor_id"))]
     if key in ("today_activity", "today"):
         return build_today_activity_report(activities or [], rows)
     if key in BOOKING_TASK_KEYS:
@@ -11164,8 +11170,11 @@ async def stats_me(cu: User=Depends(get_current_user)):
     if not activities and not leads:
         score = 0
 
-    hot = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"] and l.get("status") != "negative")
-    cold = sum(1 for l in dedupe_leads(leads) if l.get("stage") in ["new", "assigned", "contacted"] and l.get("status") != "negative")
+    # Count every assigned lead (same rule as every other screen) — a shared
+    # phone/email must never hide a lead from these two counters.
+    metric_rows = normalize_employee_leads(leads)
+    hot = sum(1 for l in metric_rows if l.get("stage") in ["positive", "site_visit", "booking", "loan", "registration"] and l.get("status") != "negative")
+    cold = sum(1 for l in metric_rows if l.get("stage") in ["new", "assigned", "contacted"] and l.get("status") != "negative")
 
     missed_rows = filter_employee_missed_leads(leads)
     missed_rows.sort(key=lambda l: l.get("assigned_at") or l.get("updated_at") or l.get("created_at") or "", reverse=False)
@@ -11181,7 +11190,7 @@ async def stats_me(cu: User=Depends(get_current_user)):
             "actions_total": len(activities),
             "leads_total": metric_counts["total"],
             "emp_new_leads": metric_counts["new_leads"],
-            "assigned_updated": assignment["assigned_updated"],
+            "assigned_updated": metric_counts["updated"],
             "assigned_active": assignment["assigned_active"],
             "assigned_completed": assignment["assigned_completed"],
             "assigned_queue": assignment["assigned_queue"],
@@ -11226,7 +11235,7 @@ EMPLOYEE_METRIC_KEYS = [
 ] + BOOKING_TASK_KEYS
 
 MY_DASHBOARD_METRICS = [
-    "new_leads", "total", "missed_leads", "hot", "cold", "visited",
+    "new_leads", "updated", "total", "missed_leads", "hot", "cold", "visited",
     "not_interested", "booking_done", "low_budget", "follow_ups", "today_follow_ups",
     "ringing", "today_activity", "site_visit_assigned",
 ]
@@ -11287,7 +11296,9 @@ def personal_dashboard_metric_items(
 ) -> List[Any]:
     """Single source of truth — My Dashboard KPI count and drill-down list always match."""
     key = (metric_key or "").strip().lower()
-    rows = dedupe_leads(emp_leads)
+    # Same universe as the employee card: every assigned lead, only true sync
+    # duplicates collapsed. Phone/email sharing must NOT drop a real lead here.
+    rows = normalize_employee_leads(emp_leads)
     backlog = filter_employee_backlog_leads(rows)
 
     if key in ("site_visit_assigned", "assigned_for_visit"):
@@ -11295,7 +11306,7 @@ def personal_dashboard_metric_items(
         source = all_leads if all_leads is not None else emp_leads
         if employee is not None:
             return filter_site_visit_assigned_leads(source, employee)
-        return [l for l in dedupe_leads(source) if clean_text(l.get("site_visitor_id"))]
+        return [l for l in normalize_employee_leads(source) if clean_text(l.get("site_visitor_id"))]
     if key in ("total", "all", "leads_total", "assigned_total"):
         # Every lead assigned to me — same number the Assign Leads workspace
         # shows when filtered to this employee.

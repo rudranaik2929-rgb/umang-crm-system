@@ -26,11 +26,11 @@ const GET_CACHE_MS = 15000;
 /** Dashboard bundles are expensive — allow short stale-while-revalidate window. */
 const BUNDLE_CACHE_MS = 30000;
 const SNAPSHOT_TTL_MS = 30 * 60 * 1000;
-// v2: employee "Total Leads" changed from actioned-only to ALL assigned leads.
-// Bumping the key guarantees no browser re-hydrates the old snapshots/cache and
-// keeps showing the previous 314-style numbers after this deploy.
-const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v2';
-const GET_STORAGE_KEY = 'umang_get_cache_v2';
+// v3: employee/dashboard counts stopped collapsing leads that merely share a
+// phone/email, so every screen now agrees with Assign Leads. Bumping the key
+// stops browsers re-hydrating snapshots that still hold the old (lower) numbers.
+const SNAPSHOT_STORAGE_KEY = 'umang_snapshots_v3';
+const GET_STORAGE_KEY = 'umang_get_cache_v3';
 const USER_SNAPSHOT_KEY = 'auth-user';
 
 export const api = axios.create({
