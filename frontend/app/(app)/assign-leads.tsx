@@ -124,9 +124,16 @@ function leadStillMatchesAssignFilters(lead: any, filters: AssignWorkspaceFilter
         && !String(lead?.call_status || '').trim()
         && !['hot', 'cold'].includes(String(lead?.priority || '').toLowerCase());
     }
-    if (inquiry === 'new') return !String(lead?.assigned_to || '').trim() && lead?.stage === 'new';
-    if (inquiry === 'active') return lead?.status !== 'negative' && lead?.stage !== 'closed';
+    // `new` = still waiting for an owner, in the new/assigned stage — the same
+    // rule the backend classifies with, so a booking flow never re-labels it.
+    if (inquiry === 'new') {
+      return !String(lead?.assigned_to || '').trim()
+        && ['new', 'assigned'].includes(String(lead?.stage || ''));
+    }
+    // Trust the server's classification when present: it is the single source of
+    // truth the box counts are built from, so the list can never drift from the box.
     if (lead?.inquiry_status) return String(lead.inquiry_status).toLowerCase() === inquiry;
+    if (inquiry === 'active') return lead?.status !== 'negative' && lead?.stage !== 'closed';
     return true;
   });
 }

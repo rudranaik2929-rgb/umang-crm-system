@@ -1452,14 +1452,16 @@ def lead_matches_single_inquiry_filter(
     key = (inquiry_status or "").strip().lower()
     if not key or key == "all":
         return True
-    if key == "unassigned":
-        return is_lead_unassigned(lead, employees)
+    # "unassigned" and "open_leads" are the SAME box (see assign_unassigned_lead),
+    # so selecting either must return that box's leads exactly. Using
+    # is_lead_unassigned here would show an empty list while the box reads a
+    # non-zero number whenever the selected employee already owns the leads.
+    if key in ("unassigned", "open_leads"):
+        return assign_unassigned_lead(lead)
     if key == "booked":
         return lead.get("stage") in ["booking", "loan", "registration"] or _lead_priority(lead) in [HANDOFF_BOOKING, HANDOFF_LOAN]
     if key == "missed_leads":
         return is_missed_lead(lead)
-    if key == "open_leads":
-        return classify_company_dashboard_bucket(lead) == "open_leads"
     return classify_inquiry_status(lead) == key
 
 
