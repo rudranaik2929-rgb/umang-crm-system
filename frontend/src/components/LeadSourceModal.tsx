@@ -129,7 +129,8 @@ export function LeadSourceModal({ visible, onClose, userRole, onChanged, scope =
     setListTotal(0);
   }, []);
 
-  const canSyncIntegrations = scope === 'company' && ['admin', 'manager', 'marketing'].includes(String(userRole || '').toLowerCase());
+  // Integrations (new-lead intake) are for the admin and the marketing team only.
+  const canSyncIntegrations = scope === 'company' && ['admin', 'marketing'].includes(String(userRole || '').toLowerCase());
   const isMine = scope === 'mine';
   const statsPath = isMine ? '/stats/me/leads-by-platform' : '/stats/leads-by-platform';
   const modalTitle = isMine ? 'My Queue by Platform' : 'Leads by Platform';

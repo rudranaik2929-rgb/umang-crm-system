@@ -33,7 +33,7 @@ function formatArrival(value?: string): string {
 
 // Polls for newly arrived leads (Housing / Meta / manual) and shows a stacked
 // toast for each one as it lands, with the platform and real arrival date-time.
-// Designed for the manager/admin dashboard.
+// Designed for the admin / Team Lead dashboard.
 export function NewLeadPopup({ enabled = true, pollMs = 120000 }: { enabled?: boolean; pollMs?: number }) {
   const { colors } = useTheme();
   const [queue, setQueue] = useState<RecentLead[]>([]);

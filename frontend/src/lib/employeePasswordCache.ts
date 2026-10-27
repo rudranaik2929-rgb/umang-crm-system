@@ -1,4 +1,4 @@
-/** Manager-set employee login passwords (session only — not retrievable from server hash). */
+/** Admin / Team Lead-set employee login passwords (session only — not retrievable from server hash). */
 const STORAGE_KEY = 'umang_employee_login_passwords';
 
 function readMap(): Record<string, string> {

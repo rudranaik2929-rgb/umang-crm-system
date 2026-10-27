@@ -3,6 +3,7 @@ import { Platform } from 'react-native';
 import { api, BACKEND, setToken, setActAsId, warmUpBackend, clearSnapshots, getSnapshot, setSnapshot, USER_SNAPSHOT_KEY, isTransientApiError } from '../lib/api';
 import { useEmployeeLocation } from '../hooks/useEmployeeLocation';
 import { registerPushToken } from '../notifications/usePushNotifications';
+import { normalizeRole } from '../lib/constants';
 
 export interface User {
   user_id: string;
@@ -14,6 +15,16 @@ export interface User {
   acting_as_employee_id?: string | null;
   allowed_pages?: string[] | null;
   dashboard_type?: string | null;
+  /** Team this login leads or works in (from /auth/me). */
+  team_lead_id?: string | null;
+  team_lead_name?: string | null;
+  regions?: string[] | null;
+}
+
+/** Old sessions/snapshots may still carry role "manager" — show them as Team Lead. */
+function normalizeUser(u: User | null | undefined): User | null {
+  if (!u) return null;
+  return u.role ? { ...u, role: normalizeRole(u.role) } : u;
 }
 
 export type ExchangeResult =
@@ -81,7 +92,8 @@ function parseShiftDetail(detail: any): { active_device?: string; message?: stri
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const cachedUser = getSnapshot<User>(USER_SNAPSHOT_KEY);
-  const [user, setUser] = useState<User | null>(cachedUser ?? null);
+  const [user, setUserState] = useState<User | null>(normalizeUser(cachedUser));
+  const setUser = useCallback((u: User | null) => setUserState(normalizeUser(u)), []);
   const [loading, setLoading] = useState(!cachedUser);
   const { status: locationStatus, requestAccess: requestLocationAccess } = useEmployeeLocation(user);
 

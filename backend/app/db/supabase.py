@@ -31,7 +31,29 @@ def sb_select(table: str, params: Optional[dict] = None) -> list:
     return r.json() if r.status_code < 400 else []
 
 
+class SupabaseReadError(RuntimeError):
+    """A PostgREST read failed — callers must not mistake it for 'no rows'."""
+
+
+def sb_select_strict(table: str, params: Optional[dict] = None) -> list:
+    """Like sb_select, but raises instead of returning [] on an HTTP error.
+
+    Use wherever an empty result would be acted on (full-table pagination,
+    exports, wipe detection): a transient 5xx must never look like 'no leads'.
+    """
+    r = _http.get(sb_url(table), headers=sb_headers(), params=params or {})
+    if r.status_code >= 400:
+        logging.error(f"Supabase SELECT {table}: {r.status_code} {r.text[:300]}")
+        raise SupabaseReadError(f"{table}: HTTP {r.status_code} {r.text[:200]}")
+    return r.json()
+
+
 _sb_columns_cache: Dict[str, bool] = {}
+
+
+def clear_columns_cache() -> None:
+    """Forget column probes — call after running a migration (flush-caches)."""
+    _sb_columns_cache.clear()
 
 
 def sb_columns_exist(table: str, columns: List[str], ttl_sec: int = 300) -> bool:
@@ -341,8 +363,11 @@ __all__ = [
     "sb_headers",
     "sb_url",
     "sb_select",
+    "sb_select_strict",
+    "SupabaseReadError",
     "sb_select_parallel",
     "sb_columns_exist",
+    "clear_columns_cache",
     "sb_insert",
     "sb_insert_many",
     "sb_update",

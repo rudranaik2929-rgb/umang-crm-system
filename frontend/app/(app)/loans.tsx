@@ -8,7 +8,7 @@ import { Badge } from '../../src/components/Badge';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
-import { canSeeRevenue } from '../../src/lib/constants';
+import { canSeeRevenue, isSupervisor, normalizeRole } from '../../src/lib/constants';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
 
 function leadInLoanQueue(lead: any) {
@@ -17,7 +17,7 @@ function leadInLoanQueue(lead: any) {
 }
 
 function seesAllLoans(role?: string | null) {
-  return role === 'admin' || role === 'manager' || role === 'loan';
+  return isSupervisor(role) || normalizeRole(role) === 'loan';
 }
 
 const STAGE_PROGRESS: Record<string, number> = {

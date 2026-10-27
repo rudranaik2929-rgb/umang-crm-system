@@ -8,9 +8,9 @@ import { usePushNotifications, registerPushToken } from '../../src/notifications
 import type { NotificationPreferences } from '../../src/notifications/types';
 
 const TOGGLES: { key: keyof NotificationPreferences; label: string; hint: string }[] = [
-  { key: 'lead_assigned', label: 'Lead Assigned', hint: 'When a manager assigns you a lead' },
+  { key: 'lead_assigned', label: 'Lead Assigned', hint: 'When your Team Lead or the admin assigns you a lead' },
   { key: 'lead_updated', label: 'Lead Updated', hint: 'Status changes on your leads' },
-  { key: 'comments', label: 'Comments', hint: 'Notes from manager or team' },
+  { key: 'comments', label: 'Comments', hint: 'Notes from your Team Lead or team' },
   { key: 'housing_leads', label: 'Housing Leads', hint: 'New Housing.com enquiries' },
   { key: 'facebook_leads', label: 'Facebook Leads', hint: 'New Meta lead ads' },
   { key: 'reminders', label: 'Reminders', hint: 'Follow-up reminders and overdue alerts' },

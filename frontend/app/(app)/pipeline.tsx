@@ -5,7 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, fetchAllLeads, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
-import { STAGES, STAGE_COLORS, stageLabel } from '../../src/lib/constants';
+import { STAGES, STAGE_COLORS, stageLabel, canDeleteLeads } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
 import { formatPhoneDisplay } from '../../src/lib/leadContact';
 import { EmptyState } from '../../src/components/EmptyState';
@@ -42,11 +42,19 @@ export default function Pipeline() {
     return acc;
   }, {});
 
+  // Deleting is admin-only on the backend — don't offer it to anyone else.
+  const canDelete = canDeleteLeads(user?.role, user?.email);
+
   const deleteLead = async (lead: any) => {
     const ok = typeof window === 'undefined' || window.confirm(`Delete lead ${lead.name}?`);
     if (!ok) return;
-    await api.delete(`/leads/${lead.lead_id}`);
-    await load();
+    try {
+      await api.delete(`/leads/${lead.lead_id}`);
+      await load();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      alert(typeof detail === 'string' ? detail : 'Failed to delete lead');
+    }
   };
 
   const toggleStar = async (lead: any) => {
@@ -101,7 +109,7 @@ export default function Pipeline() {
                     onPress={() => setOpenLead(l.lead_id)}
                     onEdit={() => setOpenLead(l.lead_id)}
                     onToggleStar={() => toggleStar(l)}
-                    onDelete={() => deleteLead(l)}
+                    onDelete={canDelete ? () => deleteLead(l) : undefined}
                   />
                 ))}
                 {grouped[s.key].length === 0 && (

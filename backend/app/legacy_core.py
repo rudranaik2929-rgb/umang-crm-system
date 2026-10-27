@@ -23,6 +23,7 @@ from app.fcm_client import init_firebase, set_invalid_token_handler
 from app.config.settings import *  # noqa: F401,F403
 from app.core.cache import *  # noqa: F401,F403
 from app.db.supabase import *  # noqa: F401,F403
+from app.team_scope import *  # noqa: F401,F403
 
 # Password hashing configuration
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -146,11 +147,16 @@ REQUIRED_COLUMNS: Dict[str, tuple] = {
         "property_type", "assigned_to", "assigned_at", "last_employee_action_at",
         "site_visitor_id", "site_visit_assigned_by", "site_visit_assigned_at",
         "follow_up_at", "created_at", "updated_at", "starred", "brokerage_amount",
-        "raw_payload",
+        "raw_payload", "team_lead_id", "team_lead_assigned_at", "team_lead_assigned_by",
     ),
     "employees": (
         "employee_id", "name", "email", "role", "department", "active", "user_id",
-        "last_assigned_at", "last_seen_at", "last_lat", "last_lng",
+        "last_assigned_at", "last_seen_at", "last_lat", "last_lng", "team_lead_id", "regions",
+    ),
+    "regions": ("region_id", "name", "keywords", "active"),
+    "lead_exports": (
+        "export_id", "month", "scope", "team_lead_id", "file_name", "file_path",
+        "row_count", "stored", "kind", "created_by", "created_by_name", "created_at",
     ),
     "users": (
         "user_id", "email", "employee_id", "last_login_at", "active_session_id",
@@ -182,12 +188,14 @@ async def schema_check():
     """Report which code-required columns your Supabase database is missing.
 
     Read-only. Uses PostgREST's column exactness so a missing column shows up as
-    an error instead of being silently ignored.
+    an error instead of being silently ignored. (sb_select returns [] on error, so
+    the check must use the strict reader — the old version always said ok.)
     """
+    clear_columns_cache()
     report: Dict[str, Any] = {"ok": True, "tables": {}, "missing": {}, "errors": {}}
     for table, columns in REQUIRED_COLUMNS.items():
         try:
-            rows = sb_select(table, {"select": ",".join(columns), "limit": "1"})
+            rows = sb_select_strict(table, {"select": ",".join(columns), "limit": "1"})
             report["tables"][table] = {"status": "ok", "columns_checked": len(columns), "rows": len(rows)}
         except Exception as exc:  # noqa: BLE001 - report, never crash the check
             message = str(exc)
@@ -197,7 +205,7 @@ async def schema_check():
             missing = []
             for column in columns:
                 try:
-                    sb_select(table, {"select": column, "limit": "1"})
+                    sb_select_strict(table, {"select": column, "limit": "1"})
                 except Exception:  # noqa: BLE001
                     missing.append(column)
             if missing:
@@ -219,6 +227,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Lets the web app read the export file name / id / stored flag.
+    expose_headers=["Content-Disposition", "X-Export-Id", "X-Export-Stored", "X-Export-Rows"],
 )
 api_router = APIRouter(prefix="/api")
 
@@ -547,13 +557,52 @@ PLATFORM_LABELS = {
 }
 
 
+_TABLE_PRIMARY_KEYS = {
+    "leads": "lead_id",
+    "employees": "employee_id",
+    "bookings": "booking_id",
+    "loans": "loan_id",
+    "visits": "visit_id",
+    "visit_followups": "followup_id",
+    "activities": "activity_id",
+    "lead_exports": "export_id",
+}
+
+
+def _stable_order(table: str, order: Optional[str]) -> Optional[str]:
+    """Add the primary key as a tie-breaker so offset pages never skip/duplicate rows.
+
+    Excel imports stamp many leads with the same midnight created_at; ordering by
+    created_at alone lets PostgREST return those ties in a different order per
+    page, which silently dropped leads from full-table loads.
+    """
+    pk = _TABLE_PRIMARY_KEYS.get(table)
+    if not order or not pk or pk in order:
+        return order
+    return f"{order},{pk}.desc"
+
+
+def _select_page_with_retry(table: str, params: dict) -> list:
+    try:
+        return sb_select_strict(table, params)
+    except SupabaseReadError:
+        time.sleep(0.5)
+        return sb_select_strict(table, params)
+
+
 def sb_select_all(table: str, params: Optional[dict] = None, page_size: int = 1000) -> List[Dict[str, Any]]:
-    """Paginate through PostgREST default row cap so counts match opened lists."""
+    """Paginate through PostgREST default row cap so counts match opened lists.
+
+    Raises SupabaseReadError if a page still fails after one retry — a partial
+    list must never be cached or exported as if it were the whole table.
+    """
     base = dict(params or {})
+    if base.get("order"):
+        base["order"] = _stable_order(table, base["order"])
     out: List[Dict[str, Any]] = []
     offset = 0
     while True:
-        batch = sb_select(table, {**base, "limit": str(page_size), "offset": str(offset)})
+        batch = _select_page_with_retry(table, {**base, "limit": str(page_size), "offset": str(offset)})
         if not batch:
             break
         out.extend(batch)
@@ -575,6 +624,8 @@ def invalidate_leads_cache() -> None:
     _dashboard_stats_cache["data"] = None
     _graph_cache["ts"] = 0.0
     _graph_cache["data"] = None
+    # Team Lead dashboards / Team snapshot must refresh right after an assign too.
+    _SCOPED_STATS_CACHE.clear()
     _trim_session_cache()
 
 
@@ -599,8 +650,36 @@ def flush_all_runtime_caches() -> Dict[str, int]:
     _active_sessions_cache.update({"ts": 0.0, "data": None})
     _GEOCODE_LAST_AT["t"] = 0.0
     _HIST_PRUNE_AT["t"] = 0.0
+    _SCOPED_STATS_CACHE.clear()
+    clear_columns_cache()
     invalidate_employees_cache()
     return cleared
+
+
+# Team Lead dashboards: same computations as the admin ones, cached per team so a
+# team's numbers never leak into (or overwrite) the company-wide cache.
+_SCOPED_STATS_CACHE: Dict[str, Tuple[float, Any]] = {}
+
+
+def scoped_stats_cache_get(name: str, global_cache: Dict[str, Any]) -> Any:
+    key = scope_cache_key()
+    now = time.time()
+    if key == "all":
+        if global_cache["data"] is not None and (now - float(global_cache["ts"])) < _STATS_CACHE_TTL_SEC:
+            return global_cache["data"]
+        return None
+    hit = _SCOPED_STATS_CACHE.get(f"{name}:{key}")
+    if hit and (now - hit[0]) < _STATS_CACHE_TTL_SEC:
+        return hit[1]
+    return None
+
+
+def scoped_stats_cache_set(name: str, global_cache: Dict[str, Any], data: Any) -> None:
+    key = scope_cache_key()
+    if key == "all":
+        global_cache.update({"ts": time.time(), "data": data})
+    else:
+        _SCOPED_STATS_CACHE[f"{name}:{key}"] = (time.time(), data)
 
 
 def _trim_session_cache() -> None:
@@ -621,19 +700,41 @@ def _user_profile_cache_set(uid: str, row: Dict[str, Any]) -> None:
 def invalidate_employees_cache() -> None:
     _employees_cache["ts"] = 0.0
     _invalidate_employee_cache()
+    invalidate_team_directory()
+    _SCOPED_STATS_CACHE.clear()
 
 
 def _project_lead_fields(row: Dict[str, Any], select: str) -> Dict[str, Any]:
     if select in ("*", LEADS_CANONICAL_SELECT):
         return row
     keys = [k.strip() for k in select.split(",") if k.strip()]
-    return {k: row.get(k) for k in keys}
+    projected = {k: row.get(k) for k in keys}
+    # Team ownership travels with every projection so scoping and the
+    # "Team Lead" column work on any narrowed lead shape.
+    for key in LEAD_TEAM_COLUMNS:
+        if key in row:
+            projected.setdefault(key, row.get(key))
+    return projected
+
+
+def _leads_reload_select() -> str:
+    """Canonical lead columns, plus team ownership once the migration has run.
+
+    Selecting a column that does not exist yet would make PostgREST fail the
+    whole read, so the team columns are only requested after they are present.
+    """
+    # notes: the location / search filters fall back to it, and region routing
+    # reads it — it was never loaded, so those fallbacks silently matched nothing.
+    base = LEADS_CANONICAL_SELECT + ",notes"
+    if lead_team_columns_ready():
+        return base + "," + ",".join(LEAD_TEAM_COLUMNS)
+    return base
 
 
 def _reload_leads_cache() -> List[Dict[str, Any]]:
     """Fetch every lead and swap the canonical cache in. Clears the loading flag."""
     try:
-        db_leads = sb_select_all("leads", {"select": LEADS_CANONICAL_SELECT, "order": "created_at.desc"})
+        db_leads = sb_select_all("leads", {"select": _leads_reload_select(), "order": "created_at.desc"})
         merged = merge_leads_with_cache(db_leads)
         merged = [l for l in merged if lead_is_since_start(l)]
         with _leads_cache_lock:
@@ -650,6 +751,8 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
     now = time.time()
 
     def _project(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        # Team Lead requests see only their team's leads (no-op for admin/employees).
+        rows = scope_leads(rows)
         if select in ("*", LEADS_CANONICAL_SELECT):
             return rows
         return [_project_lead_fields(l, select) for l in rows]
@@ -678,7 +781,11 @@ def fetch_all_leads_merged(select: str = "*") -> List[Dict[str, Any]]:
         should_probe = hit and (now - last_probe) >= _LEADS_WIPE_PROBE_INTERVAL_SEC
         if should_probe:
             _leads_cache["_wipe_probe_at"] = now
-            probe = sb_select("leads", {"select": "lead_id", "limit": "1"})
+            try:
+                probe = sb_select_strict("leads", {"select": "lead_id", "limit": "1"})
+            except SupabaseReadError:
+                # A failed read is not an empty table — keep serving the cache.
+                probe = [{"lead_id": "probe-error"}]
             if not probe:
                 logging.warning("leads cache wiped: DB empty but RAM had %s rows — flushing", len(hit))
                 flush_all_runtime_caches()
@@ -1409,7 +1516,7 @@ def enrich_leads_display_fields(leads: List[Dict[str, Any]]) -> List[Dict[str, A
 
 
 def classify_inquiry_status(lead: Dict[str, Any]) -> str:
-    """Primary inquiry bucket for manager assign workspace filters — aligned with KPI boxes."""
+    """Primary inquiry bucket for Assign Leads workspace filters — aligned with KPI boxes."""
     if lead.get("status") == "negative":
         pr = _lead_priority(lead)
         if pr in NEGATIVE_PRIORITY_LABELS:
@@ -1527,7 +1634,7 @@ def resolve_lead_assignee_employee(
 
 
 def is_dept_queue_lead(lead: Dict[str, Any]) -> bool:
-    """Lead routed to booking/loan dept — not manager assign-unassigned bucket."""
+    """Lead routed to booking/loan dept — not the Assign Leads unassigned bucket."""
     if lead.get("stage") in ("booking", "loan", "registration"):
         return True
     pr = _lead_priority(lead)
@@ -1600,8 +1707,13 @@ def filter_assign_workspace_leads(
             rows = [l for l in rows if lead_assigned_to_employee(l, emp)]
         else:
             rows = [l for l in rows if clean_text(l.get("assigned_to")) == assigned_to]
+    # lead_id breaks created_at ties (Excel imports share midnight timestamps), so
+    # "Load more" pages never skip or repeat a lead between requests.
     rows.sort(
-        key=lambda l: parse_lead_ts(l.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda l: (
+            parse_lead_ts(l.get("created_at")) or datetime.min.replace(tzinfo=timezone.utc),
+            str(l.get("lead_id") or ""),
+        ),
         reverse=True,
     )
     return rows
@@ -1678,13 +1790,31 @@ def enrich_leads_with_employee_names(
     return out
 
 
+def enrich_leads_with_team_names(leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Add the owning team: team_lead_id (effective owner, incl. legacy leads that
+    only have an assigned employee) and team_lead_name. None = admin pool."""
+    if not leads:
+        return leads
+    directory = get_team_directory()
+    out: List[Dict[str, Any]] = []
+    for lead in leads:
+        tl_id = directory.lead_team_lead_id(lead)
+        team_lead = directory.by_id.get(tl_id) if tl_id else None
+        out.append({
+            **lead,
+            "team_lead_id": tl_id,
+            "team_lead_name": (team_lead or {}).get("name"),
+        })
+    return out
+
+
 def compute_unassigned_queue(all_leads: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     queue = [l for l in all_leads if is_unassigned_new_lead(l)]
     return dedupe_leads_by_external_id(queue)
 
 
 def is_unassigned_new_lead(lead: Dict[str, Any]) -> bool:
-    """Incoming lead still waiting for manager assignment — not on any employee yet."""
+    """Incoming lead still waiting for admin / Team Lead assignment — not on any employee yet."""
     if not is_pipeline_lead(lead):
         return False
     if lead.get("status") == "negative":
@@ -1705,7 +1835,7 @@ def is_new_lead_stage(lead: Dict[str, Any]) -> bool:
     return lead.get("stage") == "new"
 
 
-def actor_activity_keys(cu: User) -> set:
+def actor_activity_keys(cu: "User") -> set:
     """Activity rows may store employee_id or legacy user_id — match both."""
     keys = {cu.user_id}
     if cu.acting_as_employee_id:
@@ -1755,7 +1885,7 @@ def _employee_id_exists(employee_id: Optional[str]) -> bool:
     return _lookup_employee("employee_id", employee_id) is not None
 
 
-def resolve_employee_id(cu: User) -> Optional[str]:
+def resolve_employee_id(cu: "User") -> Optional[str]:
     uid = clean_text(cu.user_id)
     if uid:
         hit = _RESOLVED_EMP_ID_CACHE.get(uid)
@@ -1767,7 +1897,7 @@ def resolve_employee_id(cu: User) -> Optional[str]:
     return result
 
 
-def _resolve_employee_id_uncached(cu: User) -> Optional[str]:
+def _resolve_employee_id_uncached(cu: "User") -> Optional[str]:
     for candidate in (cu.acting_as_employee_id, cu.employee_id):
         if candidate and _employee_id_exists(candidate):
             return candidate
@@ -1782,7 +1912,7 @@ def _resolve_employee_id_uncached(cu: User) -> Optional[str]:
     return None
 
 
-def employee_assignee_ids(cu: User) -> List[str]:
+def employee_assignee_ids(cu: "User") -> List[str]:
     """IDs that may appear in leads.assigned_to for this login (employee_id, user_id, or legacy name)."""
     ids: List[str] = []
     emp_id = resolve_employee_id(cu)
@@ -1855,7 +1985,7 @@ def filter_site_visit_assigned_leads(
     return dedupe_leads_by_external_id(rows)
 
 
-def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
+def _employee_record_for_user(cu: "User") -> Optional[Dict[str, Any]]:
     emp_id = resolve_employee_id(cu)
     if emp_id:
         emp = _lookup_employee("employee_id", emp_id)
@@ -1872,8 +2002,8 @@ def _employee_record_for_user(cu: User) -> Optional[Dict[str, Any]]:
     return None
 
 
-def fetch_employee_assigned_leads(cu: User, select: str) -> List[Dict[str, Any]]:
-    """Leads assigned to the logged-in employee — same matching as manager assignment stats."""
+def fetch_employee_assigned_leads(cu: "User", select: str) -> List[Dict[str, Any]]:
+    """Leads assigned to the logged-in employee — same matching as assignment stats."""
     employee = _employee_record_for_user(cu)
     if not employee:
         return []
@@ -1962,6 +2092,10 @@ class User(BaseModel):
     employee_id: Optional[str]=None
     allowed_pages: Optional[List[str]] = None
     dashboard_type: Optional[str] = None
+    # Team context (filled for /auth/me): the team this login belongs to or leads.
+    team_lead_id: Optional[str] = None
+    team_lead_name: Optional[str] = None
+    regions: Optional[List[str]] = None
 class RoleSet(BaseModel): role: str
 class ActAs(BaseModel): employee_id: Optional[str]=None
 class LeadCreatePublic(BaseModel):
@@ -2005,6 +2139,36 @@ class BulkLeadManageRequest(BaseModel):
     call_status: Optional[str] = None
     reactivate: bool = True
     unassign: bool = False
+    # Team Lead routing (admin): hand leads to a Team Lead's pool, or back to the admin pool.
+    team_lead_id: Optional[str] = None
+    keep_assignee: bool = False
+    return_to_admin: bool = False
+
+
+class TeamTransferRequest(BaseModel):
+    """Admin emergency transfer: move a Team Lead's leads (all or selected) to another Team Lead."""
+    from_team_lead_id: str
+    to_team_lead_id: str
+    lead_ids: Optional[List[str]] = None
+    # keep_assignees: employees keep working the leads, the new Team Lead supervises.
+    # return_to_pool: leads go to the new Team Lead's pool for re-assignment.
+    mode: str = "keep_assignees"
+    move_members: bool = False
+
+
+class RegionCreate(BaseModel):
+    name: str
+    keywords: Optional[str] = None
+
+
+class RegionUpdate(BaseModel):
+    name: Optional[str] = None
+    keywords: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class LeadExportRequest(BaseModel):
+    month: Optional[str] = None  # YYYY-MM, defaults to the current month (IST)
 
 
 class BulkLeadDeleteRequest(BaseModel):
@@ -2094,10 +2258,14 @@ class EmployeeCreate(BaseModel):
     location: Optional[str]=None
     password: str
     allowed_pages: Optional[List[str]]=None
+    team_lead_id: Optional[str]=None  # employees: the Team Lead they work under
+    regions: Optional[List[str]]=None  # Team Leads: areas covered (["*"] = all regions)
 class EmployeeUpdate(BaseModel):
     name: Optional[str]=None; email: Optional[str]=None; phone: Optional[str]=None; role: Optional[str]=None; active: Optional[bool]=None
     location: Optional[str]=None
     allowed_pages: Optional[List[str]]=None; password: Optional[str]=None
+    team_lead_id: Optional[str]=None
+    regions: Optional[List[str]]=None
 class TemplateCreate(BaseModel): name: str; body: str
 class CampaignCreate(BaseModel):
     name: str; template_id: Optional[str]=None; audience: str="all"; scheduled_at: Optional[datetime]=None
@@ -2165,7 +2333,7 @@ async def get_session_token(request: Request):
 # session. Only a blank/unknown role is exempt (should not happen post-login).
 SINGLE_DEVICE_ROLES = frozenset({
     "admin", "telecaller", "site_visit", "sales_executive",
-    "booking", "loan", "marketing", "manager",
+    "booking", "loan", "marketing", TEAM_LEAD_ROLE,
 })
 # In-memory mirrors of users.active_session_id (DB is source of truth across workers)
 USER_ACTIVE_SIDS: Dict[str, str] = {}
@@ -2473,17 +2641,19 @@ HARDCODED_USERS = {
         "employee_id": "emp_1b7760567ae6", "acting_as_employee_id": "emp_1b7760567ae6",
         "created_at": "2026-01-01T00:00:00+00:00",
     },
+    # Former single "manager" login — now a Team Lead. Create an employee with
+    # this email and role Team Lead (Teams page) so the login gets a team; until
+    # then the team-scoped screens are empty for this account.
     "user_manager001": {
         "user_id": "user_manager001", "email": "rohitsingh241993@gmail.com",
-        "name": "Rohit Singh", "role": "manager",
-        "dashboard_type": "manager",
-        "allowed_pages": [
-            "dashboard", "my-dashboard", "pipeline", "assign-leads", "bookings", "loans",
-            "integrations", "broker", "employees", "tracking",
-        ],
+        "name": "Rohit Singh", "role": TEAM_LEAD_ROLE,
+        "dashboard_type": TEAM_LEAD_ROLE,
         "created_at": "2026-01-01T00:00:00+00:00",
     },
 }
+
+# Owner logins that keep full admin rights whatever role their row carries.
+OWNER_ADMIN_EMAILS = ("htshpatil13@gmail.com", "umang@admin")
 
 def _repair_user_employee_link(u: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -2535,21 +2705,19 @@ def _finalize_user_session(u: Dict[str, Any]) -> Dict[str, Any]:
     u = _repair_user_employee_link(dict(u))
     if not u.get("created_at"):
         u["created_at"] = now_utc().isoformat()
-    role = (u.get("role") or "telecaller").strip().lower()
+    role = normalize_role(u.get("role") or "telecaller")
     u["role"] = role
     pages = u.get("allowed_pages")
     if pages is None:
         pages = _default_pages_for_role(role)
     else:
         pages = _coerce_allowed_pages(pages)
-    if role == "manager":
-        u["dashboard_type"] = "manager"
-        if "dashboard" not in pages:
-            pages = ["dashboard", *pages]
-        if "my-dashboard" not in pages:
-            pages = ["my-dashboard", *pages]
-        if "tracking" not in pages:
-            pages = [*pages, "tracking"]
+    if role == TEAM_LEAD_ROLE:
+        u["dashboard_type"] = TEAM_LEAD_ROLE
+        # A team lead always runs their team: these pages cannot be unticked.
+        for page in TEAM_LEAD_CORE_PAGES:
+            if page not in pages:
+                pages = [*pages, page]
     elif role == "admin":
         u["dashboard_type"] = u.get("dashboard_type") or "admin"
         if "dashboard" not in pages:
@@ -2643,20 +2811,54 @@ def issue_session(
         "session_id": session_id,
     }
 
+def is_admin_user(cu: User) -> bool:
+    return normalize_role(cu.role) == "admin" or (cu.email or "") in OWNER_ADMIN_EMAILS
+
+
+def is_team_lead_user(cu: User) -> bool:
+    return not is_admin_user(cu) and is_team_lead_role(cu.role)
+
+
 def ensure_roles(cu: User, allowed: Iterable[str]):
-    if cu.role in set(allowed):
+    # The former manager email no longer bypasses role checks: that account is a
+    # Team Lead now and must stay inside its own team.
+    allowed_roles = {normalize_role(r) for r in allowed}
+    if normalize_role(cu.role) in allowed_roles:
         return
-    if cu.email in ("htshpatil13@gmail.com", "umang@admin", "rohitsingh241993@gmail.com"):
+    if is_admin_user(cu):
         return
     raise HTTPException(status_code=403, detail="You do not have permission for this action.")
 
 
+def ensure_admin(cu: User) -> None:
+    if not is_admin_user(cu):
+        raise HTTPException(status_code=403, detail="Only an administrator can do this.")
+
+
+def team_lead_employee_id(cu: User) -> Optional[str]:
+    """The Team Lead's own employee_id (their team key), or None."""
+    if not is_team_lead_user(cu):
+        return None
+    return resolve_employee_id(cu)
+
+
 def _can_manage_all_leads(cu: User) -> bool:
-    return cu.role in ("admin", "manager") or cu.email in ("htshpatil13@gmail.com", "umang@admin")
+    """Admins manage every lead. Team Leads manage leads of their own team only —
+    callers holding a lead must use _can_manage_lead(cu, lead)."""
+    return is_admin_user(cu)
 
 
-def _can_reactivate_negative_lead(cu: User) -> bool:
-    return _can_manage_all_leads(cu) or cu.role == "marketing"
+def _can_manage_lead(cu: User, lead: Dict[str, Any]) -> bool:
+    if is_admin_user(cu):
+        return True
+    tl_id = team_lead_employee_id(cu)
+    return bool(tl_id and lead and lead_in_scope(lead, tl_id))
+
+
+def _can_reactivate_negative_lead(cu: User, lead: Optional[Dict[str, Any]] = None) -> bool:
+    if _can_manage_all_leads(cu) or cu.role == "marketing":
+        return True
+    return bool(lead) and _can_manage_lead(cu, lead)
 
 
 def ensure_lead_note_access(cu: User, lead: Dict[str, Any]) -> None:
@@ -2671,7 +2873,7 @@ LEAD_REMARKS_DETAIL_FIELDS = frozenset({
 
 
 def ensure_lead_update_access(cu: User, lead: Dict[str, Any], p: "LeadUpdate") -> None:
-    """Customer remarks/detail fields: any role. Stage, status, assignee: assignee or manager only."""
+    """Customer remarks/detail fields: any role. Stage, status, assignee: assignee, Team Lead or admin only."""
     keys = set(getattr(p, "model_fields_set", None) or p.model_dump(exclude_unset=True).keys())
     if not keys:
         ensure_lead_note_access(cu, lead)
@@ -2720,9 +2922,10 @@ class LeadRemarksUpdate(BaseModel):
 
 
 def ensure_lead_edit_access(cu: User, lead: Dict[str, Any]) -> None:
-    """Employees may only edit leads assigned to them; managers/admins edit any.
+    """Employees may only edit leads assigned to them; admins edit any; Team Leads
+    edit any lead of their own team.
     Site visitors may edit leads where they are site_visitor_id (Assign Site Visitor)."""
-    if _can_manage_all_leads(cu):
+    if _can_manage_lead(cu, lead):
         return
     if cu.role == "marketing" and lead.get("status") == "negative":
         return
@@ -2752,7 +2955,7 @@ def fresh_lead_reset_fields(stage: str = "new") -> Dict[str, Any]:
 
 
 def inquiry_preset_to_patch(preset: Dict[str, Any], inquiry_action: Optional[str] = None) -> Dict[str, Any]:
-    """Map manager bulk status action to lead patch (includes field clears for reset)."""
+    """Map bulk status action to lead patch (includes field clears for reset)."""
     action = (inquiry_action or "").strip().lower()
     if action == "new":
         return fresh_lead_reset_fields("new")
@@ -2816,21 +3019,19 @@ def apply_call_status_workflow(old_lead: Dict[str, Any], call_status: str) -> Di
 
 def ensure_owner_dashboard(cu: User) -> None:
     """Owner-only dashboard API (revenue + full admin controls)."""
-    if cu.role == "manager":
+    if is_admin_user(cu):
+        return
+    if is_team_lead_role(cu.role):
         raise HTTPException(
             status_code=403,
-            detail="Owner dashboard is for administrators only. Managers use the team Dashboard.",
+            detail="Owner dashboard is for administrators only. Team Leads use their team Dashboard.",
         )
-    if cu.role == "admin" or cu.email in ("htshpatil13@gmail.com", "umang@admin"):
-        return
     raise HTTPException(status_code=403, detail="Owner dashboard is for administrators only.")
 
 
 def ensure_main_dashboard(cu: User) -> None:
-    """Main Dashboard bundle — administrators and managers."""
-    if cu.role in ("admin", "manager"):
-        return
-    if cu.email in ("htshpatil13@gmail.com", "umang@admin"):
+    """Main Dashboard bundle — administrators (company) and Team Leads (their team)."""
+    if is_admin_user(cu) or is_team_lead_role(cu.role):
         return
     raise HTTPException(status_code=403, detail="Dashboard access denied.")
 
@@ -2854,7 +3055,7 @@ def _resolve_user_by_id(uid: str, expires_at: str) -> Dict[str, Any]:
             "limit": "1",
         })
         if emps and emps[0].get("active") is False:
-            raise HTTPException(401, "Account is disabled. Contact your manager.")
+            raise HTTPException(401, "Account is disabled. Contact your administrator.")
     _user_profile_cache_set(uid, u)
     return _finalize_user_session(_hydrate_allowed_pages_from_employee(u))
 
@@ -2911,6 +3112,29 @@ def user_from_jwt_payload(jwt_payload: Dict[str, Any]) -> Optional[Dict[str, Any
     return _finalize_user_session(hydrated)
 
 
+def _finish_request_user(u: Dict[str, Any], request: Request) -> User:
+    """Last step of every auth path: act-as policy, role normalisation, team scope.
+
+    X-Acting-As used to be honoured for any caller, so a telecaller could read
+    another employee's stats by sending a header. Only administrators may act as
+    someone else now; everyone else may only "act as" themselves.
+    """
+    payload = {k: v for k, v in u.items() if k != "_session_ready"}
+    payload["role"] = normalize_role(payload.get("role"))
+    act_as = clean_text(request.headers.get("X-Acting-As"))
+    own_ids = {clean_text(payload.get("employee_id")), clean_text(payload.get("acting_as_employee_id"))}
+    is_admin = payload["role"] == "admin" or (payload.get("email") or "") in OWNER_ADMIN_EMAILS
+    if act_as and (is_admin or act_as in own_ids):
+        payload["acting_as_employee_id"] = act_as
+    user = User(**payload)
+    # Team Lead requests only ever see their own team's leads and people.
+    if is_team_lead_user(user):
+        set_request_team_scope(resolve_employee_id(user) or NO_TEAM)
+    else:
+        set_request_team_scope(None)
+    return user
+
+
 async def get_current_user(request: Request) -> User:
     token = await get_session_token(request)
     if not token: raise HTTPException(401, "Not authenticated")
@@ -2935,11 +3159,7 @@ async def get_current_user(request: Request) -> User:
         sid = jwt_sid or sess.get("sid")
         validate_jwt_session_id(u.get("user_id") or "", u.get("role"), sid)
         touch_active_last_seen(u.get("user_id") or "")
-        act_as = request.headers.get("X-Acting-As")
-        if act_as:
-            u = {**u, "acting_as_employee_id": act_as}
-        payload = {k: v for k, v in u.items() if k != "_session_ready"}
-        return User(**payload)
+        return _finish_request_user(u, request)
 
     # 2. Valid JWT — use token claims directly (fast path, no DB)
     if jwt_payload and jwt_payload.get("sub"):
@@ -2950,19 +3170,13 @@ async def get_current_user(request: Request) -> User:
             touch_active_last_seen(u.get("user_id") or "")
             u["_session_ready"] = True
             LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": jwt_sid}
-            act_as = request.headers.get("X-Acting-As")
-            if act_as:
-                u = {**u, "acting_as_employee_id": act_as}
-            return User(**u)
+            return _finish_request_user(u, request)
         uid = jwt_payload["sub"]
         u = _resolve_user_by_id(uid, exp)
         validate_jwt_session_id(uid, u.get("role"), jwt_sid)
         touch_active_last_seen(uid)
         LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": jwt_sid}
-        act_as = request.headers.get("X-Acting-As")
-        if act_as:
-            u["acting_as_employee_id"] = act_as
-        return User(**u)
+        return _finish_request_user(u, request)
 
     # 3. Legacy session row in Supabase (non-JWT tokens)
     rows = sb_select("sessions", {"session_token": f"eq.{token}", "select": "user_id,expires_at"})
@@ -2980,10 +3194,7 @@ async def get_current_user(request: Request) -> User:
     validate_jwt_session_id(uid, u.get("role"), None)
     touch_active_last_seen(uid)
     LOCAL_SESSIONS[token] = {"user": u, "expires_at": exp, "sid": None}
-    act_as = request.headers.get("X-Acting-As")
-    if act_as:
-        u["acting_as_employee_id"] = act_as
-    return User(**u)
+    return _finish_request_user(u, request)
 
 # ---- Auth Endpoints ----
 def _authenticate_credentials(email: str, password: str) -> Dict[str, Any]:
@@ -3013,7 +3224,7 @@ def _authenticate_credentials(email: str, password: str) -> Dict[str, Any]:
             "user_id": "user_manager001",
             "email": email,
             "name": "Rohit Singh",
-            "role": "manager",
+            "role": TEAM_LEAD_ROLE,
             "created_at": now_utc().isoformat(),
         }
 
@@ -3051,7 +3262,7 @@ def _authenticate_credentials(email: str, password: str) -> Dict[str, Any]:
             "limit": "1",
         })
         if emps and emps[0].get("active") is False:
-            raise HTTPException(401, "Account is disabled. Contact your manager.")
+            raise HTTPException(401, "Account is disabled. Contact your administrator.")
 
     if u.get("employee_id") and not u.get("acting_as_employee_id") and u.get("role") != "admin":
         u["acting_as_employee_id"] = u["employee_id"]
@@ -3276,7 +3487,30 @@ async def auth_shift_session(request: Request, response: Response):
 
 @api_router.get("/auth/me")
 async def auth_me(cu: User = Depends(get_current_user)):
-    return cu.model_dump(mode="json")
+    payload = cu.model_dump(mode="json")
+    payload.update(await asyncio.to_thread(team_context_for_user, cu))
+    return payload
+
+
+def team_context_for_user(cu: User) -> Dict[str, Any]:
+    """Which team this login leads or belongs to — drives the sidebar subtitle and scoping hints."""
+    try:
+        emp_id = resolve_employee_id(cu)
+        if not emp_id:
+            return {}
+        directory = get_team_directory()
+        tl_id = directory.team_lead_of_employee(emp_id)
+        if not tl_id:
+            return {}
+        team_lead = directory.by_id.get(tl_id) or {}
+        return {
+            "team_lead_id": tl_id,
+            "team_lead_name": team_lead.get("name"),
+            "regions": team_lead.get("regions") or [],
+        }
+    except Exception as exc:  # pragma: no cover - never block /auth/me
+        logging.warning("team_context_for_user failed: %s", exc)
+        return {}
 
 @api_router.post("/auth/logout")
 async def auth_logout(request: Request, response: Response):
@@ -3358,11 +3592,37 @@ def _fetch_active_session_rows() -> List[Dict[str, Any]]:
 
 @api_router.get("/auth/active-sessions")
 async def auth_active_sessions(cu: User = Depends(get_current_user)):
-    """Admin/manager view: who is logged in right now (minimal, opt-in-free data)."""
-    ensure_roles(cu, ["admin", "manager"])
+    """Admin / Team Lead view: who is logged in right now (minimal, opt-in-free data).
+    Team Leads only see their own team."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
     cached = _active_sessions_cache.get("data")
     if cached is not None and (time.time() - float(_active_sessions_cache.get("ts", 0))) < ACTIVE_SESSIONS_CACHE_TTL_SEC:
-        return cached
+        return _scope_active_sessions(cached)
+    return _scope_active_sessions(_build_active_sessions_payload())
+
+
+def _scope_active_sessions(payload: Dict[str, Any]) -> Dict[str, Any]:
+    if current_team_scope() is None:
+        return payload
+    members = {e.get("employee_id") for e in scope_employees(get_team_directory().employees)}
+    sessions = [s for s in payload.get("sessions", []) if s.get("employee_id") in members]
+    return {
+        **payload,
+        "sessions": sessions,
+        "count": len(sessions),
+        "online_count": sum(1 for s in sessions if s.get("online")),
+    }
+
+
+def ensure_employee_in_scope(cu: User, eid: str) -> None:
+    """Team Leads may only act on people in their own team."""
+    if is_admin_user(cu):
+        return
+    if not scope_employees([{"employee_id": eid}]):
+        raise HTTPException(status_code=403, detail="That person is not in your team.")
+
+
+def _build_active_sessions_payload() -> Dict[str, Any]:
 
     rows = _fetch_active_session_rows()
     employees = sb_select("employees", {
@@ -3421,10 +3681,15 @@ async def auth_active_sessions(cu: User = Depends(get_current_user)):
 
 @api_router.post("/auth/set-role")
 async def auth_set_role(payload: RoleSet, cu: User = Depends(get_current_user)):
-    if payload.role not in ROLES: raise HTTPException(400, "Invalid role")
-    patch: Dict[str, Any] = {"role": payload.role, "dashboard_type": payload.role}
-    if payload.role == "manager":
-        patch["allowed_pages"] = _default_pages_for_role("manager")
+    role = normalize_role(payload.role)
+    if role not in ROLES: raise HTTPException(400, "Invalid role")
+    # Any logged-in user used to be able to promote themselves to admin here.
+    # Only administrators may switch roles; others may only confirm their own.
+    if not is_admin_user(cu) and role != normalize_role(cu.role):
+        raise HTTPException(403, "Only an administrator can change roles.")
+    patch: Dict[str, Any] = {"role": role, "dashboard_type": role}
+    if role == TEAM_LEAD_ROLE:
+        patch["allowed_pages"] = _default_pages_for_role(TEAM_LEAD_ROLE)
     updated = sb_update("users", "user_id", cu.user_id, patch)
     if not updated: raise HTTPException(500, "Failed to update role")
     merged = {**cu.model_dump(mode="json"), **updated}
@@ -3762,12 +4027,13 @@ async def set_employee_location(
     request: Request,
     cu: User = Depends(get_current_user),
 ):
-    """Admin/manager: manually correct or clear an employee's live location.
+    """Admin / Team Lead (own team): manually correct or clear an employee's live location.
 
     Manual fixes are stored with source='manual' so they are distinguishable
     from device GPS, and (when coordinates are given) are logged to history.
     """
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    ensure_employee_in_scope(cu, eid)
     rows = sb_select("employees", {"employee_id": f"eq.{eid}", "select": "employee_id,name", "limit": "1"})
     if not rows:
         raise HTTPException(status_code=404, detail="Employee not found")
@@ -3814,8 +4080,9 @@ async def set_employee_location(
 async def employee_location_history(
     eid: str, limit: int = 50, cu: User = Depends(get_current_user),
 ):
-    """Admin/manager: recent GPS breadcrumbs for one employee (newest first)."""
-    ensure_roles(cu, ["admin", "manager"])
+    """Admin / Team Lead (own team): recent GPS breadcrumbs for one employee (newest first)."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    ensure_employee_in_scope(cu, eid)
     if not _columns_exist("employee_location_history", ["employee_id", "created_at"]):
         return {"employee_id": eid, "points": []}
     try:
@@ -3835,6 +4102,10 @@ async def auth_act_as(payload: ActAs, cu: User = Depends(get_current_user)):
     # act-as is per-device: the frontend stores the employee_id in localStorage
     # and sends it as X-Acting-As header on every request.
     # We just return the user with the acting_as field set — no global state mutation.
+    # Only administrators may act as another employee (the header is ignored otherwise).
+    own_ids = {cu.employee_id, resolve_employee_id(cu)}
+    if payload.employee_id and payload.employee_id not in own_ids and not is_admin_user(cu):
+        raise HTTPException(403, "Only an administrator can act as another employee.")
     u = cu.model_dump(mode="json")
     u["acting_as_employee_id"] = payload.employee_id
     return u
@@ -3923,7 +4194,7 @@ ASSIGNABLE_EMPLOYEE_ROLES = {"telecaller", "site_visit", "sales_executive"}
 
 
 def assign_lead_round_robin() -> Optional[str]:
-    """Round-robin pick for manager-initiated bulk assign only — not used on new lead intake."""
+    """Round-robin pick for admin-initiated bulk assign only — not used on new lead intake."""
     emps = sb_select("employees", {
         "active": "eq.true",
         "select": "employee_id,role,last_assigned_at",
@@ -3944,7 +4215,11 @@ def stamp_lead_assignment(
     assigned_by: Optional[str] = None,
     current_stage: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Fields applied when a lead is assigned (auto or manager)."""
+    """Fields applied when a lead is assigned (auto, admin or Team Lead).
+
+    Ownership follows the employee: the lead's team becomes the employee's team,
+    so a lead is never "assigned" to someone outside the team that can see it.
+    """
     now = now_utc().isoformat()
     data: Dict[str, Any] = {
         "assigned_to": assigned_to,
@@ -3956,7 +4231,92 @@ def stamp_lead_assignment(
         data["assigned_by"] = assigned_by
     if current_stage in (None, "new"):
         data["stage"] = "assigned"
+    data.update(team_stamp_for_employee(assigned_to))
     return data
+
+
+def team_stamp_for_employee(employee_id: Optional[str]) -> Dict[str, Any]:
+    """{'team_lead_id': <employee's team lead>} once the team columns exist."""
+    if not lead_team_columns_ready():
+        return {}
+    directory = get_team_directory()
+    eid = directory.employee_for_assignee(employee_id) or clean_text(employee_id)
+    return {"team_lead_id": directory.team_lead_of_employee(eid)}
+
+
+def require_team_columns() -> None:
+    if not lead_team_columns_ready():
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Team Lead columns are missing in Supabase. Run supabase/TEAM_LEADS_AND_EXPORTS.sql "
+                "(or SCHEMA_MASTER.sql) in the Supabase SQL Editor, then try again."
+            ),
+        )
+
+
+def require_active_team_lead(team_lead_id: Optional[str]) -> Dict[str, Any]:
+    tl_id = clean_text(team_lead_id)
+    directory = get_team_directory(force=True)
+    team_lead = directory.by_id.get(tl_id or "")
+    if not team_lead or not is_team_lead_role(team_lead.get("role")):
+        raise HTTPException(status_code=400, detail="Team Lead not found.")
+    if team_lead.get("active", True) is False:
+        raise HTTPException(status_code=400, detail="That Team Lead is inactive.")
+    return team_lead
+
+
+def ensure_assignable_employee(cu: User, employee_id: Optional[str]) -> Dict[str, Any]:
+    """Validate an employee assignment target. Team Leads may only pick their own team."""
+    eid = clean_text(employee_id)
+    if not eid:
+        raise HTTPException(status_code=400, detail="Select an employee to assign to.")
+    directory = get_team_directory()
+    employee = directory.by_id.get(eid)
+    if not employee:
+        directory = get_team_directory(force=True)
+        employee = directory.by_id.get(eid)
+    if not employee or employee.get("active", True) is False:
+        raise HTTPException(status_code=400, detail="Employee not found or inactive.")
+    if is_team_lead_user(cu):
+        tl_id = team_lead_employee_id(cu)
+        if not tl_id or eid not in directory.team_member_ids(tl_id):
+            raise HTTPException(status_code=403, detail="You can only assign leads to employees in your own team.")
+    return employee
+
+
+def ensure_lead_manageable(cu: User, lead: Dict[str, Any]) -> None:
+    if not _can_manage_lead(cu, lead):
+        raise HTTPException(status_code=403, detail="This lead belongs to another team.")
+
+
+def compute_team_assignment_patch(
+    old_lead: Dict[str, Any],
+    team_lead_id: Optional[str],
+    actor_id: Optional[str],
+    keep_assignee: bool = False,
+) -> Dict[str, Any]:
+    """Move a lead to a Team Lead's pool (team_lead_id) or back to the admin pool (None).
+
+    keep_assignee=True keeps the employee working the lead (emergency transfer of a
+    whole team); otherwise an employee from a different team is unassigned so the
+    lead lands in the new team's pool for that Team Lead to hand out.
+    """
+    now = now_utc().isoformat()
+    patch: Dict[str, Any] = {
+        "team_lead_id": team_lead_id,
+        "team_lead_assigned_at": now if team_lead_id else None,
+        "team_lead_assigned_by": actor_id if team_lead_id else None,
+        "updated_at": now,
+    }
+    assigned = clean_text(old_lead.get("assigned_to"))
+    if assigned and not keep_assignee:
+        directory = get_team_directory()
+        owner = directory.employee_for_assignee(assigned)
+        if team_lead_id is None or directory.team_lead_of_employee(owner) != team_lead_id:
+            patch.update(compute_unassign_patch(old_lead))
+            patch["updated_at"] = now
+    return patch
 
 
 def assign_lead_to_employee(
@@ -4042,8 +4402,21 @@ def _patch_fingerprint(patch: Dict[str, Any]) -> str:
 
 def _bulk_patch_leads_grouped(id_to_patch: Dict[str, Dict[str, Any]], chunk_size: int = 100) -> List[str]:
     """Apply many lead patches using grouped PostgREST bulk PATCH (same fields per group)."""
+    errors, _failed = _bulk_patch_leads_detailed(id_to_patch, chunk_size)
+    return errors
+
+
+def _bulk_patch_leads_detailed(
+    id_to_patch: Dict[str, Dict[str, Any]],
+    chunk_size: int = 100,
+) -> Tuple[List[str], List[str]]:
+    """Grouped bulk PATCH that also reports which lead_ids were NOT saved.
+
+    A failed chunk is retried once; anything still failing is returned so the
+    caller can report it instead of claiming the leads were assigned.
+    """
     if not id_to_patch:
-        return []
+        return [], []
     groups: Dict[str, List[str]] = defaultdict(list)
     patch_by_fp: Dict[str, Dict[str, Any]] = {}
     for lead_id, patch in id_to_patch.items():
@@ -4051,14 +4424,33 @@ def _bulk_patch_leads_grouped(id_to_patch: Dict[str, Dict[str, Any]], chunk_size
         groups[fp].append(lead_id)
         patch_by_fp[fp] = patch
     errors: List[str] = []
+    failed: List[str] = []
     for fp, lead_ids in groups.items():
         patch = patch_by_fp[fp]
         for chunk in _chunk_list(lead_ids, chunk_size):
             filt = _postgrest_id_in_filter("lead_id", chunk)
             err = sb_patch_filter("leads", filt, patch)
             if err:
+                err = sb_patch_filter("leads", filt, patch)
+            if err:
                 errors.append(err)
-    return errors
+                failed.extend(chunk)
+    return errors, failed
+
+
+def _apply_lead_patches(id_to_patch: Dict[str, Dict[str, Any]], context: str) -> Tuple[List[str], List[str]]:
+    """Save patches, update the RAM cache only for rows the DB accepted.
+
+    Returns (saved_ids, failed_ids). The cache used to be patched even when the
+    DB rejected the write, so the UI showed leads as assigned that were not.
+    """
+    errors, failed = _bulk_patch_leads_detailed(id_to_patch)
+    if errors:
+        logging.error("%s: %d leads not saved: %s", context, len(failed), errors[:3])
+    failed_set = set(failed)
+    saved = {lid: patch for lid, patch in id_to_patch.items() if lid not in failed_set}
+    _patch_session_cache_leads_bulk(saved)
+    return list(saved.keys()), failed
 
 
 def _patch_session_cache_leads_bulk(updates: Dict[str, Dict[str, Any]]) -> None:
@@ -4078,16 +4470,24 @@ def _actor_employee_id(actor: Optional[User]) -> Optional[str]:
     return actor.acting_as_employee_id or actor.user_id
 
 
-def compute_unassign_patch() -> Dict[str, Any]:
-    """Clear employee assignment — lead returns to unassigned pool."""
+def compute_unassign_patch(old_lead: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Clear employee assignment — lead returns to its team pool (or the admin pool).
+
+    team_lead_id is left alone: unassigning an employee keeps the lead with the
+    same Team Lead. A lead still on stage "assigned" goes back to "new" so it is
+    counted as a fresh lead again.
+    """
     now = now_utc().isoformat()
-    return {
+    patch: Dict[str, Any] = {
         "assigned_to": None,
         "assigned_at": None,
         "assigned_by": None,
         "last_employee_action_at": None,
         "updated_at": now,
     }
+    if old_lead is not None and old_lead.get("stage") == "assigned":
+        patch["stage"] = "new"
+    return patch
 
 
 def compute_bulk_manage_patch(
@@ -4099,8 +4499,14 @@ def compute_bulk_manage_patch(
 ) -> Dict[str, Any]:
     """Mirror per-lead bulk-manage field order in one patch dict."""
     patch: Dict[str, Any] = {}
+    if getattr(body, "return_to_admin", False):
+        patch.update(compute_team_assignment_patch(old_lead, None, actor_id))
+    elif getattr(body, "team_lead_id", None) and not assign_employee:
+        patch.update(compute_team_assignment_patch(
+            old_lead, body.team_lead_id, actor_id, keep_assignee=bool(getattr(body, "keep_assignee", False)),
+        ))
     if body.unassign:
-        patch.update(compute_unassign_patch())
+        patch.update(compute_unassign_patch(old_lead))
     elif assign_employee:
         patch.update(
             stamp_lead_assignment(
@@ -4150,7 +4556,7 @@ def _notify_assignment_summary(employee_id: str, count: int, actor: Optional[Use
     """One notification per assign action — 1 lead or 400 leads, same short message."""
     if count < 1 or not employee_id:
         return
-    manager_name = (actor.name if actor else None) or "Manager"
+    manager_name = (actor.name if actor else None) or "Admin"
     sender_id = (actor.acting_as_employee_id or actor.user_id) if actor else None
     created = notify_svc.notify_bulk_leads_assigned(
         employee_id,
@@ -4264,6 +4670,7 @@ def update_cached_lead(lead_id: str, data: dict):
         _assignment_stats_cache["ts"] = 0.0
         _employee_stats_cache["ts"] = 0.0
         _dashboard_stats_cache["ts"] = 0.0
+        _SCOPED_STATS_CACHE.clear()
         return
     invalidate_leads_cache()
 
@@ -5425,7 +5832,7 @@ def create_integrated_lead(payload: Dict[str, Any], source: str, actor=None, *, 
         if brokerage:
             log_activity(actor, "broker_lead_received", f"Brokerage lead stored for future: {normalized['name']} ({source})", lead_id=lead_id)
         else:
-            log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']} (awaiting manager assignment)", lead_id=lead_id)
+            log_activity(actor, "integration_enquiry", f"New lead received from {source}: {normalized['name']} (awaiting admin assignment)", lead_id=lead_id)
         record_integration_event(source, payload, "created", lead_id=lead_id, external_id=normalized.get("external_lead_id"))
         if not brokerage:
             notify_svc.notify_integration_lead(source, lead_record)
@@ -6061,7 +6468,7 @@ async def create_lead_public(p: LeadCreatePublic):
         raise HTTPException(status_code=503, detail="Could not save enquiry. Please try again.")
     SESSION_CACHE["leads"].insert(0, result)
     invalidate_leads_cache()
-    log_activity(None, "website_enquiry", f"New website enquiry received from {p.name} (awaiting manager assignment).", lead_id=lid)
+    log_activity(None, "website_enquiry", f"New website enquiry received from {p.name} (awaiting admin assignment).", lead_id=lid)
     
     # Auto-responder (Real Interakt API if key exists)
     WhatsAppService.send_template(phone, "welcome_enquiry", [p.name])
@@ -6242,7 +6649,7 @@ def _facebook_resync_pending_impl() -> Dict[str, Any]:
 @api_router.get("/integrations/facebook/verify")
 async def facebook_verify(cu: User = Depends(get_current_user)):
     """Check Meta webhook config, Page token validity, and CRM Meta lead count."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     all_fb = fetch_all_leads_merged("lead_id,source,phone,email,external_lead_id")
     db_meta_real = len([l for l in clean_leads_for_platform_stats(all_fb) if lead_matches_platform(l, "meta")])
     recent = sb_select("integration_events", {
@@ -6381,8 +6788,8 @@ async def facebook_integration_events(
     limit: int = 20,
     cu: User = Depends(get_current_user),
 ):
-    """Recent Facebook webhook / Graph API events for debugging (admin/manager/marketing)."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    """Recent Facebook webhook / Graph API events for debugging (admin/marketing)."""
+    ensure_roles(cu, ["admin", "marketing"])
     limit = min(max(limit, 1), 100)
     rows = sb_select("integration_events", {
         "source": "eq.Facebook",
@@ -6395,14 +6802,14 @@ async def facebook_integration_events(
 @api_router.post("/integrations/facebook/resync")
 async def facebook_resync(cu: User = Depends(get_current_user)):
     """Re-fetch Meta leadgen IDs from integration_events and import missing CRM leads."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     return _facebook_resync_pending_impl()
 
 
 @api_router.post("/integrations/facebook/poll")
 async def facebook_poll(cu: User = Depends(get_current_user)):
     """Auto-retry pending Meta webhook leads + import recent Lead Ad submissions only."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         return {"status": "skipped", "reason": "FACEBOOK_PAGE_ACCESS_TOKEN not configured"}
 
@@ -6434,7 +6841,7 @@ async def facebook_import(payload: FacebookImportRequest, cu: User = Depends(get
     New inbound leads should arrive via webhook. This endpoint only covers the
     recent Graph window (FACEBOOK_AUTO_SYNC_WINDOW_SEC) as a safety net.
     """
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     if not FACEBOOK_PAGE_ACCESS_TOKEN:
         raise HTTPException(status_code=400, detail="FACEBOOK_PAGE_ACCESS_TOKEN is not configured on the server")
     if payload.allow_historical:
@@ -6682,14 +7089,14 @@ async def _housing_sync_impl(payload: HousingSyncRequest, cu: User, mode: str = 
 @api_router.post("/housing/sync")
 async def housing_sync(payload: HousingSyncRequest, cu: User=Depends(get_current_user)):
     """Pull recent Housing.com leads only (default last 2 hours, not full history)."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     return await _housing_sync_impl(payload, cu, mode="manual")
 
 
 @api_router.post("/integrations/housing/poll")
 async def housing_poll(cu: User=Depends(get_current_user)):
     """Dashboard auto-refresh — only new leads since last poll checkpoint."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     logging.info("Housing poll: auto-sync triggered by %s", cu.email)
     return await _housing_sync_impl(HousingSyncRequest(), cu, mode="poll")
 
@@ -6735,7 +7142,7 @@ async def housing_cron_sync(request: Request):
 @api_router.get("/integrations/housing/verify")
 async def housing_verify(cu: User=Depends(get_current_user)):
     """Confirm Housing.com credentials and whether the pull API returns leads."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     credentials_ok = bool(HOUSING_PROFILE_ID and HOUSING_ENCRYPTION_KEY)
     if not credentials_ok:
         return {
@@ -6779,7 +7186,7 @@ async def housing_verify(cu: User=Depends(get_current_user)):
 
 @api_router.get("/integrations/status")
 async def integrations_status(cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     last_sync_end = get_last_housing_sync_end_epoch()
     db_housing = sb_select("leads", {"source": "eq.Housing.com", "select": "lead_id"})
     return {
@@ -7406,6 +7813,9 @@ def _commit_lead_import(
 
 @api_router.post("/leads/import")
 async def import_leads(file: UploadFile = File(...), cu: User = Depends(get_current_user)):
+    # Bulk intake belongs to the admin: imported leads start in the admin pool
+    # (rows with an "Assign to" employee go straight to that employee's team).
+    ensure_admin(cu)
     contents = await file.read()
     if not contents:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -7563,6 +7973,20 @@ async def clear_all_leads(cu: User = Depends(get_current_user)):
         
     return {"status": "success", "message": "All leads and associated records have been wiped."}
 
+def _creator_team_stamp(cu: User) -> Dict[str, Any]:
+    """A lead typed in by a Team Lead goes straight to their own team pool —
+    otherwise it would land in the admin pool where that Team Lead cannot see it.
+    Everyone else's manual leads go to the admin pool like every other new lead."""
+    tl_id = team_lead_employee_id(cu)
+    if not tl_id or not lead_team_columns_ready():
+        return {}
+    return {
+        "team_lead_id": tl_id,
+        "team_lead_assigned_at": now_utc().isoformat(),
+        "team_lead_assigned_by": tl_id,
+    }
+
+
 @api_router.post("/leads")
 async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
     phone = normalize_phone(p.phone)
@@ -7576,6 +8000,7 @@ async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
         "assigned_to": None, "created_at": now_utc().isoformat(), "updated_at": now_utc().isoformat(),
     }
     if p.starred is not None: lead["starred"] = p.starred
+    lead.update(_creator_team_stamp(cu))
     result = sb_insert("leads", lead)
     if not result:
         logging.error("create_lead: insert failed lead_id=%s", lid)
@@ -7589,7 +8014,7 @@ async def create_lead(p: LeadCreatePublic, cu: User=Depends(get_current_user)):
 @api_router.post("/leads/booking-manual")
 async def create_booking_manual_lead(p: LeadCreatePublic, cu: User = Depends(get_current_user)):
     """Booking team walk-in / manual lead — lands in booking queue for New Booking."""
-    ensure_roles(cu, ["admin", "manager", "booking"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE, "booking"])
     phone = normalize_phone(p.phone)
     if not phone:
         raise HTTPException(status_code=400, detail="A valid phone number is required.")
@@ -7625,6 +8050,7 @@ async def create_booking_manual_lead(p: LeadCreatePublic, cu: User = Depends(get
     }
     if p.starred is not None:
         lead["starred"] = p.starred
+    lead.update(_creator_team_stamp(cu))
 
     result = sb_insert("leads", lead)
     if not result:
@@ -7704,8 +8130,8 @@ async def export_leads(
 ):
     """Download leads as an Excel (.xlsx) file — all leads or filtered to a
     date range (dates are matched against the lead's displayed CRM date)."""
-    ensure_roles(cu, ["admin", "manager", "marketing"])
-    base_select = LEADS_CANONICAL_SELECT
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE, "marketing"])
+    base_select = _leads_reload_select()
     if housing_extra_columns_available():
         base_select += "," + ",".join(HOUSING_EXTRA_COLUMNS)
 
@@ -7714,19 +8140,21 @@ async def export_leads(
     db_only = [l for l in leads if l.get("lead_id") not in cache_ids]
     all_leads = SESSION_CACHE["leads"] + db_only
     all_leads = [l for l in all_leads if lead_is_since_start(l)]
+    all_leads = scope_leads(all_leads)
     all_leads = apply_dashboard_date_filter(all_leads, "all", date_from, date_to)
+    directory = get_team_directory()
 
     headers = [
         "Name", "Phone", "Email", "Source", "Stage", "Status", "Lead Type",
         "Priority", "Call Status", "Budget", "Location", "Property Type",
-        "Assigned To", "Assigned At", "Follow Up At", "Created At", "Updated At",
+        "Team Lead", "Assigned To", "Assigned To ID", "Assigned At", "Follow Up At", "Created At", "Updated At",
         "External Lead ID", "Project ID", "Project Name", "Service Type",
         "Locality", "City", "Price Range", "Lead Received At",
     ]
     key_map = [
         "name", "phone", "email", "source", "stage", "status", "lead_type",
         "priority", "call_status", "budget", "location", "property_type",
-        "assigned_to", "assigned_at", "follow_up_at", "created_at", "updated_at",
+        "_team_lead", "_assignee", "assigned_to", "assigned_at", "follow_up_at", "created_at", "updated_at",
         "external_lead_id", "property_project_id", "project_name", "service_type",
         "locality", "city", "price_range", "lead_received_at",
     ]
@@ -7736,7 +8164,13 @@ async def export_leads(
     ws.title = "Leads"
     ws.append(headers)
     for lead in all_leads:
-        ws.append([lead.get(k) for k in key_map])
+        tl_id = directory.lead_team_lead_id(lead)
+        assignee_id = directory.employee_for_assignee(lead.get("assigned_to"))
+        derived = {
+            "_team_lead": (directory.by_id.get(tl_id) or {}).get("name") if tl_id else "Admin pool",
+            "_assignee": (directory.by_id.get(assignee_id) or {}).get("name") if assignee_id else (lead.get("assigned_to") or ""),
+        }
+        ws.append([derived[k] if k in derived else lead.get(k) for k in key_map])
     ws.freeze_panes = "A2"
     for col_idx in range(1, len(headers) + 1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 18
@@ -7796,7 +8230,8 @@ async def list_loan_queue(limit: int = LEADS_LIST_DEFAULT_LIMIT, cu: User = Depe
 
 @api_router.get("/broker-leads")
 async def list_broker_leads(cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    # Team Leads see their own team's broker leads (fetch is team-scoped).
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE, "marketing"])
     all_leads = fetch_all_leads_merged()
     broker_leads = [l for l in all_leads if is_broker_pool_lead(l)]
     return {"total": len(broker_leads), "leads": broker_leads}
@@ -7807,12 +8242,14 @@ class BrokerActivateRequest(BaseModel):
 
 @api_router.post("/leads/{lead_id}/to-broker")
 async def move_lead_to_broker(lead_id: str, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "telecaller", "sales_executive", "site_visit"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE, "telecaller", "sales_executive", "site_visit"])
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
     lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
     if not lead:
         raise HTTPException(404, "Lead not found")
-    if cu.role not in ["admin", "manager"]:
+    if is_team_lead_user(cu):
+        ensure_lead_manageable(cu, lead)
+    elif not is_admin_user(cu):
         emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
         emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,user_id", "limit": "1"}) if emp_id else []
         employee = emps[0] if emps else {"employee_id": emp_id}
@@ -7831,12 +8268,15 @@ async def move_lead_to_broker(lead_id: str, cu: User=Depends(get_current_user)):
 
 @api_router.post("/leads/{lead_id}/from-broker")
 async def activate_lead_from_broker(lead_id: str, body: BrokerActivateRequest, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": "*"})
     lead = leads[0] if leads else next((l for l in SESSION_CACHE["leads"] if l.get("lead_id") == lead_id), None)
     if not lead:
         raise HTTPException(404, "Lead not found")
+    ensure_lead_manageable(cu, lead)
     assigned_to = clean_text(body.assigned_to)
+    if assigned_to:
+        ensure_assignable_employee(cu, assigned_to)
     data: Dict[str, Any] = {
         "lead_type": "standard",
         "updated_at": now_utc().isoformat(),
@@ -8202,7 +8642,7 @@ async def list_leads_filtered(
     filtered = apply_dashboard_assignee_filter(filtered, assigned_to, employees)
     filtered = apply_dashboard_date_filter(filtered, bucket_key, date_from, date_to, month)
     filtered = sort_dashboard_leads(filtered, bucket_key, sort)
-    if cu.role not in ["admin", "manager"] and not assigned_to:
+    if not is_admin_user(cu) and not is_team_lead_user(cu) and not assigned_to:
         emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
         if emp_id and bucket_key == "follow_up":
             emp = next((e for e in employees if e.get("employee_id") == emp_id), None)
@@ -8212,11 +8652,13 @@ async def list_leads_filtered(
                 filtered = [l for l in filtered if l.get("assigned_to") == emp_id]
     total_filtered = len(filtered)
     page = enrich_leads_with_employee_names(filtered[offset:offset + limit], employees)
+    page = enrich_leads_with_team_names(page)
     return {
         "bucket": bucket_key,
         "total": total_filtered,
         "leads": page,
-        "employees": employees,
+        # Team Leads only pick from their own people in filters.
+        "employees": scope_employees(employees),
         "offset": offset,
         "limit": limit,
         "has_more": (offset + len(page)) < total_filtered,
@@ -8240,12 +8682,13 @@ async def workspace_leads(
     """Telecaller / Sales Executive workspace — queue + follow-ups with counts that
     match Assign Leads stats and My Dashboard KPIs."""
     emp_id = resolve_employee_id(cu) or cu.acting_as_employee_id or cu.employee_id
-    if not emp_id and cu.role not in ["admin", "manager"]:
+    supervisor = is_admin_user(cu) or is_team_lead_user(cu)
+    if not emp_id and not supervisor:
         raise HTTPException(403, detail="Employee profile required for workspace")
 
     limit = min(max(limit, 1), LEADS_LIST_MAX_LIMIT)
     select = EMPLOYEE_WORKFLOW_LEAD_SELECT
-    if cu.role in ["admin", "manager"] and not cu.acting_as_employee_id:
+    if supervisor and not cu.acting_as_employee_id:
         all_leads = fetch_all_leads_merged(select)
         emp_leads = all_leads
         role = "telecaller"
@@ -8279,7 +8722,7 @@ async def stats_lead_buckets(cu: User = Depends(get_current_user)):
 @api_router.get("/leads/assign-queue")
 async def list_assign_queue(cu: User = Depends(get_current_user)):
     """Backward-compatible: unassigned leads only."""
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
     data = await list_assign_workspace(
         inquiry_status="unassigned",
         source="all",
@@ -8304,12 +8747,22 @@ async def list_assign_workspace(
     assigned_to: str = "all",
     q: str = "",
     location: str = "",
+    team: str = "all",
+    team_view: str = "all",
+    region: str = "",
     limit: int = 500,
     offset: int = 0,
     cu: User = Depends(get_current_user),
 ):
-    """Manager assign workspace — all leads with advanced filters."""
-    ensure_roles(cu, ["admin", "manager"])
+    """Assign Leads workspace.
+
+    Admin sees every lead; ``team`` narrows to the admin pool ("admin_pool"), one
+    Team Lead (their employee_id) or everything ("all"). A Team Lead only ever sees
+    their own team (the lead fetch is team-scoped), so ``team`` is ignored for them.
+    ``team_view`` = all | pool (no employee yet) | assigned. ``region`` matches the
+    lead location against a region's name + keywords.
+    """
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
     inquiry_key = (inquiry_status or "all").strip().lower()
     inquiry_keys = parse_inquiry_status_filter(inquiry_key)
     if inquiry_key not in ("", "all") and not inquiry_keys:
@@ -8320,6 +8773,9 @@ async def list_assign_workspace(
     source_key = (source or "all").strip().lower()
     if source_key not in ASSIGN_SOURCE_FILTERS:
         raise HTTPException(400, detail=f"source must be one of: {', '.join(ASSIGN_SOURCE_FILTERS)}")
+    team_view_key = (team_view or "all").strip().lower()
+    if team_view_key not in ("all", "pool", "assigned"):
+        raise HTTPException(400, detail="team_view must be one of: all, pool, assigned")
 
     limit = min(max(limit, 1), ASSIGN_WORKSPACE_MAX_LIMIT)
     offset = max(offset, 0)
@@ -8327,67 +8783,207 @@ async def list_assign_workspace(
     # external_lead_id are what is_pipeline_lead / dedupe_leads_by_external_id
     # need, so a broker lead or an imported duplicate is either counted on every
     # screen or on none — never counted on one and skipped on another.
+    # (team_lead_* columns ride along automatically — see _project_lead_fields.)
     select = (
         "lead_id,name,phone,email,lead_type,external_lead_id,source,stage,status,priority,call_status,"
         "budget,location,property_type,assigned_to,assigned_at,assigned_by,created_at,updated_at,"
-        "follow_up_at,last_employee_action_at"
+        "follow_up_at,last_employee_action_at,notes,raw_payload"
     )
-    all_leads = fetch_all_leads_merged(select)
-    # Load EVERY employee (not just active ones) for matching, names and facets:
-    # the Dashboard and the Team snapshot both show inactive people too, so
-    # filtering here would make the same employee total differently per screen.
-    all_employees = sb_select("employees", {
-        "select": "employee_id,name,email,role,department,active",
-        "order": "name.asc",
-    })
-    assignable = [
-        e for e in all_employees
-        if e.get("active", True) and (e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") in {"admin", "manager"})
-    ]
-    assignable = assignable or [e for e in all_employees if e.get("active", True)] or all_employees
 
-    filtered = filter_assign_workspace_leads(all_leads, inquiry_key, source_key, assigned_to, q, location, all_employees)
-    page = enrich_leads_with_employee_names(filtered[offset:offset + limit], all_employees)
-    # Boxes follow the employee you picked, so the counts on screen always
-    # describe the same leads as the list underneath them.
-    facets = compute_assign_workspace_facets(all_leads, all_employees, assigned_to)
-    total_filtered = len(filtered)
+    def _build() -> Dict[str, Any]:
+        all_leads = fetch_all_leads_merged(select)
+        # Load EVERY employee (not just active ones) for matching and names: the
+        # Dashboard and the Team snapshot both show inactive people too, so
+        # filtering here would make the same employee total differently per screen.
+        all_employees = sb_select("employees", {
+            "select": "employee_id,name,email,role,department,active",
+            "order": "name.asc",
+        })
+        directory = get_team_directory()
+        team_key = "all" if is_team_lead_user(cu) else (team or "all").strip()
+        team_leads = team_lead_summaries(directory, current_team_scope())
 
+        in_team = filter_leads_by_team(all_leads, team_key, team_view_key, directory)
+        region_terms = region_match_terms(region)
+        if region_terms:
+            in_team = [l for l in in_team if lead_matches_region_terms(l, region_terms)]
+
+        filtered = filter_assign_workspace_leads(in_team, inquiry_key, source_key, assigned_to, q, location, all_employees)
+        page = enrich_leads_with_team_names(
+            enrich_leads_with_employee_names(filtered[offset:offset + limit], all_employees)
+        )
+        # Boxes follow the team / employee you picked, so the counts on screen
+        # always describe the same leads as the list underneath them.
+        facets = compute_assign_workspace_facets(in_team, all_employees, assigned_to)
+        facets["team"] = compute_team_facets(all_leads, directory)
+        total_filtered = len(filtered)
+        return {
+            "total": total_filtered,
+            "leads": page,
+            "employees": scope_employees(all_employees),
+            "assignable": assignable_employees_for(cu, directory),
+            "team_leads": team_leads,
+            "facets": facets,
+            "offset": offset,
+            "limit": limit,
+            "has_more": (offset + len(page)) < total_filtered,
+            "viewer": {
+                "is_admin": is_admin_user(cu),
+                "team_lead_id": team_lead_employee_id(cu),
+                "team_columns_ready": lead_team_columns_ready(),
+            },
+            "filters": {
+                "inquiry_status": inquiry_key,
+                "source": source_key,
+                "assigned_to": assigned_to or "all",
+                "q": q or "",
+                "location": location or "",
+                "team": team_key,
+                "team_view": team_view_key,
+                "region": region or "",
+            },
+            "auto_assign_on_intake": False,
+        }
+
+    return await asyncio.to_thread(_build)
+
+
+def filter_leads_by_team(
+    leads: List[Dict[str, Any]],
+    team: str,
+    team_view: str,
+    directory: "TeamDirectory",
+) -> List[Dict[str, Any]]:
+    key = (team or "all").strip()
+    rows = leads
+    if key.lower() == "admin_pool":
+        rows = [l for l in rows if not directory.lead_team_lead_id(l)]
+    elif key and key.lower() != "all":
+        rows = [l for l in rows if directory.lead_team_lead_id(l) == key]
+    if team_view == "pool":
+        rows = [l for l in rows if not clean_text(l.get("assigned_to"))]
+    elif team_view == "assigned":
+        rows = [l for l in rows if clean_text(l.get("assigned_to"))]
+    return rows
+
+
+def compute_team_facets(all_leads: List[Dict[str, Any]], directory: "TeamDirectory") -> Dict[str, Any]:
+    """Who holds every pipeline lead: admin pool, each Team Lead's pool / employees.
+
+    admin_pool + no_team_assigned + sum(teams.total) == pipeline total, so a lead
+    can never be counted nowhere.
+    """
+    pipeline = pipeline_lead_universe(all_leads)
+    teams: Dict[str, Dict[str, int]] = {}
+    admin_pool = 0
+    admin_pool_active = 0
+    no_team_assigned = 0
+    for lead in pipeline:
+        tl_id = directory.lead_team_lead_id(lead)
+        has_employee = bool(clean_text(lead.get("assigned_to")))
+        if not tl_id:
+            if has_employee:
+                no_team_assigned += 1
+            else:
+                admin_pool += 1
+                if lead.get("status") != "negative":
+                    admin_pool_active += 1
+            continue
+        bucket = teams.setdefault(tl_id, {"total": 0, "pool": 0, "assigned": 0})
+        bucket["total"] += 1
+        bucket["assigned" if has_employee else "pool"] += 1
     return {
-        "total": total_filtered,
-        "leads": page,
-        "employees": all_employees,
-        "assignable": assignable,
-        "facets": facets,
-        "offset": offset,
-        "limit": limit,
-        "has_more": (offset + len(page)) < total_filtered,
-        "filters": {
-            "inquiry_status": inquiry_key,
-            "source": source_key,
-            "assigned_to": assigned_to or "all",
-            "q": q or "",
-            "location": location or "",
-        },
-        "auto_assign_on_intake": False,
+        "pipeline_total": len(pipeline),
+        "admin_pool": admin_pool,
+        "admin_pool_active": admin_pool_active,
+        "no_team_assigned": no_team_assigned,
+        "teams": teams,
     }
+
+
+def team_lead_summaries(directory: "TeamDirectory", scope: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Active Team Leads (admin: all, Team Lead: themselves) with regions and team size."""
+    rows = []
+    for tl in directory.team_leads():
+        tl_id = tl["employee_id"]
+        if scope is not None and tl_id != scope:
+            continue
+        rows.append({
+            "employee_id": tl_id,
+            "name": tl.get("name"),
+            "email": tl.get("email"),
+            "regions": tl.get("regions") or [],
+            "member_count": len(directory.team_member_ids(tl_id, include_lead=False)),
+        })
+    return rows
+
+
+def assignable_employees_for(cu: User, directory: "TeamDirectory") -> List[Dict[str, Any]]:
+    """Who a lead may be handed to. Admin: workers + Team Leads company-wide.
+    Team Lead: every active member of their own team (and themselves)."""
+    out: List[Dict[str, Any]] = []
+    if is_team_lead_user(cu):
+        tl_id = team_lead_employee_id(cu)
+        members = directory.team_member_ids(tl_id) if tl_id else []
+        candidates = [directory.by_id[m] for m in members if m in directory.by_id]
+    else:
+        candidates = [
+            e for e in directory.employees
+            if e.get("role") in ASSIGNABLE_EMPLOYEE_ROLES or e.get("role") in {"admin", TEAM_LEAD_ROLE}
+        ] or list(directory.employees)
+    for e in candidates:
+        if e.get("active", True) is False:
+            continue
+        tl_id = directory.team_lead_of_employee(e["employee_id"])
+        out.append({
+            "employee_id": e["employee_id"],
+            "name": e.get("name"),
+            "email": e.get("email"),
+            "role": e.get("role"),
+            "department": e.get("department"),
+            "active": e.get("active", True),
+            "team_lead_id": tl_id,
+            "team_lead_name": (directory.by_id.get(tl_id) or {}).get("name") if tl_id else None,
+        })
+    return out
 
 
 @api_router.post("/leads/bulk-manage")
 async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_current_user)):
-    """Manager bulk assign + change inquiry status (reassign not-interested leads, etc.)."""
-    ensure_roles(cu, ["admin", "manager"])
+    """Bulk assign / route / change inquiry status.
+
+    Admin: assign to any active employee, hand leads to a Team Lead's pool
+    (``team_lead_id``) or send them back to the admin pool (``return_to_admin``).
+    Team Lead: only leads of their own team, only to their own team's employees;
+    may also return leads to the admin pool (e.g. wrong area).
+    """
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
     lead_ids = [lid.strip() for lid in (body.lead_ids or []) if lid and lid.strip()]
     if len(lead_ids) < 1:
         raise HTTPException(status_code=400, detail="Select at least one lead.")
+    unassign = bool(body.unassign)
+    assign_employee = None if unassign else (clean_text(body.assigned_to) or None)
+    team_target = clean_text(body.team_lead_id) or None
+    if team_target and body.return_to_admin:
+        raise HTTPException(status_code=400, detail="Choose either a Team Lead or Return to admin, not both.")
+    if team_target or body.return_to_admin:
+        require_team_columns()
+    if team_target:
+        if is_team_lead_user(cu):
+            raise HTTPException(status_code=403, detail="Only an administrator can move leads between Team Leads.")
+        require_active_team_lead(team_target)
+    if assign_employee:
+        ensure_assignable_employee(cu, assign_employee)
+    body.team_lead_id = team_target
+    tl_scope = team_lead_employee_id(cu) if is_team_lead_user(cu) else None
+    if is_team_lead_user(cu) and not tl_scope:
+        raise HTTPException(status_code=403, detail="Your Team Lead profile is not set up. Ask the administrator.")
 
     def _run_bulk() -> Dict[str, Any]:
         preset = INQUIRY_ACTION_PRESETS.get((body.inquiry_action or "").strip().lower(), {})
-        unassign = bool(body.unassign)
-        assign_employee = None if unassign else ((body.assigned_to or "").strip() or None)
         actor_id = _actor_employee_id(cu)
         lead_map = fetch_leads_map_by_ids(lead_ids)
-        updated: List[str] = []
+        touched: List[str] = []
         skipped: List[Dict[str, str]] = []
         id_to_patch: Dict[str, Dict[str, Any]] = {}
 
@@ -8396,58 +8992,69 @@ async def bulk_manage_leads(body: BulkLeadManageRequest, cu: User = Depends(get_
             if not old_lead:
                 skipped.append({"lead_id": lead_id, "reason": "not_found"})
                 continue
-            patch = compute_bulk_manage_patch(old_lead, body, preset, assign_employee, actor_id)
-            if not patch:
-                updated.append(lead_id)
+            if tl_scope and not lead_in_scope(old_lead, tl_scope):
+                skipped.append({"lead_id": lead_id, "reason": "not_in_team"})
                 continue
-            id_to_patch[lead_id] = patch
-            updated.append(lead_id)
+            patch = compute_bulk_manage_patch(old_lead, body, preset, assign_employee, actor_id)
+            touched.append(lead_id)
+            if patch:
+                id_to_patch[lead_id] = patch
 
-        errors = _bulk_patch_leads_grouped(id_to_patch)
-        if errors:
-            logging.error("bulk_manage_leads: %s", errors[:5])
-        _patch_session_cache_leads_bulk(id_to_patch)
+        _saved, failed = _apply_lead_patches(id_to_patch, "bulk_manage_leads")
+        failed_set = set(failed)
+        for lid in failed:
+            skipped.append({"lead_id": lid, "reason": "save_failed"})
+        updated = [lid for lid in touched if lid not in failed_set]
 
         assigned_count = sum(1 for lid in updated if assign_employee and lid in id_to_patch)
         if assign_employee and assigned_count:
             sb_update("employees", "employee_id", assign_employee, {"last_assigned_at": now_utc().isoformat()})
             _notify_assignment_summary(assign_employee, assigned_count, cu)
+        routed_count = sum(1 for lid in updated if team_target and not assign_employee and lid in id_to_patch)
+        if routed_count:
+            _notify_assignment_summary(team_target, routed_count, cu)
 
         if updated:
-            action = body.inquiry_action or ("unassign" if unassign else ("assign" if assign_employee else "bulk_update"))
+            if body.return_to_admin:
+                action = "return_to_admin"
+            elif team_target and not assign_employee:
+                action = f"team_lead:{team_target}"
+            else:
+                action = body.inquiry_action or ("unassign" if unassign else ("assign" if assign_employee else "bulk_update"))
             log_activity(
                 cu,
-                "manager_bulk_update",
-                f"Manager bulk updated {len(updated)} leads ({action})"
+                "manager_bulk_update",  # activity type kept for history/report compatibility
+                f"Bulk updated {len(updated)} leads ({action})"
                 + (f" → assigned {assign_employee}" if assign_employee else ""),
             )
         invalidate_leads_cache()
-        return {"status": "success", "updated_count": len(updated), "updated": updated, "skipped": skipped}
+        return {
+            "status": "success" if not failed else "partial",
+            "updated_count": len(updated),
+            "updated": updated,
+            "skipped": skipped,
+            "failed_count": len(failed),
+        }
 
     return await asyncio.to_thread(_run_bulk)
 
 
 @api_router.post("/leads/bulk-assign")
 async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_current_user)):
-    """Manager: assign multiple selected leads to one employee."""
-    ensure_roles(cu, ["admin", "manager"])
+    """Assign multiple selected leads to one employee (Team Lead: own team only)."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
     lead_ids = [lid.strip() for lid in (body.lead_ids or []) if lid and lid.strip()]
     employee_id = (body.assigned_to or "").strip()
     if len(lead_ids) < 1:
         raise HTTPException(status_code=400, detail="Select at least one lead.")
-    if not employee_id:
-        raise HTTPException(status_code=400, detail="Select an employee to assign to.")
-
-    emps = sb_select("employees", {"employee_id": f"eq.{employee_id}", "select": "employee_id,name,active", "limit": "1"})
-    if not emps or not emps[0].get("active", True):
-        raise HTTPException(status_code=400, detail="Employee not found or inactive.")
-    emp_name = emps[0].get("name") or employee_id
+    employee = ensure_assignable_employee(cu, employee_id)
+    emp_name = employee.get("name") or employee_id
+    tl_scope = team_lead_employee_id(cu) if is_team_lead_user(cu) else None
 
     def _run_bulk() -> Dict[str, Any]:
         lead_map = fetch_leads_map_by_ids(lead_ids)
         actor_id = _actor_employee_id(cu)
         id_to_patch: Dict[str, Dict[str, Any]] = {}
-        assigned: List[str] = []
         skipped: List[Dict[str, str]] = []
 
         for lead_id in lead_ids:
@@ -8455,27 +9062,29 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
             if not old_lead:
                 skipped.append({"lead_id": lead_id, "reason": "not_found"})
                 continue
+            if tl_scope and not lead_in_scope(old_lead, tl_scope):
+                skipped.append({"lead_id": lead_id, "reason": "not_in_team"})
+                continue
             if old_lead.get("assigned_to") == employee_id:
                 skipped.append({"lead_id": lead_id, "reason": "already_assigned"})
                 continue
             id_to_patch[lead_id] = compute_assignment_only_patch(old_lead, employee_id, actor_id)
-            assigned.append(lead_id)
 
-        errors = _bulk_patch_leads_grouped(id_to_patch)
-        if errors:
-            logging.error("bulk_assign_leads: %s", errors[:5])
-        _patch_session_cache_leads_bulk(id_to_patch)
+        assigned, failed = _apply_lead_patches(id_to_patch, "bulk_assign_leads")
+        for lid in failed:
+            skipped.append({"lead_id": lid, "reason": "save_failed"})
 
-        sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
         if assigned:
+            sb_update("employees", "employee_id", employee_id, {"last_assigned_at": now_utc().isoformat()})
             log_activity(cu, "bulk_assign", f"Assigned {len(assigned)} leads to {emp_name}")
             _notify_assignment_summary(employee_id, len(assigned), cu)
         invalidate_leads_cache()
         return {
-            "status": "success",
+            "status": "success" if not failed else "partial",
             "assigned": assigned,
             "assigned_count": len(assigned),
             "skipped": skipped,
+            "failed_count": len(failed),
             "employee_id": employee_id,
             "employee_name": emp_name,
         }
@@ -8485,76 +9094,156 @@ async def bulk_assign_leads(body: BulkAssignRequest, cu: User = Depends(get_curr
 
 @api_router.post("/leads/assign-queue/auto")
 async def auto_assign_queue(cu: User = Depends(get_current_user)):
-    """Round-robin assign all unassigned leads (e.g. after import or reset)."""
-    ensure_roles(cu, ["admin", "manager"])
-    all_leads = fetch_all_leads_merged("lead_id,name,stage,status,assigned_to")
-    queue = compute_unassigned_queue(all_leads)
-    assigned: List[str] = []
-    per_employee: Dict[str, int] = {}
-    for lead in queue:
-        eid = assign_lead_round_robin()
-        if not eid:
-            break
-        updated = assign_lead_to_employee(lead["lead_id"], lead, eid, cu, skip_removed_notify=True)
-        if not updated or clean_text(updated.get("assigned_to")) != eid:
-            logging.warning("auto_assign_queue: skipped lead_id=%s", lead.get("lead_id"))
-            continue
-        assigned.append(lead["lead_id"])
-        per_employee[eid] = per_employee.get(eid, 0) + 1
-    for eid, count in per_employee.items():
-        _notify_assignment_summary(eid, count, cu)
-    return {"status": "success", "assigned_count": len(assigned), "assigned": assigned}
+    """Auto-distribute waiting leads.
+
+    Admin: admin-pool leads go to Team Leads — a lead whose location matches a
+    Team Lead's region goes to that Team Lead, the rest round-robin across Team
+    Leads. (Before any Team Lead exists: old round-robin to employees.)
+    Team Lead: their team-pool leads round-robin across their own team.
+    """
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+
+    def _run() -> Dict[str, Any]:
+        directory = get_team_directory(force=True)
+        actor_id = _actor_employee_id(cu)
+        all_leads = fetch_all_leads_merged(
+            "lead_id,name,stage,status,assigned_to,location,notes,raw_payload,lead_type,source,phone,email,external_lead_id"
+        )
+        queue = compute_unassigned_queue(all_leads)
+        per_target: Dict[str, int] = defaultdict(int)
+        id_to_patch: Dict[str, Dict[str, Any]] = {}
+
+        if is_team_lead_user(cu):
+            tl_id = team_lead_employee_id(cu)
+            if not tl_id:
+                raise HTTPException(403, "Your Team Lead profile is not set up. Ask the administrator.")
+            workers = [
+                directory.by_id[m] for m in directory.team_member_ids(tl_id, include_lead=False)
+                if m in directory.by_id
+                and directory.by_id[m].get("active", True) is not False
+                and directory.by_id[m].get("role") in ASSIGNABLE_EMPLOYEE_ROLES
+            ]
+            if not workers:
+                raise HTTPException(400, "Add telecallers / sales executives to your team first.")
+            workers.sort(key=lambda e: str(e.get("last_assigned_at") or ""))
+            for i, lead in enumerate(queue):
+                eid = workers[i % len(workers)]["employee_id"]
+                id_to_patch[lead["lead_id"]] = compute_assignment_only_patch(lead, eid, actor_id)
+                per_target[eid] += 1
+        else:
+            team_leads = directory.team_leads()
+            pool = [l for l in queue if not directory.lead_team_lead_id(l)]
+            if team_leads and lead_team_columns_ready():
+                region_terms = {tl["employee_id"]: team_lead_region_terms(tl) for tl in team_leads}
+                fallback = [tl["employee_id"] for tl in team_leads]
+                rr = 0
+                for lead in pool:
+                    matches = [tid for tid, terms in region_terms.items() if terms and lead_matches_region_terms(lead, terms)]
+                    if matches:
+                        target = min(matches, key=lambda t: per_target[t])
+                    else:
+                        target = fallback[rr % len(fallback)]
+                        rr += 1
+                    id_to_patch[lead["lead_id"]] = compute_team_assignment_patch(lead, target, actor_id)
+                    per_target[target] += 1
+            else:
+                for lead in queue:
+                    eid = assign_lead_round_robin()
+                    if not eid:
+                        break
+                    id_to_patch[lead["lead_id"]] = compute_assignment_only_patch(lead, eid, actor_id)
+                    per_target[eid] += 1
+
+        saved, failed = _apply_lead_patches(id_to_patch, "auto_assign_queue")
+        failed_set = set(failed)
+        saved_per_target: Dict[str, int] = defaultdict(int)
+        for lid, patch in id_to_patch.items():
+            if lid in failed_set:
+                continue
+            target = patch.get("assigned_to") or patch.get("team_lead_id")
+            if target:
+                saved_per_target[target] += 1
+        now_iso = now_utc().isoformat()
+        for target, count in saved_per_target.items():
+            sb_update("employees", "employee_id", target, {"last_assigned_at": now_iso})
+            _notify_assignment_summary(target, count, cu)
+        if saved:
+            log_activity(cu, "auto_assign", f"Auto-distributed {len(saved)} leads to {len(saved_per_target)} people")
+        invalidate_leads_cache()
+        return {
+            "status": "success" if not failed else "partial",
+            "assigned_count": len(saved),
+            "assigned": saved,
+            "failed_count": len(failed),
+            "per_target": dict(saved_per_target),
+        }
+
+    return await asyncio.to_thread(_run)
 
 
 @api_router.get("/stats/assignment")
 async def stats_assignment(cu: User = Depends(get_current_user)):
-    """Per-employee assigned / active / completed lead counts for manager dashboards."""
-    ensure_roles(cu, ["admin", "manager"])
-    now = time.time()
-    if _assignment_stats_cache["data"] is not None and (now - float(_assignment_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
-        return _assignment_stats_cache["data"]
-    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id", "order": "name.asc"})
-    # Identical lead shape to _stats_employees_sync (Dashboard) — a narrower
-    # select here meant source/lead_type were missing, so broker leads were
-    # counted in the Team snapshot but excluded from the Dashboard card.
-    all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
-    all_bookings = fetch_all_bookings_merged(
-        "booking_id,lead_id,lead_name,status,completed_tasks,booking_officer_id,agreement_status,property_name,created_at"
-    )
-    rows = []
-    for e in employees:
-        eid = e.get("employee_id")
-        emp_leads = leads_for_employee_record(e, all_leads)
-        stats = compute_employee_assignment_stats(emp_leads, e.get("role"))
-        if str(e.get("role") or "").lower() == "booking":
-            # Booking officers are counted in bookings on the Dashboard; mirror
-            # that here so both screens report the same person identically.
-            booking_stats = compute_booking_employee_stats(e, all_bookings)
-            stats["assigned_total"] = booking_stats["assigned_total"]
-            stats["emp_new_leads"] = booking_stats["emp_new_leads"]
-            stats["assigned_updated"] = max(
-                0, int(booking_stats["assigned_total"]) - int(booking_stats["emp_new_leads"])
-            )
-            for key in BOOKING_TASK_KEYS:
-                stats[f"emp_{key}"] = booking_stats.get(f"emp_{key}", 0)
-        rows.append({
-            "employee_id": eid,
-            "name": e.get("name"),
-            "email": e.get("email"),
-            "role": e.get("role"),
-            "department": e.get("department"),
-            "active": e.get("active", True),
-            **stats,
-        })
-    unassigned = compute_unassigned_queue(all_leads)
-    payload = {
-        # Same definition as the Assign Leads "Unassigned" box and Dashboard
-        # "Open Leads", so every screen that shows this number agrees.
-        "unassigned_count": sum(1 for l in pipeline_lead_universe(all_leads) if assign_unassigned_lead(l)),
-        "ownerless_count": len(unassigned),
-        "employees": rows,
-    }
-    _assignment_stats_cache.update({"ts": now, "data": payload})
+    """Per-employee assigned / active / completed lead counts (admin: everyone,
+    Team Lead: their own team) plus who holds the waiting leads."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    cached = scoped_stats_cache_get("assignment", _assignment_stats_cache)
+    if cached is not None:
+        return cached
+
+    def _build() -> Dict[str, Any]:
+        employees = scope_employees(sb_select("employees", {
+            "select": "employee_id,name,email,role,department,active,user_id",
+            "order": "name.asc",
+        }))
+        # Identical lead shape to _stats_employees_sync (Dashboard) — a narrower
+        # select here meant source/lead_type were missing, so broker leads were
+        # counted in the Team snapshot but excluded from the Dashboard card.
+        all_leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
+        all_bookings = fetch_all_bookings_merged(
+            "booking_id,lead_id,lead_name,status,completed_tasks,booking_officer_id,agreement_status,property_name,created_at"
+        )
+        directory = get_team_directory()
+        rows = []
+        for e in employees:
+            eid = e.get("employee_id")
+            emp_leads = leads_for_employee_record(e, all_leads)
+            stats = compute_employee_assignment_stats(emp_leads, e.get("role"))
+            if str(e.get("role") or "").lower() == "booking":
+                # Booking officers are counted in bookings on the Dashboard; mirror
+                # that here so both screens report the same person identically.
+                booking_stats = compute_booking_employee_stats(e, all_bookings)
+                stats["assigned_total"] = booking_stats["assigned_total"]
+                stats["emp_new_leads"] = booking_stats["emp_new_leads"]
+                stats["assigned_updated"] = max(
+                    0, int(booking_stats["assigned_total"]) - int(booking_stats["emp_new_leads"])
+                )
+                for key in BOOKING_TASK_KEYS:
+                    stats[f"emp_{key}"] = booking_stats.get(f"emp_{key}", 0)
+            tl_id = directory.team_lead_of_employee(eid)
+            rows.append({
+                "employee_id": eid,
+                "name": e.get("name"),
+                "email": e.get("email"),
+                "role": normalize_role(e.get("role")),
+                "department": e.get("department"),
+                "active": e.get("active", True),
+                "team_lead_id": tl_id,
+                "team_lead_name": (directory.by_id.get(tl_id) or {}).get("name") if tl_id else None,
+                **stats,
+            })
+        unassigned = compute_unassigned_queue(all_leads)
+        return {
+            # Same definition as the Assign Leads "Unassigned" box and Dashboard
+            # "Open Leads", so every screen that shows this number agrees.
+            "unassigned_count": sum(1 for l in pipeline_lead_universe(all_leads) if assign_unassigned_lead(l)),
+            "ownerless_count": len(unassigned),
+            "employees": rows,
+            "team": compute_team_facets(all_leads, directory),
+            "team_leads": team_lead_summaries(directory, current_team_scope()),
+        }
+
+    payload = await asyncio.to_thread(_build)
+    scoped_stats_cache_set("assignment", _assignment_stats_cache, payload)
     return payload
 
 
@@ -8601,13 +9290,17 @@ async def list_recent_leads(limit: int = 20, cu: User = Depends(get_current_user
     limit = min(max(limit, 1), 100)
     platform_labels = PLATFORM_LABELS.copy()
     platform_labels["other"] = PLATFORM_LABELS["other"]
+    select = "lead_id,name,phone,email,source,stage,status,assigned_to,external_lead_id,created_at"
+    if lead_team_columns_ready():
+        select += "," + ",".join(LEAD_TEAM_COLUMNS)
     db_leads = sb_select("leads", {
-        "select": "lead_id,name,phone,email,source,stage,status,assigned_to,external_lead_id,created_at",
+        "select": select,
         "order": "created_at.desc",
         "limit": str(limit * 3),
     })
     leads = merge_leads_with_cache(db_leads)
-    leads = [l for l in leads if lead_is_since_start(l)]
+    # Team Leads get the popup for leads handed to their team, admins for everything.
+    leads = scope_leads([l for l in leads if lead_is_since_start(l)])
     leads.sort(key=lambda l: l.get("created_at") or "", reverse=True)
     out = []
     for l in leads:
@@ -8637,6 +9330,8 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
         "site_visitor_id,site_visit_assigned_by,site_visit_assigned_at,"
         "created_at,updated_at,external_lead_id,external_created_at,integration_uuid,raw_payload,brokerage_amount"
     )
+    if lead_team_columns_ready():
+        lead_fields += "," + ",".join(LEAD_TEAM_COLUMNS)
     leads = sb_select("leads", {"lead_id": f"eq.{lead_id}", "select": lead_fields})
     lead = None
     if leads:
@@ -8646,7 +9341,9 @@ async def get_lead(lead_id: str, cu: User=Depends(get_current_user)):
         if cache_match:
             lead = cache_match[0]
     if not lead: raise HTTPException(404, "Lead not found")
-    lead = enrich_lead_display_fields(lead)
+    if is_team_lead_user(cu):
+        ensure_lead_manageable(cu, lead)
+    lead = enrich_leads_with_team_names([enrich_lead_display_fields(lead)])[0]
     timeline = sb_select("activities", {
         "lead_id": f"eq.{lead_id}",
         "select": "activity_id,type,text,created_at,user_id,lead_id",
@@ -8703,8 +9400,10 @@ def _purge_lead_record(lead_id: str) -> bool:
 
 @api_router.delete("/leads/{lead_id}")
 async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
-    if not _can_manage_all_leads(cu):
-        raise HTTPException(status_code=403, detail="Only admin or manager can delete leads.")
+    # Deleting is permanent, so only administrators may do it (Team Leads can
+    # mark a lead not-interested or return it to the admin pool instead).
+    if not is_admin_user(cu):
+        raise HTTPException(status_code=403, detail="Only an administrator can delete leads.")
     if not _purge_lead_record(lead_id):
         raise HTTPException(404, detail="Lead not found or could not be deleted.")
     invalidate_leads_cache()
@@ -8713,8 +9412,8 @@ async def delete_lead(lead_id: str, cu: User=Depends(get_current_user)):
 
 @api_router.post("/leads/bulk-delete")
 async def bulk_delete_leads(body: BulkLeadDeleteRequest, cu: User = Depends(get_current_user)):
-    """Manager assign workspace — delete one or many selected leads."""
-    ensure_roles(cu, ["admin", "manager"])
+    """Assign workspace — delete one or many selected leads (administrators only)."""
+    ensure_admin(cu)
     lead_ids = list(dict.fromkeys(lid.strip() for lid in (body.lead_ids or []) if lid and lid.strip()))
     if len(lead_ids) < 1:
         raise HTTPException(status_code=400, detail="Select at least one lead to delete.")
@@ -8762,12 +9461,12 @@ async def assign_site_visitor(
     p: SiteVisitorAssignRequest,
     cu: User = Depends(get_current_user),
 ):
-    """Telecaller / manager assigns a sales executive (site visitor) for this lead.
+    """Telecaller / Team Lead assigns a sales executive (site visitor) for this lead.
 
     Does NOT change assigned_to — exclusive Hot/Cold/etc. boxes stay with the owner.
     Both assigner and assignee see the lead under Site Visit Assigned.
     """
-    ensure_roles(cu, ["admin", "manager", "telecaller", "sales_executive", "site_visit"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE, "telecaller", "sales_executive", "site_visit"])
     visitor_id = clean_text(p.site_visitor_id)
     if not visitor_id:
         raise HTTPException(400, detail="site_visitor_id is required")
@@ -8793,8 +9492,10 @@ async def assign_site_visitor(
     visitor = visitors[0]
     if visitor.get("active") is False:
         raise HTTPException(400, detail="Cannot assign an inactive employee")
+    if is_team_lead_user(cu):
+        ensure_employee_in_scope(cu, visitor_id)
     role = str(visitor.get("role") or "").strip().lower()
-    if role not in SITE_VISIT_ASSIGNABLE_ROLES and cu.role not in ("admin", "manager"):
+    if role not in SITE_VISIT_ASSIGNABLE_ROLES and not (is_admin_user(cu) or is_team_lead_user(cu)):
         raise HTTPException(
             400,
             detail="Site visitor must be a Sales Executive (sales_executive / site_visit role)",
@@ -8810,7 +9511,7 @@ async def assign_site_visitor(
         "status": "active",
     }
     # Mark workflow touch for the assigner without moving exclusive buckets.
-    if not _can_manage_all_leads(cu):
+    if not _can_manage_lead(cu, old_lead):
         patch["last_employee_action_at"] = now
 
     updated = sb_update("leads", "lead_id", lead_id, patch)
@@ -8864,10 +9565,20 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     if fields_set and fields_set <= {"notes"}:
         return apply_lead_remarks_update(lead_id, old_lead, p.notes, cu)
 
+    unassign_requested = False
     if p.assigned_to is not None:
-        ensure_roles(cu, ["admin", "manager"])
-    
+        ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+        ensure_lead_manageable(cu, old_lead)
+        if clean_text(p.assigned_to):
+            # Used to accept any string, so a typo created a lead owned by nobody.
+            ensure_assignable_employee(cu, p.assigned_to)
+        else:
+            unassign_requested = True
+
     data = model_payload(p)
+    if unassign_requested:
+        data.pop("assigned_to", None)
+        data.update(compute_unassign_patch(old_lead))
     for key in LEAD_REMARKS_DETAIL_FIELDS:
         if key in fields_set:
             data[key] = clean_text(getattr(p, key, None))
@@ -8876,14 +9587,14 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
     if data.get("call_status") and data["call_status"] not in valid_call_statuses:
         raise HTTPException(status_code=400, detail="Invalid call status")
 
-    if p.status == "active" and old_lead.get("status") == "negative" and not _can_reactivate_negative_lead(cu):
+    if p.status == "active" and old_lead.get("status") == "negative" and not _can_reactivate_negative_lead(cu, old_lead):
         raise HTTPException(
             status_code=403,
-            detail="Only manager can re-activate not-interested leads. Ask your manager to reset and reassign.",
+            detail="Only your Team Lead can re-activate not-interested leads. Ask them to reset and reassign.",
         )
 
-    if not _can_manage_all_leads(cu) and p.stage in ("new",) and old_lead.get("stage") not in (None, "new", "assigned"):
-        raise HTTPException(status_code=403, detail="Only manager can reset lead stage. Ask your manager.")
+    if not _can_manage_lead(cu, old_lead) and p.stage in ("new",) and old_lead.get("stage") not in (None, "new", "assigned"):
+        raise HTTPException(status_code=403, detail="Only your Team Lead can reset lead stage. Ask your Team Lead.")
 
     if data.get("call_status"):
         workflow = apply_call_status_workflow(old_lead, data["call_status"])
@@ -8908,7 +9619,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         data["call_status"] = None
         data["priority"] = None
 
-    if not _can_manage_all_leads(cu):
+    if not _can_manage_lead(cu, old_lead):
         workflow_touched = any(
             getattr(p, key) is not None
             for key in ("stage", "status", "priority", "call_status", "follow_up_at")
@@ -8999,7 +9710,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
         reason = (p.priority or "not_interested").replace("_", " ").title()
         notify_svc.notify_lead_closed(new_lead, cu.name, won=False, reason=reason)
 
-    if cu.role not in notify_svc.MANAGER_ROLES and not _can_manage_all_leads(cu):
+    if not is_admin_user(cu) and not is_team_lead_user(cu):
         workflow_changed = any(
             getattr(p, key) is not None and getattr(p, key) != old_lead.get(key)
             for key in ("stage", "status", "priority", "call_status")
@@ -9027,7 +9738,7 @@ async def update_lead(lead_id: str, p: LeadUpdate, cu: User=Depends(get_current_
 
 @api_router.patch("/leads/{lead_id}/remarks")
 async def update_lead_remarks(lead_id: str, p: LeadRemarksUpdate, cu: User = Depends(get_current_user)):
-    """Any logged-in employee/manager/admin can edit lead remarks — no assignee required."""
+    """Any logged-in employee/Team Lead/admin can edit lead remarks — no assignee required."""
     old_lead = get_lead_record(lead_id)
     if not old_lead:
         raise HTTPException(status_code=404, detail="Lead not found")
@@ -9742,7 +10453,7 @@ def _detect_booking_document_type(filename: Optional[str], content_type: Optiona
 
 
 def _ensure_booking_document_access(cu: User) -> None:
-    ensure_roles(cu, ["admin", "manager", "booking"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE, "booking"])
 
 
 @api_router.get("/bookings/{booking_id}/document")
@@ -10376,7 +11087,7 @@ def _sanitize_assignable_pages(pages: List[str]) -> List[str]:
 
 def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
     """Employee row is the source of truth for sidebar access after login."""
-    role = (u.get("role") or "").strip().lower()
+    role = normalize_role(u.get("role"))
     u["role"] = role
 
     def _link_employee_id_from_directory() -> None:
@@ -10393,8 +11104,8 @@ def _hydrate_allowed_pages_from_employee(u: Dict[str, Any]) -> Dict[str, Any]:
         if u.get("employee_id") and role != "admin":
             u["acting_as_employee_id"] = u.get("acting_as_employee_id") or u["employee_id"]
 
-    # Admin/manager sidebar is role-based — still link employee_id for notifications.
-    if role in ("admin", "manager"):
+    # Admin/Team Lead sidebar is role-based — still link employee_id for notifications.
+    if role in ("admin", TEAM_LEAD_ROLE):
         _link_employee_id_from_directory()
         return _finalize_user_session(u)
     emp_id = u.get("employee_id")
@@ -10435,11 +11146,15 @@ def _employee_allowed_pages(employee: Dict[str, Any]) -> List[str]:
     return pages
 
 
+TEAM_LEAD_CORE_PAGES = ("dashboard", "my-dashboard", "assign-leads", "employees", "export-leads", "tracking")
+
+
 def _default_pages_for_role(role: str) -> List[str]:
-    """Sensible fallback service access when the manager doesn't tick any boxes."""
+    """Sensible fallback service access when the admin doesn't tick any boxes."""
+    role = normalize_role(role)
     defaults = {
-        "admin": ["dashboard", "my-dashboard", "notifications", "pipeline", "assign-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
-        "manager": ["dashboard", "my-dashboard", "notifications", "pipeline", "assign-leads", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        "admin": ["dashboard", "my-dashboard", "notifications", "pipeline", "assign-leads", "teams", "export-leads", "telecaller", "sales-executive", "bookings", "loans", "integrations", "broker", "tracking", "employees", "negative"],
+        TEAM_LEAD_ROLE: ["dashboard", "my-dashboard", "notifications", "pipeline", "assign-leads", "export-leads", "employees", "tracking", "negative"],
         "telecaller": ["my-dashboard", "notifications", "telecaller", "pipeline", "negative"],
         "site_visit": ["my-dashboard", "notifications", "sales-executive", "pipeline"],
         "sales_executive": ["my-dashboard", "notifications", "sales-executive", "telecaller", "pipeline"],
@@ -10498,11 +11213,43 @@ def _update_user_login(user_id: str, patch: Dict[str, Any]) -> Optional[Dict[str
     return updated
 
 
+def _team_fields_for_new_employee(cu: User, role: str, p: "EmployeeCreate") -> Dict[str, Any]:
+    """team_lead_id / regions for a new employee row (validated).
+
+    Admin: Team Leads get regions; everyone else may be put under a Team Lead.
+    Team Lead: may only add workers, always into their own team.
+    """
+    wants_team_fields = bool(clean_text(p.team_lead_id)) or bool(p.regions)
+    if is_team_lead_user(cu):
+        if role in ("admin", TEAM_LEAD_ROLE):
+            raise HTTPException(403, "Team Leads can only add employees to their own team.")
+        tl_id = team_lead_employee_id(cu)
+        if not tl_id:
+            raise HTTPException(403, "Your Team Lead profile is not set up. Ask the administrator.")
+        if not employee_team_columns_ready():
+            raise HTTPException(409, "Run supabase/TEAM_LEADS_AND_EXPORTS.sql in Supabase first.")
+        return {"team_lead_id": tl_id}
+    if not employee_team_columns_ready():
+        if wants_team_fields:
+            raise HTTPException(409, "Run supabase/TEAM_LEADS_AND_EXPORTS.sql in Supabase first, then set teams.")
+        return {}
+    if role == TEAM_LEAD_ROLE:
+        return {"team_lead_id": None, "regions": _validate_region_names(p.regions) or [ALL_REGIONS]}
+    tl_id = clean_text(p.team_lead_id)
+    if tl_id:
+        require_active_team_lead(tl_id)
+    return {"team_lead_id": tl_id or None}
+
+
 @api_router.post("/employees")
 async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    p.role = normalize_role(p.role)
     if p.role not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
+    if p.role == "admin" and not is_admin_user(cu):
+        raise HTTPException(status_code=403, detail="Only an administrator can create administrators.")
+    team_fields = _team_fields_for_new_employee(cu, p.role, p)
     if not p.password or len(p.password.strip()) < 4:
         raise HTTPException(status_code=400, detail="Password is required (minimum 4 characters).")
 
@@ -10514,7 +11261,7 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
     if not email:
         raise HTTPException(status_code=400, detail="Valid login email is required.")
 
-    department = p.department or f"{p.role.title()} Department"
+    department = p.department or ("Team Leads" if p.role == TEAM_LEAD_ROLE else f"{p.role.replace('_', ' ').title()} Department")
     allowed_pages = _sanitize_assignable_pages(
         p.allowed_pages if p.allowed_pages else _default_pages_for_role(p.role)
     )
@@ -10541,6 +11288,7 @@ async def create_employee(p: EmployeeCreate, cu: User=Depends(get_current_user))
         "leads_assigned": 0, "leads_closed": 0, "last_login": None,
         "created_at": now_utc().isoformat(),
         "updated_at": now_utc().isoformat(),
+        **team_fields,
     }
     result = sb_insert("employees", e)
     if not result:
@@ -10556,17 +11304,26 @@ async def list_employees(cu: User=Depends(get_current_user)):
     if _employees_cache["ts"] and (now - float(_employees_cache["ts"])) < _EMPLOYEES_CACHE_TTL:
         rows = _employees_cache["data"]
     else:
-        rows = sb_select("employees", {
-            "select": (
-                "employee_id,name,email,phone,role,department,location,active,user_id,allowed_pages,created_at,"
-                "last_lat,last_lng,last_seen_at"
-            ),
-            "order": "name.asc",
-        })
+        select = (
+            "employee_id,name,email,phone,role,department,location,active,user_id,allowed_pages,created_at,"
+            "last_lat,last_lng,last_seen_at"
+        )
+        if employee_team_columns_ready():
+            select += ",team_lead_id,regions"
+        rows = sb_select("employees", {"select": select, "order": "name.asc"})
+        by_id = {r.get("employee_id"): r for r in rows}
         for row in rows:
+            row["role"] = normalize_role(row.get("role"))
             row["allowed_pages"] = _employee_allowed_pages(row)
+            row["regions"] = coerce_regions(row.get("regions"))
+            tl_id = row["employee_id"] if row["role"] == TEAM_LEAD_ROLE else clean_text(row.get("team_lead_id"))
+            row["team_lead_id"] = tl_id or None
+            row["team_lead_name"] = (by_id.get(tl_id) or {}).get("name") if tl_id else None
         _employees_cache.update({"ts": now, "data": rows})
-    can_see_location = cu.role in ("admin", "manager")
+    # Team Leads see their own team only; everyone else keeps the full directory.
+    if is_team_lead_user(cu):
+        rows = scope_employees(rows)
+    can_see_location = is_admin_user(cu) or is_team_lead_user(cu)
     if can_see_location:
         return rows
     return [
@@ -10577,8 +11334,8 @@ async def list_employees(cu: User=Depends(get_current_user)):
 
 @api_router.get("/employees/locations")
 async def list_employee_locations(cu: User = Depends(get_current_user)):
-    """Admin/manager map feed: latest GPS + employee name + current lead."""
-    ensure_roles(cu, ["admin", "manager"])
+    """Admin / Team Lead map feed (Team Lead: own team): latest GPS + employee name + current lead."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
 
     extra_loc_cols = [
         c for c in ("accuracy", "source", "address", "captured_at")
@@ -10588,11 +11345,13 @@ async def list_employee_locations(cu: User = Depends(get_current_user)):
         "select": ",".join(["employee_id", "latitude", "longitude", "updated_at", *extra_loc_cols]),
         "order": "updated_at.desc",
     })
-    employees = sb_select("employees", {
+    employees = scope_employees(sb_select("employees", {
         "select": "employee_id,name,role,department,active,last_lat,last_lng,last_seen_at",
         "order": "name.asc",
-    })
+    }))
     emp_by_id = {e.get("employee_id"): e for e in employees if e.get("employee_id")}
+    if current_team_scope() is not None:
+        locations = [r for r in locations if r.get("employee_id") in emp_by_id]
 
     # Fallback: employees with legacy GPS but no employee_locations row yet.
     loc_by_id: Dict[str, Dict[str, Any]] = {
@@ -10653,16 +11412,35 @@ async def list_employee_locations(cu: User = Depends(get_current_user)):
 
 @api_router.patch("/employees/{eid}")
 async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    ensure_employee_in_scope(cu, eid)
     raw = p.model_dump(exclude_unset=True)
     plain_password = (raw.pop("password", None) or "").strip()
     data = {k: v for k, v in raw.items() if v is not None}
+    # team_lead_id: null is meaningful ("remove from team"), so keep explicit nulls.
+    team_lead_change = "team_lead_id" in raw
+    if team_lead_change:
+        data["team_lead_id"] = clean_text(raw.get("team_lead_id")) or None
     if "allowed_pages" in raw:
-        # Empty list is a valid save (manager cleared all boxes).
+        # Empty list is a valid save (admin cleared all boxes).
         data["allowed_pages"] = _coerce_allowed_pages(raw["allowed_pages"])
 
+    if data.get("role"):
+        data["role"] = normalize_role(data["role"])
     if data.get("role") and data["role"] not in ROLES:
         raise HTTPException(status_code=400, detail="Invalid employee role")
+    if is_team_lead_user(cu):
+        # Team Leads manage their people, not the team structure.
+        if data.get("role") in ("admin", TEAM_LEAD_ROLE) or team_lead_change or "regions" in data:
+            raise HTTPException(403, "Only an administrator can change roles to Team Lead/Admin or move people between teams.")
+        if eid == team_lead_employee_id(cu) and ("active" in data or "role" in data):
+            raise HTTPException(403, "Ask the administrator to change your own role or status.")
+    if data.get("role") == "admin" and not is_admin_user(cu):
+        raise HTTPException(403, "Only an administrator can create administrators.")
+    if (team_lead_change or "regions" in data) and not employee_team_columns_ready():
+        raise HTTPException(409, "Run supabase/TEAM_LEADS_AND_EXPORTS.sql in Supabase first, then set teams.")
+    if "regions" in data:
+        data["regions"] = _validate_region_names(data["regions"]) or [ALL_REGIONS]
     if "location" in data:
         data["location"] = clean_text(data.get("location")) or None
         if not data["location"]:
@@ -10676,8 +11454,32 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
     employee = rows[0] if rows else None
     if not employee:
         raise HTTPException(404, "Employee not found")
+    employee["role"] = normalize_role(employee.get("role"))
 
-    patch_keys = set(data.keys())
+    # Never strand a team: a Team Lead who is demoted or switched off must hand
+    # over their leads and people first (Teams → Transfer).
+    new_role = data.get("role") or employee["role"]
+    if employee["role"] == TEAM_LEAD_ROLE and new_role != TEAM_LEAD_ROLE:
+        ensure_team_lead_can_leave(employee, "change the role of")
+    if employee["role"] == TEAM_LEAD_ROLE and data.get("active") is False:
+        ensure_team_lead_can_leave(employee, "deactivate")
+    if team_lead_change:
+        if new_role in (TEAM_LEAD_ROLE, "admin"):
+            data["team_lead_id"] = None
+        elif data["team_lead_id"]:
+            if data["team_lead_id"] == eid:
+                raise HTTPException(400, "An employee cannot be their own Team Lead.")
+            require_active_team_lead(data["team_lead_id"])
+        if clean_text(employee.get("team_lead_id")) == data["team_lead_id"]:
+            team_lead_change = False
+    if new_role == TEAM_LEAD_ROLE and employee["role"] != TEAM_LEAD_ROLE and employee_team_columns_ready():
+        # Promoted to Team Lead: they lead a team now, they are not inside one.
+        data["team_lead_id"] = None
+        data.setdefault("regions", [ALL_REGIONS])
+        team_lead_change = bool(clean_text(employee.get("team_lead_id")))
+
+    # Team placement lives only on the employee row — it never touches the login.
+    patch_keys = set(data.keys()) - {"team_lead_id", "regions"}
     access_only = patch_keys <= {"allowed_pages"} or patch_keys <= {"active", "allowed_pages"} or patch_keys == {"active"}
     login_fields_changed = bool(patch_keys) and not access_only
 
@@ -10760,19 +11562,37 @@ async def update_employee(eid: str, p: EmployeeUpdate, cu: User=Depends(get_curr
         raise HTTPException(500, "Could not update employee.")
     updated["allowed_pages"] = _employee_allowed_pages(updated)
     invalidate_employees_cache()
+    if team_lead_change and new_role not in (TEAM_LEAD_ROLE, "admin"):
+        # The leads this person is working move with them to the new team.
+        moved = await asyncio.to_thread(_restamp_employee_leads, employee, data.get("team_lead_id"), cu)
+        updated["leads_moved"] = moved
+        invalidate_leads_cache()
+    elif new_role == TEAM_LEAD_ROLE and employee["role"] != TEAM_LEAD_ROLE:
+        # Promoted: the leads they were working now belong to their own new team.
+        moved = await asyncio.to_thread(_restamp_employee_leads, employee, eid, cu)
+        updated["leads_moved"] = moved
+        invalidate_leads_cache()
     return updated
 
 @api_router.delete("/employees/{eid}")
 async def delete_employee(eid: str, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    ensure_employee_in_scope(cu, eid)
     rows = sb_select("employees", {
         "employee_id": f"eq.{eid}",
-        "select": "employee_id,email,user_id",
+        "select": "employee_id,email,user_id,name,role",
         "limit": "1",
     })
     if not rows:
         raise HTTPException(status_code=404, detail="Employee not found")
     employee = rows[0]
+    employee["role"] = normalize_role(employee.get("role"))
+    if is_team_lead_user(cu) and (eid == team_lead_employee_id(cu) or employee["role"] in ("admin", TEAM_LEAD_ROLE)):
+        raise HTTPException(403, "Ask the administrator to remove Team Leads or administrators.")
+    ensure_team_lead_can_leave(employee, "delete")
+    # Their open leads go back to their Team Lead's pool (or the admin pool) —
+    # deleting used to leave leads pointing at a person who no longer exists.
+    returned = await asyncio.to_thread(_return_leads_of_removed_employee, employee, cu)
     email = normalize_email(employee.get("email"))
 
     # Collect every login row linked to this employee so the email is fully
@@ -10799,12 +11619,45 @@ async def delete_employee(eid: str, cu: User=Depends(get_current_user)):
         if sb_delete("users", "user_id", uid):
             invalidate_sessions_for_user(uid)
     invalidate_employees_cache()
-    return {"ok": True}
+    return {"ok": True, "leads_returned": returned}
+
+
+# Leads past these stages are owned by the booking / loan teams; they keep their
+# history and are not pushed back into a calling queue.
+_RETURN_ON_REMOVE_SKIP_STAGES = {"booking", "loan", "registration", "closed"}
+
+
+def _return_leads_of_removed_employee(employee: Dict[str, Any], cu: Optional[User]) -> int:
+    token = push_team_scope(None)
+    try:
+        leads = leads_for_employee_record(employee, fetch_all_leads_merged(LEADS_CANONICAL_SELECT))
+    finally:
+        pop_team_scope(token)
+    team_lead_id = get_team_directory().team_lead_of_employee(employee.get("employee_id"))
+    patches: Dict[str, Dict[str, Any]] = {}
+    for lead in leads:
+        if not lead.get("lead_id") or lead.get("stage") in _RETURN_ON_REMOVE_SKIP_STAGES:
+            continue
+        patch = compute_unassign_patch(lead)
+        if lead_team_columns_ready():
+            patch["team_lead_id"] = team_lead_id
+        patches[lead["lead_id"]] = patch
+    saved, failed = _apply_lead_patches(patches, "return_leads_of_removed_employee")
+    if failed:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not move {len(failed)} of this employee's leads back to the pool. Nothing was deleted — try again.",
+        )
+    if saved:
+        log_activity(cu, "employee_removed_leads_returned",
+                     f"{len(saved)} leads of {employee.get('name') or employee.get('employee_id')} returned to the pool")
+        invalidate_leads_cache()
+    return len(saved)
 
 # ---- Templates & Campaigns ----
 @api_router.post("/templates")
 async def create_template(p: TemplateCreate, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     tid = gen_id("tpl")
     t = {"template_id": tid, "name": p.name, "body": p.body, "created_at": now_utc().isoformat()}
     result = sb_insert("templates", t)
@@ -10816,13 +11669,13 @@ async def list_templates(cu: User=Depends(get_current_user)):
 
 @api_router.delete("/templates/{tid}")
 async def delete_template(tid: str, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     sb_delete("templates", "template_id", tid)
     return {"ok": True}
 
 @api_router.post("/campaigns")
 async def create_campaign(p: CampaignCreate, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     cid = gen_id("cmp")
     c = {
         "campaign_id": cid, "name": p.name, "template_id": p.template_id,
@@ -10840,7 +11693,7 @@ async def list_campaigns(cu: User=Depends(get_current_user)):
 
 @api_router.post("/campaigns/{cid}/send")
 async def send_campaign(cid: str, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     camps = sb_select("campaigns", {"campaign_id": f"eq.{cid}", "select": "*"})
     if not camps: raise HTTPException(404, "Campaign not found")
     leads = sb_select("leads", {"select": "lead_id"})
@@ -10852,22 +11705,823 @@ async def send_campaign(cid: str, cu: User=Depends(get_current_user)):
 
 @api_router.delete("/campaigns/{cid}")
 async def delete_campaign(cid: str, cu: User=Depends(get_current_user)):
-    ensure_roles(cu, ["admin", "manager", "marketing"])
+    ensure_roles(cu, ["admin", "marketing"])
     sb_delete("campaigns", "campaign_id", cid)
     return {"ok": True}
 
+# ---- Teams, Regions & Lead Exports ----
+# Admin pool -> Team Lead -> Employee. See app/team_scope.py for the ownership rule.
+
+DEFAULT_REGIONS: List[Dict[str, Any]] = [
+    {"region_id": "reg_virar", "name": "Virar", "keywords": "virar", "active": True},
+    {"region_id": "reg_vasai", "name": "Vasai", "keywords": "vasai", "active": True},
+    {"region_id": "reg_nallasopara", "name": "Nallasopara", "keywords": "nallasopara,nalasopara,nala sopara,nalla sopara", "active": True},
+    {"region_id": "reg_nagpur", "name": "Nagpur", "keywords": "nagpur", "active": True},
+]
+_regions_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
+_REGIONS_CACHE_TTL_SEC = 60.0
+
+
+def list_regions(include_inactive: bool = False, force: bool = False) -> List[Dict[str, Any]]:
+    """Regions from Supabase (defaults until TEAM_LEADS_AND_EXPORTS.sql has run)."""
+    if not regions_table_ready():
+        rows = [dict(r) for r in DEFAULT_REGIONS]
+    else:
+        now = time.time()
+        if not force and _regions_cache["data"] is not None and (now - _regions_cache["ts"]) < _REGIONS_CACHE_TTL_SEC:
+            rows = _regions_cache["data"]
+        else:
+            rows = sb_select("regions", {
+                "select": "region_id,name,keywords,active,created_at",
+                "order": "name.asc",
+            })
+            _regions_cache.update({"ts": now, "data": rows})
+    if include_inactive:
+        return list(rows)
+    return [r for r in rows if r.get("active", True) is not False]
+
+
+def invalidate_regions_cache() -> None:
+    _regions_cache.update({"ts": 0.0, "data": None})
+
+
+def region_terms(region: Dict[str, Any]) -> List[str]:
+    terms: List[str] = []
+    for raw in [region.get("name"), *str(region.get("keywords") or "").split(",")]:
+        term = re.sub(r"\s+", " ", str(raw or "").strip().lower())
+        if term and term not in terms:
+            terms.append(term)
+    return terms
+
+
+def find_region(key: Optional[str]) -> Optional[Dict[str, Any]]:
+    needle = (key or "").strip().lower()
+    if not needle:
+        return None
+    for r in list_regions(include_inactive=True):
+        if str(r.get("region_id") or "").lower() == needle or str(r.get("name") or "").strip().lower() == needle:
+            return r
+    return None
+
+
+def region_match_terms(region_key: Optional[str]) -> List[str]:
+    key = (region_key or "").strip()
+    if not key or key.lower() == "all":
+        return []
+    found = find_region(key)
+    return region_terms(found) if found else [key.lower()]
+
+
+def _lead_area_text(lead: Dict[str, Any]) -> str:
+    parts = [lead.get("location"), lead.get("locality"), lead.get("city"), lead.get("notes")]
+    raw = lead.get("raw_payload")
+    if isinstance(raw, dict):
+        for k in ("locality", "locality_name", "city", "city_name", "location", "project_name"):
+            parts.append(raw.get(k))
+    return re.sub(r"\s+", " ", " ".join(str(p) for p in parts if p).lower())
+
+
+def lead_matches_region_terms(lead: Dict[str, Any], terms: List[str]) -> bool:
+    if not terms:
+        return True
+    text = _lead_area_text(lead)
+    return bool(text) and any(t in text for t in terms)
+
+
+def team_lead_region_terms(team_lead: Dict[str, Any]) -> List[str]:
+    """Match terms for a Team Lead's regions. ['*'] (all regions) returns [] = no preference."""
+    names = coerce_regions(team_lead.get("regions"))
+    if not names or ALL_REGIONS in names:
+        return []
+    terms: List[str] = []
+    for name in names:
+        found = find_region(name)
+        if found and found.get("active", True) is False:
+            continue  # deactivated region: no longer used for auto-routing
+        for t in (region_terms(found) if found else [name.strip().lower()]):
+            if t and t not in terms:
+                terms.append(t)
+    return terms
+
+
+def _validate_region_names(names: Optional[List[str]]) -> List[str]:
+    clean = coerce_regions(names or [])
+    if not clean or clean == [ALL_REGIONS]:
+        return clean
+    known = {str(r.get("name") or "").strip().lower(): r.get("name") for r in list_regions(include_inactive=True)}
+    out: List[str] = []
+    for name in clean:
+        canonical = known.get(name.strip().lower())
+        if not canonical:
+            raise HTTPException(status_code=400, detail=f"Unknown region '{name}'. Add it on the Teams page first.")
+        out.append(canonical)
+    return out
+
+
+@api_router.get("/regions")
+async def get_regions(include_inactive: bool = False, cu: User = Depends(get_current_user)):
+    regions = await asyncio.to_thread(list_regions, include_inactive and is_admin_user(cu))
+    directory = await asyncio.to_thread(get_team_directory)
+    covering: Dict[str, List[str]] = defaultdict(list)
+    all_region_leads: List[str] = []
+    for tl in directory.team_leads():
+        names = coerce_regions(tl.get("regions"))
+        if ALL_REGIONS in names:
+            all_region_leads.append(tl.get("name") or tl["employee_id"])
+        for n in names:
+            covering[n.strip().lower()].append(tl.get("name") or tl["employee_id"])
+    return {
+        "regions": [
+            {**r, "team_leads": covering.get(str(r.get("name") or "").strip().lower(), []) + all_region_leads}
+            for r in regions
+        ],
+        "editable": regions_table_ready(),
+    }
+
+
+@api_router.post("/regions")
+async def create_region(body: RegionCreate, cu: User = Depends(get_current_user)):
+    ensure_admin(cu)
+    if not regions_table_ready():
+        raise HTTPException(409, "Run supabase/TEAM_LEADS_AND_EXPORTS.sql in Supabase first, then add regions.")
+    name = re.sub(r"\s+", " ", (body.name or "").strip())
+    if not name:
+        raise HTTPException(400, "Region name is required.")
+    if find_region(name):
+        raise HTTPException(400, f"Region '{name}' already exists.")
+    row = {
+        "region_id": gen_id("reg"),
+        "name": name,
+        "keywords": clean_text(body.keywords) or name.lower(),
+        "active": True,
+        "created_at": now_utc().isoformat(),
+        "updated_at": now_utc().isoformat(),
+    }
+    created = sb_insert("regions", row)
+    if not created:
+        raise HTTPException(500, "Could not save the region.")
+    invalidate_regions_cache()
+    log_activity(cu, "region_created", f"Region added: {name}")
+    return created
+
+
+@api_router.patch("/regions/{region_id}")
+async def update_region(region_id: str, body: RegionUpdate, cu: User = Depends(get_current_user)):
+    ensure_admin(cu)
+    if not regions_table_ready():
+        raise HTTPException(409, "Run supabase/TEAM_LEADS_AND_EXPORTS.sql in Supabase first.")
+    current = next((r for r in list_regions(include_inactive=True, force=True) if r.get("region_id") == region_id), None)
+    if not current:
+        raise HTTPException(404, "Region not found.")
+    patch: Dict[str, Any] = {}
+    if body.name is not None:
+        name = re.sub(r"\s+", " ", body.name.strip())
+        if not name:
+            raise HTTPException(400, "Region name is required.")
+        clash = find_region(name)
+        if clash and clash.get("region_id") != region_id:
+            raise HTTPException(400, f"Region '{name}' already exists.")
+        patch["name"] = name
+    if body.keywords is not None:
+        patch["keywords"] = clean_text(body.keywords)
+    if body.active is not None:
+        patch["active"] = bool(body.active)
+    if not patch:
+        return current
+    patch["updated_at"] = now_utc().isoformat()
+    updated = sb_update("regions", "region_id", region_id, patch)
+    if not updated:
+        raise HTTPException(500, "Could not update the region.")
+    if "name" in patch and patch["name"] != current.get("name") and employee_team_columns_ready():
+        # Keep Team Leads that cover this region pointing at the new name.
+        for tl in get_team_directory(force=True).team_leads(include_inactive=True):
+            names = coerce_regions(tl.get("regions"))
+            if any(n.strip().lower() == str(current.get("name") or "").strip().lower() for n in names):
+                renamed = [patch["name"] if n.strip().lower() == str(current.get("name") or "").strip().lower() else n for n in names]
+                sb_update("employees", "employee_id", tl["employee_id"], {"regions": renamed})
+        invalidate_employees_cache()
+    invalidate_regions_cache()
+    return updated
+
+
+@api_router.delete("/regions/{region_id}")
+async def deactivate_region(region_id: str, cu: User = Depends(get_current_user)):
+    """Soft delete: a region is only hidden, Team Leads keep their history."""
+    ensure_admin(cu)
+    if not regions_table_ready():
+        raise HTTPException(409, "Run supabase/TEAM_LEADS_AND_EXPORTS.sql in Supabase first.")
+    updated = sb_update("regions", "region_id", region_id, {"active": False, "updated_at": now_utc().isoformat()})
+    if not updated:
+        raise HTTPException(404, "Region not found.")
+    invalidate_regions_cache()
+    return {"ok": True}
+
+
+def _restamp_employee_leads(employee: Dict[str, Any], new_team_lead_id: Optional[str], cu: Optional[User]) -> int:
+    """An employee changed team: the leads they are working move with them."""
+    if not lead_team_columns_ready():
+        return 0
+    token = push_team_scope(None)
+    try:
+        leads = leads_for_employee_record(employee, fetch_all_leads_merged("lead_id,assigned_to"))
+    finally:
+        pop_team_scope(token)
+    now = now_utc().isoformat()
+    patch = {
+        "team_lead_id": new_team_lead_id,
+        "team_lead_assigned_at": now if new_team_lead_id else None,
+        "team_lead_assigned_by": _actor_employee_id(cu),
+        "updated_at": now,
+    }
+    saved, _failed = _apply_lead_patches({l["lead_id"]: dict(patch) for l in leads if l.get("lead_id")}, "restamp_employee_leads")
+    return len(saved)
+
+
+
+def _team_lead_open_load(team_lead_id: str, directory: "TeamDirectory") -> Dict[str, int]:
+    token = push_team_scope(None)
+    try:
+        leads = fetch_all_leads_merged("lead_id,assigned_to,status,stage,lead_type,source")
+    finally:
+        pop_team_scope(token)
+    owned = [l for l in leads if directory.lead_team_lead_id(l) == team_lead_id]
+    return {
+        "leads": len(owned),
+        "members": len(directory.team_member_ids(team_lead_id, include_lead=False)),
+    }
+
+
+def ensure_team_lead_can_leave(employee: Dict[str, Any], action: str) -> None:
+    """A Team Lead with people or leads must be emptied first — otherwise their
+    leads would sit with nobody (the 'missing leads' problem)."""
+    if not is_team_lead_role(employee.get("role")):
+        return
+    directory = get_team_directory(force=True)
+    load = _team_lead_open_load(employee["employee_id"], directory)
+    if load["leads"] or load["members"]:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"Cannot {action} {employee.get('name') or 'this Team Lead'}: they still hold "
+                f"{load['leads']} leads and {load['members']} team members. Use Teams → Transfer "
+                "to move them to another Team Lead first."
+            ),
+        )
+
+
+@api_router.get("/teams/overview")
+async def teams_overview(cu: User = Depends(get_current_user)):
+    """Every Team Lead with regions, members and lead counts (admin: all teams;
+    Team Lead: their own). admin_pool + no_team_assigned + teams == every pipeline lead."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+
+    def _build() -> Dict[str, Any]:
+        directory = get_team_directory(force=True)
+        scope = current_team_scope()
+        leads = fetch_all_leads_merged(EMPLOYEE_WORKFLOW_LEAD_SELECT)
+        facets = compute_team_facets(leads, directory)
+        teams = []
+        for tl in directory.team_leads(include_inactive=True):
+            tl_id = tl["employee_id"]
+            if scope is not None and tl_id != scope:
+                continue
+            members = [
+                {
+                    "employee_id": m["employee_id"],
+                    "name": m.get("name"),
+                    "email": m.get("email"),
+                    "role": m.get("role"),
+                    "active": m.get("active", True),
+                    "location": m.get("location"),
+                }
+                for mid in directory.team_member_ids(tl_id, include_lead=False)
+                for m in [directory.by_id[mid]]
+            ]
+            counts = facets["teams"].get(tl_id, {"total": 0, "pool": 0, "assigned": 0})
+            teams.append({
+                "employee_id": tl_id,
+                "name": tl.get("name"),
+                "email": tl.get("email"),
+                "phone": tl.get("phone"),
+                "active": tl.get("active", True),
+                "location": tl.get("location"),
+                "regions": tl.get("regions") or [],
+                "members": members,
+                "leads": counts,
+            })
+        payload: Dict[str, Any] = {
+            "team_leads": teams,
+            "pipeline_total": facets["pipeline_total"],
+            "columns_ready": lead_team_columns_ready() and employee_team_columns_ready(),
+            "regions_ready": regions_table_ready(),
+        }
+        if scope is None:
+            payload.update({
+                "admin_pool": facets["admin_pool"],
+                "admin_pool_active": facets["admin_pool_active"],
+                "no_team_assigned": facets["no_team_assigned"],
+                "unteamed_employees": [
+                    {
+                        "employee_id": e["employee_id"],
+                        "name": e.get("name"),
+                        "role": e.get("role"),
+                        "active": e.get("active", True),
+                        "location": e.get("location"),
+                    }
+                    for e in directory.employees
+                    if not is_team_lead_role(e.get("role"))
+                    and e.get("role") != "admin"
+                    and not directory.team_lead_of_employee(e["employee_id"])
+                ],
+            })
+        return payload
+
+    return await asyncio.to_thread(_build)
+
+
+class TeamMembersRequest(BaseModel):
+    employee_ids: List[str]
+    team_lead_id: Optional[str] = None  # None = remove from any team
+    move_leads: bool = True
+
+
+@api_router.post("/teams/members")
+async def set_team_members(body: TeamMembersRequest, cu: User = Depends(get_current_user)):
+    """Admin: put employees under a Team Lead (their current leads move with them)."""
+    ensure_admin(cu)
+    if not employee_team_columns_ready():
+        raise HTTPException(409, "Run supabase/TEAM_LEADS_AND_EXPORTS.sql in Supabase first.")
+    target = clean_text(body.team_lead_id) or None
+    if target:
+        require_active_team_lead(target)
+
+    def _run() -> Dict[str, Any]:
+        directory = get_team_directory(force=True)
+        moved: List[str] = []
+        skipped: List[Dict[str, str]] = []
+        leads_moved = 0
+        for eid in [clean_text(e) for e in body.employee_ids or [] if clean_text(e)]:
+            emp = directory.by_id.get(eid)
+            if not emp:
+                skipped.append({"employee_id": eid, "reason": "not_found"})
+                continue
+            if is_team_lead_role(emp.get("role")) or emp.get("role") == "admin":
+                skipped.append({"employee_id": eid, "reason": "is_team_lead_or_admin"})
+                continue
+            if not sb_update("employees", "employee_id", eid, {"team_lead_id": target, "updated_at": now_utc().isoformat()}):
+                skipped.append({"employee_id": eid, "reason": "save_failed"})
+                continue
+            moved.append(eid)
+            if body.move_leads:
+                leads_moved += _restamp_employee_leads(emp, target, cu)
+        invalidate_employees_cache()
+        invalidate_leads_cache()
+        if moved:
+            log_activity(cu, "team_members_updated", f"Moved {len(moved)} employees to team {target or '(none)'}")
+        return {"moved": moved, "skipped": skipped, "leads_moved": leads_moved}
+
+    return await asyncio.to_thread(_run)
+
+
+@api_router.post("/teams/transfer")
+async def transfer_team(body: TeamTransferRequest, cu: User = Depends(get_current_user)):
+    """Admin emergency transfer: all (or selected) leads of one Team Lead -> another.
+
+    mode=keep_assignees: employees keep working their leads, the new Team Lead
+    supervises them. mode=return_to_pool: the leads go to the new Team Lead's pool
+    to be handed out again. move_members=True also moves the people.
+    Broker-pool and not-interested leads move too, so nothing stays behind.
+    """
+    ensure_admin(cu)
+    require_team_columns()
+    from_id = clean_text(body.from_team_lead_id)
+    to_id = clean_text(body.to_team_lead_id)
+    if not from_id or not to_id or from_id == to_id:
+        raise HTTPException(400, "Pick two different Team Leads.")
+    mode = (body.mode or "keep_assignees").strip().lower()
+    if mode not in ("keep_assignees", "return_to_pool"):
+        raise HTTPException(400, "mode must be keep_assignees or return_to_pool.")
+    to_lead = require_active_team_lead(to_id)
+    directory = get_team_directory(force=True)
+    from_lead = directory.by_id.get(from_id)
+    if not from_lead or not is_team_lead_role(from_lead.get("role")):
+        raise HTTPException(400, "Source Team Lead not found.")
+
+    def _run() -> Dict[str, Any]:
+        actor_id = _actor_employee_id(cu)
+        all_leads = fetch_all_leads_merged(LEADS_CANONICAL_SELECT)
+        owned = [l for l in all_leads if directory.lead_team_lead_id(l) == from_id]
+        skipped: List[Dict[str, str]] = []
+        if body.lead_ids:
+            wanted = {clean_text(x) for x in body.lead_ids if clean_text(x)}
+            owned_ids = {l.get("lead_id") for l in owned}
+            skipped.extend({"lead_id": lid, "reason": "not_in_source_team"} for lid in wanted - owned_ids)
+            owned = [l for l in owned if l.get("lead_id") in wanted]
+        patches = {
+            l["lead_id"]: compute_team_assignment_patch(l, to_id, actor_id, keep_assignee=(mode == "keep_assignees"))
+            for l in owned if l.get("lead_id")
+        }
+        saved, failed = _apply_lead_patches(patches, "transfer_team")
+        skipped.extend({"lead_id": lid, "reason": "save_failed"} for lid in failed)
+
+        members_moved: List[str] = []
+        if body.move_members and employee_team_columns_ready():
+            for mid in directory.team_member_ids(from_id, include_lead=False):
+                if sb_update("employees", "employee_id", mid, {"team_lead_id": to_id, "updated_at": now_utc().isoformat()}):
+                    members_moved.append(mid)
+            invalidate_employees_cache()
+
+        if saved:
+            _notify_assignment_summary(to_id, len(saved), cu)
+            log_activity(
+                cu,
+                "team_transfer",
+                f"Transferred {len(saved)} leads from {from_lead.get('name')} to {to_lead.get('name')} ({mode})"
+                + (f", {len(members_moved)} team members moved" if members_moved else ""),
+            )
+        invalidate_leads_cache()
+        return {
+            "status": "success" if not failed else "partial",
+            "moved_count": len(saved),
+            "failed_count": len(failed),
+            "members_moved": members_moved,
+            "skipped": skipped,
+            "from": {"employee_id": from_id, "name": from_lead.get("name")},
+            "to": {"employee_id": to_id, "name": to_lead.get("name")},
+        }
+
+    return await asyncio.to_thread(_run)
+
+
+# ---- Lead Exports (monthly, stored in Supabase Storage) ----
+LEAD_EXPORT_BUCKET = os.environ.get("LEAD_EXPORT_BUCKET", "lead-exports")
+LEAD_EXPORT_AUTO_ARCHIVE = os.environ.get("LEAD_EXPORT_AUTO_ARCHIVE", "true").strip().lower() not in ("0", "false", "no", "off")
+_MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+EXPORT_PLATFORMS = ("housing", "meta", "manual", "other", "brokerage")
+
+
+def _normalize_month(month: Optional[str]) -> str:
+    value = (month or "").strip()
+    if not value:
+        return datetime.now(APP_TZ).strftime("%Y-%m")
+    if not _MONTH_RE.match(value):
+        raise HTTPException(400, "month must look like YYYY-MM, e.g. 2026-10.")
+    return value
+
+
+def _month_bounds_utc(month: str) -> Tuple[datetime, datetime]:
+    """[start, end) of an IST calendar month, as UTC datetimes."""
+    year, mon = (int(x) for x in month.split("-"))
+    start = datetime(year, mon, 1, tzinfo=APP_TZ)
+    end = datetime(year + (mon // 12), (mon % 12) + 1, 1, tzinfo=APP_TZ)
+    return start.astimezone(timezone.utc), end.astimezone(timezone.utc)
+
+
+def _lead_created_ist(lead: Dict[str, Any]) -> Optional[datetime]:
+    ts = parse_lead_ts(lead.get("created_at"))
+    return ts.astimezone(APP_TZ) if ts else None
+
+
+def _export_select() -> str:
+    cols = [
+        "lead_id", "name", "phone", "email", "source", "stage", "status", "lead_type", "priority",
+        "call_status", "budget", "location", "property_type", "assigned_to", "assigned_at", "assigned_by",
+        "follow_up_at", "created_at", "updated_at", "external_lead_id", "external_created_at",
+    ]
+    if lead_team_columns_ready():
+        cols += LEAD_TEAM_COLUMNS
+    if housing_extra_columns_available():
+        cols += list(HOUSING_EXTRA_COLUMNS)
+    return ",".join(cols)
+
+
+def fetch_month_leads(month: str) -> List[Dict[str, Any]]:
+    """Every lead created in the IST month — straight from the database.
+
+    No pipeline/broker/negative/date-gate filtering: an export must contain every
+    row the CRM stored. Team Lead requests are scoped to their own team.
+    """
+    start, end = _month_bounds_utc(month)
+    fmt = "%Y-%m-%dT%H:%M:%SZ"
+    rows = sb_select_all("leads", {
+        "select": _export_select(),
+        "and": f"(created_at.gte.{start.strftime(fmt)},created_at.lt.{end.strftime(fmt)})",
+        "order": "created_at.asc",
+    })
+    seen = {r.get("lead_id") for r in rows}
+    # Rows inserted this second may not be visible to PostgREST yet.
+    for cached in SESSION_CACHE.get("leads", []):
+        lid = cached.get("lead_id")
+        ts = parse_lead_ts(cached.get("created_at"))
+        if lid and lid not in seen and ts and start <= ts < end:
+            rows.append(dict(cached))
+            seen.add(lid)
+    return scope_leads(rows)
+
+
+def build_month_summary(leads: List[Dict[str, Any]], month: str) -> Dict[str, Any]:
+    start, end = _month_bounds_utc(month)
+    first_day = start.astimezone(APP_TZ).date()
+    last_day = (end.astimezone(APP_TZ) - timedelta(seconds=1)).date()
+    days: Dict[str, Dict[str, Any]] = {}
+    d = first_day
+    while d <= last_day:
+        days[d.isoformat()] = {"date": d.isoformat(), "count": 0, **{p: 0 for p in EXPORT_PLATFORMS}}
+        d += timedelta(days=1)
+    by_platform = {p: 0 for p in EXPORT_PLATFORMS}
+    by_status = {"active": 0, "negative": 0}
+    by_team: Dict[str, int] = defaultdict(int)
+    directory = get_team_directory()
+    for lead in leads:
+        created = _lead_created_ist(lead)
+        platform = classify_lead_platform(lead.get("source"))
+        platform = platform if platform in by_platform else "other"
+        by_platform[platform] += 1
+        by_status["negative" if lead.get("status") == "negative" else "active"] += 1
+        tl_id = directory.lead_team_lead_id(lead)
+        by_team[(directory.by_id.get(tl_id) or {}).get("name") or ("Admin pool" if not tl_id else tl_id)] += 1
+        if created:
+            row = days.get(created.date().isoformat())
+            if row is not None:
+                row["count"] += 1
+                row[platform] += 1
+    day_rows = list(days.values())
+    today_ist = datetime.now(APP_TZ).date().isoformat()
+    elapsed = [r for r in day_rows if r["date"] <= today_ist]
+    busiest = max(day_rows, key=lambda r: r["count"]) if day_rows else None
+    return {
+        "month": month,
+        "total": len(leads),
+        "days": day_rows,
+        "by_platform": by_platform,
+        "by_status": by_status,
+        "by_team": dict(sorted(by_team.items(), key=lambda kv: kv[1], reverse=True)),
+        "average_per_day": round(len(leads) / len(elapsed), 1) if elapsed else 0,
+        "busiest_day": busiest if busiest and busiest["count"] else None,
+    }
+
+
+def build_month_workbook(leads: List[Dict[str, Any]], summary: Dict[str, Any], scope_label: str) -> bytes:
+    directory = get_team_directory()
+    employees = directory.employees
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Leads"
+    columns = [
+        ("#", None), ("Lead ID", "lead_id"), ("Created Date (IST)", "_created_date"), ("Created Time (IST)", "_created_time"),
+        ("Name", "name"), ("Phone", "phone"), ("Email", "email"), ("Source", "source"), ("Platform", "_platform"),
+        ("Stage", "stage"), ("Status", "status"), ("Lead Type", "lead_type"), ("Priority", "priority"),
+        ("Call Status", "call_status"), ("Budget", "budget"), ("Location", "location"), ("Property Type", "property_type"),
+        ("Team Lead", "_team_lead"), ("Assigned To", "_assignee"), ("Assigned At", "assigned_at"),
+        ("Follow Up At", "follow_up_at"), ("Updated At", "updated_at"), ("External Lead ID", "external_lead_id"),
+        ("Project Name", "project_name"), ("Locality", "locality"), ("City", "city"),
+    ]
+    ws.append([c[0] for c in columns])
+    for i, lead in enumerate(sorted(leads, key=lambda l: str(l.get("created_at") or "")), start=1):
+        created = _lead_created_ist(lead)
+        tl_id = directory.lead_team_lead_id(lead)
+        assignee = resolve_lead_assignee_employee(lead, employees) if clean_text(lead.get("assigned_to")) else None
+        derived = {
+            "_created_date": created.strftime("%Y-%m-%d") if created else "",
+            "_created_time": created.strftime("%H:%M") if created else "",
+            "_platform": PLATFORM_LABELS.get(classify_lead_platform(lead.get("source")), "Other"),
+            "_team_lead": (directory.by_id.get(tl_id) or {}).get("name") if tl_id else "Admin pool",
+            "_assignee": (assignee or {}).get("name") or clean_text(lead.get("assigned_to")) or "",
+        }
+        row = [i]
+        for _header, key in columns[1:]:
+            value = derived[key] if key in derived else lead.get(key)
+            if isinstance(value, (dict, list)):
+                value = json.dumps(value, default=str)
+            row.append(value)
+        ws.append(row)
+    ws.freeze_panes = "A2"
+    for col_idx in range(1, len(columns) + 1):
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 18
+
+    ds = wb.create_sheet("Daily Summary")
+    ds.append([f"Leads received — {summary['month']} ({scope_label})"])
+    ds.append(["Date", "Day", "Total", "Housing.com", "Meta", "Database / Manual", "Other", "Broker Pool"])
+    for r in summary["days"]:
+        day_name = datetime.fromisoformat(r["date"]).strftime("%A")
+        ds.append([r["date"], day_name, r["count"], r["housing"], r["meta"], r["manual"], r["other"], r["brokerage"]])
+    ds.append([])
+    ds.append(["Month total", "", summary["total"], *(summary["by_platform"][p] for p in ("housing", "meta", "manual", "other", "brokerage"))])
+    ds.freeze_panes = "A3"
+    for col_idx in range(1, 9):
+        ds.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 16
+
+    ts = wb.create_sheet("By Team")
+    ts.append(["Team Lead", "Leads"])
+    for name, count in summary["by_team"].items():
+        ts.append([name, count])
+    ts.append([])
+    ts.append(["Active", summary["by_status"]["active"]])
+    ts.append(["Not interested / negative", summary["by_status"]["negative"]])
+    ts.column_dimensions["A"].width = 28
+    ts.column_dimensions["B"].width = 12
+
+    buf = BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _export_scope_key() -> Tuple[str, Optional[str]]:
+    tl = current_team_scope()
+    if tl is None:
+        return "all", None
+    return f"team:{tl}", tl
+
+
+def _store_lead_export(
+    content: bytes,
+    month: str,
+    row_count: int,
+    *,
+    kind: str,
+    actor: Optional[User],
+) -> Dict[str, Any]:
+    """Upload to the private lead-exports bucket and record it. Never raises —
+    a storage problem must not stop the person from getting their file."""
+    scope, team_lead_id = _export_scope_key()
+    export_id = gen_id("exp")
+    stamp = datetime.now(APP_TZ).strftime("%Y%m%d_%H%M%S")
+    slug = "all" if scope == "all" else f"team_{team_lead_id}"
+    file_name = f"leads_{month}_{slug}_{stamp}.xlsx"
+    path = f"{slug}/{month}/{file_name}"
+    stored = False
+    try:
+        stored = sb_storage_upload(LEAD_EXPORT_BUCKET, path, content, XLSX_MEDIA_TYPE)
+        if not stored and sb_storage_ensure_bucket(LEAD_EXPORT_BUCKET, public=False):
+            stored = sb_storage_upload(LEAD_EXPORT_BUCKET, path, content, XLSX_MEDIA_TYPE)
+    except Exception as exc:  # pragma: no cover - network
+        logging.error("lead export upload failed: %s", exc)
+    record = {
+        "export_id": export_id,
+        "month": month,
+        "scope": scope,
+        "team_lead_id": team_lead_id,
+        "file_name": file_name,
+        "file_path": path if stored else None,
+        "row_count": row_count,
+        "stored": stored,
+        "kind": kind,
+        "created_by": _actor_employee_id(actor) if actor else "system",
+        "created_by_name": (actor.name if actor else "Automatic month-end archive"),
+        "created_at": now_utc().isoformat(),
+    }
+    if sb_columns_exist("lead_exports", ["export_id", "month", "scope", "stored"]):
+        if not sb_insert("lead_exports", record):
+            logging.error("lead export record not saved for %s", file_name)
+    return record
+
+
+def list_lead_export_history(limit: int = 36) -> List[Dict[str, Any]]:
+    if not sb_columns_exist("lead_exports", ["export_id", "month", "scope", "stored"]):
+        return []
+    scope, _tl = _export_scope_key()
+    params = {
+        "select": "export_id,month,scope,team_lead_id,file_name,row_count,stored,kind,created_by_name,created_at",
+        "order": "created_at.desc",
+        "limit": str(max(1, min(limit, 200))),
+    }
+    if scope != "all":
+        params["scope"] = f"eq.{scope}"
+    return sb_select("lead_exports", params)
+
+
+@api_router.get("/exports/leads/summary")
+async def lead_export_summary(month: Optional[str] = None, cu: User = Depends(get_current_user)):
+    """Per-day lead counts for one month (IST) + stored export history."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    month_key = _normalize_month(month)
+
+    def _build() -> Dict[str, Any]:
+        leads = fetch_month_leads(month_key)
+        summary = build_month_summary(leads, month_key)
+        scope, tl = _export_scope_key()
+        summary.update({
+            "scope": scope,
+            "team_lead_id": tl,
+            "history": list_lead_export_history(),
+            "storage_bucket": LEAD_EXPORT_BUCKET,
+            "history_ready": sb_columns_exist("lead_exports", ["export_id", "month", "scope", "stored"]),
+            "generated_at": now_utc().isoformat(),
+        })
+        return summary
+
+    return await asyncio.to_thread(_build)
+
+
+@api_router.post("/exports/leads")
+async def generate_lead_export(body: LeadExportRequest, cu: User = Depends(get_current_user)):
+    """Build the month's Excel (Leads + Daily Summary + By Team), store it in
+    Supabase Storage, and download it in the same click."""
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    month_key = _normalize_month(body.month)
+
+    def _build() -> Tuple[bytes, Dict[str, Any]]:
+        leads = fetch_month_leads(month_key)
+        summary = build_month_summary(leads, month_key)
+        scope, tl = _export_scope_key()
+        label = "All teams" if scope == "all" else f"Team: {(get_team_directory().by_id.get(tl) or {}).get('name') or tl}"
+        content = build_month_workbook(leads, summary, label)
+        record = _store_lead_export(content, month_key, len(leads), kind="manual", actor=cu)
+        return content, record
+
+    content, record = await asyncio.to_thread(_build)
+    log_activity(cu, "lead_export", f"Exported {record['row_count']} leads for {month_key}")
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={
+            "Content-Disposition": f'attachment; filename="{record["file_name"]}"',
+            "X-Export-Id": record["export_id"],
+            "X-Export-Stored": "true" if record["stored"] else "false",
+            "X-Export-Rows": str(record["row_count"]),
+        },
+    )
+
+
+@api_router.get("/exports/leads/history")
+async def lead_export_history(limit: int = 36, cu: User = Depends(get_current_user)):
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    return {"exports": await asyncio.to_thread(list_lead_export_history, limit)}
+
+
+@api_router.get("/exports/leads/history/{export_id}/download")
+async def download_stored_lead_export(export_id: str, cu: User = Depends(get_current_user)):
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
+    rows = sb_select("lead_exports", {"export_id": f"eq.{export_id}", "select": "*", "limit": "1"})
+    if not rows:
+        raise HTTPException(404, "Export not found.")
+    record = rows[0]
+    scope, _tl = _export_scope_key()
+    if scope != "all" and record.get("scope") != scope:
+        raise HTTPException(403, "This export belongs to another team.")
+    if not record.get("stored") or not record.get("file_path"):
+        raise HTTPException(404, "This export was not stored (Storage upload failed). Generate it again.")
+    blob = await asyncio.to_thread(sb_storage_download, LEAD_EXPORT_BUCKET, record["file_path"])
+    if not blob:
+        raise HTTPException(502, "Could not read the stored file from Supabase Storage.")
+    content, _ctype = blob
+    return Response(
+        content=content,
+        media_type=XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="{record.get("file_name") or export_id + ".xlsx"}"'},
+    )
+
+
+def _previous_ist_month() -> str:
+    first = datetime.now(APP_TZ).replace(day=1)
+    return (first - timedelta(days=1)).strftime("%Y-%m")
+
+
+def archive_previous_month_if_missing() -> Optional[Dict[str, Any]]:
+    """Month-end safety net: store last month's full export once, automatically."""
+    if not LEAD_EXPORT_AUTO_ARCHIVE or not sb_columns_exist("lead_exports", ["export_id", "month", "scope", "stored", "kind"]):
+        return None
+    month = _previous_ist_month()
+    existing = sb_select("lead_exports", {
+        "select": "export_id",
+        "month": f"eq.{month}",
+        "scope": "eq.all",
+        "stored": "eq.true",
+        "limit": "1",
+    })
+    if existing:
+        return None
+    leads = fetch_month_leads(month)
+    summary = build_month_summary(leads, month)
+    content = build_month_workbook(leads, summary, "All teams")
+    record = _store_lead_export(content, month, len(leads), kind="auto", actor=None)
+    logging.info("auto-archived %s leads for %s (stored=%s)", len(leads), month, record["stored"])
+    return record
+
+
+def _lead_export_archive_loop() -> None:
+    time.sleep(120)  # let startup warm-up finish first
+    while True:
+        try:
+            archive_previous_month_if_missing()
+        except Exception as exc:  # pragma: no cover - background safety
+            logging.warning("monthly lead export archive failed: %s", exc)
+        time.sleep(6 * 3600)
+
+
 # ---- Stats / Dashboard ----
 def _compute_dashboard_stats() -> Dict[str, Any]:
-    """Shared pipeline stats for admin + manager main Dashboard."""
+    """Shared pipeline stats for the admin (company) and Team Lead (team) Dashboard."""
     fetched = sb_select_parallel({
         "bookings": ("bookings", {"select": bookings_stats_select()}),
-        "visits": ("visits", {"select": "visit_id,status"}),
-        "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage"}),
+        "visits": ("visits", {"select": "visit_id,status,lead_id"}),
+        "loans": ("loans", {"select": "loan_id,application_status,amount,bank_stage,lead_id"}),
         "customers": ("customers", {"select": "customer_id,lead_id"}),
         "activities": ("activities", {"select": "activity_id,type"}),
         "employees": ("employees", {"select": "employee_id"}),
         "campaigns": ("campaigns", {"select": "campaign_id"}),
-        "followups": ("visit_followups", {"select": "followup_id,status", "limit": "2000", "order": "follow_up_at.desc"}),
+        "followups": ("visit_followups", {"select": "followup_id,status,lead_id", "limit": "2000", "order": "follow_up_at.desc"}),
     })
     leads = fetch_all_leads_merged(DASHBOARD_BUCKET_LEAD_SELECT)
     bookings = fetched["bookings"]
@@ -10886,6 +12540,15 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
     activities = prune_session_list_against_db("activities", fetched["activities"], "activity_id")
     loans = prune_session_list_against_db("loans", fetched["loans"], "loan_id")
     customers = prune_session_list_against_db("customers", fetched["customers"], "customer_id")
+    if current_team_scope() is not None:
+        # Team dashboard: only records that hang off this team's leads.
+        team_lead_ids = {l.get("lead_id") for l in leads if l.get("lead_id")}
+        bookings = [b for b in bookings if b.get("lead_id") in team_lead_ids]
+        visits = [v for v in visits if v.get("lead_id") in team_lead_ids]
+        followups = [f for f in followups if f.get("lead_id") in team_lead_ids]
+        loans = [ln for ln in loans if ln.get("lead_id") in team_lead_ids]
+        customers = [c for c in customers if c.get("lead_id") in team_lead_ids]
+        fetched["employees"] = scope_employees(fetched["employees"])
 
     pipeline_leads = [l for l in leads if is_pipeline_lead(l)]
     broker_pool = [l for l in leads if is_broker_pool_lead(l)]
@@ -10946,26 +12609,30 @@ def _compute_dashboard_stats() -> Dict[str, Any]:
 
 
 def _get_dashboard_stats_cached() -> Dict[str, Any]:
-    now = time.time()
-    if _dashboard_stats_cache["data"] is not None and (now - float(_dashboard_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
-        return _dashboard_stats_cache["data"]
+    cached = scoped_stats_cache_get("dashboard", _dashboard_stats_cache)
+    if cached is not None:
+        return cached
     data = _compute_dashboard_stats()
-    _dashboard_stats_cache.update({"ts": now, "data": data})
+    scoped_stats_cache_set("dashboard", _dashboard_stats_cache, data)
     return data
 
 
 def _compute_dashboard_graph_sync() -> Dict[str, Any]:
-    now_ts = time.time()
-    if _graph_cache["data"] is not None and (now_ts - float(_graph_cache["ts"])) < _STATS_CACHE_TTL_SEC:
-        return _graph_cache["data"]
+    cached = scoped_stats_cache_get("graph", _graph_cache)
+    if cached is not None:
+        return cached
     now = now_utc()
     graph_data = sb_select_parallel({
-        "leads": ("leads", {"select": "lead_id,created_at,source,status,stage", "created_at": f"gte.{(now - timedelta(days=400)).isoformat()}"}),
-        "bookings": ("bookings", {"select": "booking_id,created_at,brokerage_amount,brokerage_status,agreement_status" if sb_columns_exist("bookings", ["brokerage_status"]) else "booking_id,created_at,brokerage_amount,agreement_status"}),
+        "bookings": ("bookings", {"select": "booking_id,lead_id,created_at,brokerage_amount,brokerage_status,agreement_status" if sb_columns_exist("bookings", ["brokerage_status"]) else "booking_id,lead_id,created_at,brokerage_amount,agreement_status"}),
         "loans": ("loans", {"select": "loan_id,amount,created_at,application_status,bank_stage"}),
     })
-    leads = prune_session_list_against_db("leads", graph_data["leads"], "lead_id")
-    leads = [l for l in leads if lead_is_since_start(l)]
+    # Same canonical (paginated, team-scoped) lead set as every other screen.
+    # This used a single capped SELECT, so the charts stopped at 1000 leads.
+    cutoff = now - timedelta(days=400)
+    leads = [
+        l for l in fetch_all_leads_merged("lead_id,created_at,source,status,stage,lead_type,phone,email,external_lead_id")
+        if (parse_lead_ts(l.get("created_at")) or now) >= cutoff
+    ]
     pipeline_leads = clean_leads_for_platform_stats(leads)
 
     days_map = {(now - timedelta(days=29 - i)).strftime("%Y-%m-%d"): 0 for i in range(30)}
@@ -10996,6 +12663,9 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
     bookings = graph_data["bookings"]
     cache_bkg_ids = {b.get("booking_id") for b in SESSION_CACHE["bookings"]}
     bookings = SESSION_CACHE["bookings"] + [b for b in bookings if b.get("booking_id") not in cache_bkg_ids]
+    if current_team_scope() is not None:
+        team_lead_ids = {l.get("lead_id") for l in leads}
+        bookings = [b for b in bookings if b.get("lead_id") in team_lead_ids]
 
     rev_months_map = {k: 0.0 for k in _last_n_month_keys(12)}
     for b in bookings:
@@ -11013,15 +12683,15 @@ def _compute_dashboard_graph_sync() -> Dict[str, Any]:
         "revenue_by_month": rev_by_month,
         "total_leads_in_chart": sum(months_map.values()),
     }
-    _graph_cache.update({"ts": now_ts, "data": result})
+    scoped_stats_cache_set("graph", _graph_cache, result)
     return result
 
 
 def _stats_employees_sync() -> List[Dict[str, Any]]:
-    now = time.time()
-    if _employee_stats_cache["data"] is not None and (now - float(_employee_stats_cache["ts"])) < _STATS_CACHE_TTL_SEC:
-        return _employee_stats_cache["data"]
-    employees = sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id"})
+    cached = scoped_stats_cache_get("employees", _employee_stats_cache)
+    if cached is not None:
+        return cached
+    employees = scope_employees(sb_select("employees", {"select": "employee_id,name,email,role,department,active,user_id"}))
     db_activities = sb_select("activities", {
         "select": "activity_id,user_id,created_at,type,text,lead_id",
         "order": "created_at.desc",
@@ -11075,7 +12745,7 @@ def _stats_employees_sync() -> List[Dict[str, Any]]:
             "closed_deals": assignment["assigned_completed"],
             "call_notes": sum(1 for a in emp_acts if "call" in str(a.get("type"))),
         })
-    _employee_stats_cache.update({"ts": now, "data": emp_stats})
+    scoped_stats_cache_set("employees", _employee_stats_cache, emp_stats)
     return emp_stats
 
 
@@ -11094,7 +12764,7 @@ async def api_health():
 @api_router.post("/admin/flush-caches")
 async def admin_flush_caches(cu: User = Depends(get_current_user)):
     """Clear RAM caches after SQL wipe so dashboard counts match the database."""
-    ensure_roles(cu, ["admin", "manager"])
+    ensure_roles(cu, ["admin", TEAM_LEAD_ROLE])
     cleared = flush_all_runtime_caches()
     return {
         "status": "ok",
@@ -11106,7 +12776,7 @@ async def admin_flush_caches(cu: User = Depends(get_current_user)):
 
 @api_router.get("/stats/dashboard-bundle")
 async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
-    """One round-trip for main Dashboard — admin (full) + manager (team, no revenue UI)."""
+    """One round-trip for main Dashboard — admin (full) + Team Lead (own team, no revenue UI)."""
     ensure_main_dashboard(cu)
     stats, graph, employees, leads_page, recent = await asyncio.gather(
         asyncio.to_thread(_get_dashboard_stats_cached),
@@ -11126,13 +12796,13 @@ async def stats_dashboard_bundle(cu: User = Depends(get_current_user)):
 
 @api_router.get("/stats/me-bundle")
 async def stats_me_bundle(cu: User = Depends(get_current_user)):
-    """One round-trip for My Dashboard (manager gets team performance too)."""
+    """One round-trip for My Dashboard (Team Lead gets team performance too)."""
     me, graph = await asyncio.gather(
         stats_me(cu),
         asyncio.to_thread(_compute_dashboard_graph_sync),
     )
     payload: Dict[str, Any] = {"me": me, "graph": graph}
-    if cu.role == "manager":
+    if is_team_lead_user(cu):
         payload["employees"] = await asyncio.to_thread(_stats_employees_sync)
     return payload
 
@@ -11277,11 +12947,11 @@ async def stats_me(cu: User=Depends(get_current_user)):
         emps = sb_select("employees", {"employee_id": f"eq.{emp_id}", "select": "employee_id,name,email,role,department,user_id", "limit": "1"})
         if emps:
             employee_row = emps[0]
-    emp_role = (employee_row or {}).get("role") or cu.role
+    emp_role = normalize_role((employee_row or {}).get("role") or cu.role)
 
     all_leads_for_metrics: List[Dict[str, Any]] = []
-    if cu.role == "manager" and not emp_id:
-        # Manager workspace uses team panels — not company-wide personal KPI totals.
+    if is_team_lead_user(cu) and not emp_id:
+        # Team Lead without a profile uses team panels — no personal KPI totals.
         leads: List[Dict[str, Any]] = []
         my_queue_leads: List[Dict[str, Any]] = []
         platform_breakdown = {"total": 0, "housing": 0, "meta": 0, "manual": 0, "other": 0}
@@ -11513,8 +13183,10 @@ def build_personal_dashboard_counts(
 
 
 def _employee_may_view_stats(cu: User, employee_id: str) -> bool:
-    if cu.role in ("admin", "manager"):
+    if is_admin_user(cu):
         return True
+    if is_team_lead_user(cu):
+        return bool(scope_employees([{"employee_id": employee_id}]))
     own = cu.acting_as_employee_id or cu.employee_id
     return bool(own and own == employee_id)
 
@@ -11803,9 +13475,28 @@ async def _notification_purge_loop() -> None:
         await asyncio.sleep(3600)
 
 
+def _lead_team_lead_for_notifications(lead: Dict[str, Any]) -> Optional[str]:
+    """Team Lead employee_id owning a lead (None = admin pool) — notification routing."""
+    if not lead:
+        return None
+    try:
+        return get_team_directory().lead_team_lead_id(lead)
+    except Exception:  # pragma: no cover - never break a notification
+        return None
+
+
+# Team ownership resolves legacy "Assign to" values (first names, user ids) the
+# same way the employee dashboards do.
+set_assignee_matcher(lead_assigned_to_employee)
+notify_svc.set_lead_team_lead_resolver(_lead_team_lead_for_notifications)
+
+
 @app.on_event("startup")
 async def start_housing_background_sync() -> None:
     global _housing_sync_task, _facebook_sync_task, _notification_purge_task
+
+    # Month-end safety net: last month's full lead export is stored automatically.
+    threading.Thread(target=_lead_export_archive_loop, name="lead-export-archive", daemon=True).start()
 
     def _deactivate_fcm_token(token: str) -> None:
         rows = sb_select("fcm_device_tokens", {

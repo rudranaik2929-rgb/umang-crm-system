@@ -60,12 +60,15 @@ That route signs requests with HMAC-SHA256 over `current_time` using `HOUSING_EN
 
 Housing leads are **real enquiries** from the Housing.com API (name, phone, project, locality). Each row stores `source = Housing.com` and the original payload in `raw_payload` — the CRM does not seed dummy Housing leads.
 
-**Supabase SQL** (run in SQL Editor if you set up manually):
+**Supabase SQL** (run in SQL Editor):
 
-1. `supabase/schema.sql` — full schema
-2. `supabase/migrations/20260529_housing_integration_rls.sql` — RLS policies for `leads` and `integration_events`
-3. `supabase/login_monitoring.sql` — single-device session metadata + `login_events` audit table (powers the admin "Who's logged in now" panel)
-4. `supabase/employee_location_quality.sql` — GPS accuracy/address columns + `employee_location_history` breadcrumbs (powers Employee Tracking)
+1. `supabase/SCHEMA_MASTER.sql` — the one consolidated, idempotent schema (every table/column the code uses, including Team Leads, regions and lead exports)
+2. Existing database that already ran SCHEMA_MASTER before the Team Lead change: run `supabase/TEAM_LEADS_AND_EXPORTS.sql` once
+3. Check `GET /schema-check` on the backend — expected `{"ok": true}`
+
+### Team Leads, regions & monthly exports
+
+Leads flow **Admin pool → Team Lead → Employee**; any number of Team Leads, each covering regions (Virar, Vasai, Nallasopara, Nagpur, ...). The sidebar has **Teams & Regions** (admin) and **Export Leads** (monthly per-day counts + Excel, stored in the Supabase Storage bucket `lead-exports`). Details: [`docs/TEAM_LEADS.md`](./docs/TEAM_LEADS.md).
 
 Set `SUPABASE_SERVICE_ROLE_KEY` in `backend/.env` for production webhook/sync writes.
 
@@ -111,7 +114,7 @@ Production domains:
 
 - Backend: `backend/Dockerfile` → Render (`render.yaml` blueprint). Add custom domain **`api.umanghometechllp.in`** in Render → Settings → Custom Domains.
 - Frontend: deploy `frontend/` on Vercel. Add **`umanghometechllp.in`** and **`www.umanghometechllp.in`** in Vercel → Project → Settings → Domains.
-- Database: run `supabase/final_schema.sql` (or `supabase/schema.sql`) in Supabase SQL Editor before first production traffic.
+- Database: run `supabase/SCHEMA_MASTER.sql` in Supabase SQL Editor before first production traffic (idempotent; safe to re-run), then check `/schema-check`.
 - Local stack: `docker compose up --build`.
 
 ### Where you update the domain (your side)

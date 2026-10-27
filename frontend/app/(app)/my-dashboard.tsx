@@ -8,7 +8,7 @@ import { useAuth } from '../../src/auth/AuthContext';
 import { api, getSnapshot, setSnapshot, broadcastDataChanged } from '../../src/lib/api';
 import { useLiveRefresh } from '../../src/hooks/useLiveRefresh';
 import { NewLeadPopup } from '../../src/components/NewLeadPopup';
-import { roleLabel } from '../../src/lib/constants';
+import { roleLabel, normalizeRole } from '../../src/lib/constants';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { MissedLeadsPanel } from '../../src/components/MissedLeadsPanel';
 import { LeadDetailModal } from '../../src/components/LeadDetailModal';
@@ -20,7 +20,7 @@ import { useSidebarLayout } from '../../src/layout/SidebarLayoutContext';
 
 const ROLE_ACCENT: Record<string, string> = {
   admin: '#1E3A8A',
-  manager: '#14B8A6',
+  team_lead: '#14B8A6',
   telecaller: '#0284C7',
   site_visit: '#0EA5E9',
   sales_executive: '#0EA5E9',
@@ -63,7 +63,7 @@ const MY_PERFORMANCE_KPIS: Array<{
 ];
 
 const ROLE_CTA: Record<string, { label: string; route: string }> = {
-  manager: { label: 'Open team dashboard', route: '/(app)/dashboard' },
+  team_lead: { label: 'Open team dashboard', route: '/(app)/dashboard' },
   telecaller: { label: 'Open my telecaller queue', route: '/(app)/telecaller' },
   site_visit: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
   sales_executive: { label: 'Open sales executive queue', route: '/(app)/sales-executive' },
@@ -148,7 +148,8 @@ export default function MyDashboard() {
     );
   }
 
-  const role = data?.employee?.role || user?.role || data?.role || 'telecaller';
+  // Old saved role keys are normalized to team_lead (see normalizeRole).
+  const role = normalizeRole(data?.employee?.role || user?.role || data?.role || 'telecaller');
   const accent = ROLE_ACCENT[role] || colors.primary;
   const personal = data.personal;
   const leads = data.leads;
@@ -243,8 +244,8 @@ export default function MyDashboard() {
             <Text style={[styles.heroDesc, { color: colors.textSecondary }]}>
               {role === 'admin'
                 ? 'You can see and control every department from the owner dashboard.'
-                : role === 'manager'
-                ? 'Your personal workspace. Use Dashboard in the sidebar for team pipeline, assignments and performance.'
+                : role === 'team_lead'
+                ? 'Your personal workspace as Team Lead. Use Dashboard in the sidebar for your team’s pipeline, assignments and performance.'
                 : role === 'telecaller'
                 ? 'Use the Follow Ups tab inside Telecaller. Cold lead opens that tab automatically.'
                 : role === 'site_visit' || role === 'sales_executive'
@@ -263,7 +264,7 @@ export default function MyDashboard() {
               <Text style={styles.ctaText}>{cta.label}</Text>
               <Ionicons name="arrow-forward" size={14} color="#fff" />
             </Pressable>
-            {role === 'manager' ? (
+            {role === 'team_lead' ? (
               <Pressable
                 testID="my-dashboard-tracking-cta"
                 onPress={() => router.push('/(app)/admin-tracking' as any)}
@@ -311,7 +312,7 @@ export default function MyDashboard() {
         </View>
 
         {/* Personal KPIs */}
-        {role !== 'admin' && role !== 'manager' && (
+        {role !== 'admin' && role !== 'team_lead' && (
           <View>
             <Text style={[styles.section, { color: colors.textMuted }]}>MY PERFORMANCE — TAP A BOX FOR LIST</Text>
             {missedCount > 0 ? (

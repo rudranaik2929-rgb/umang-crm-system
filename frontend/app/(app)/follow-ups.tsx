@@ -5,7 +5,7 @@ import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
 import { api, fetchAllLeads, getSnapshot, setSnapshot } from '../../src/lib/api';
 import { Ionicons } from '@expo/vector-icons';
-import { isAdmin } from '../../src/lib/constants';
+import { isSupervisor } from '../../src/lib/constants';
 
 import { formatTime12h } from '../../src/lib/timeFormat';
 
@@ -19,13 +19,13 @@ export default function FollowUpsPage() {
   const cachedFu = getSnapshot<any[]>('follow-ups-page');
   const [items, setItems] = useState<any[]>(cachedFu ?? []);
   const [loading, setLoading] = useState(!cachedFu);
-  const managerView = isAdmin(user?.role) || user?.role === 'manager';
+  const supervisorView = isSupervisor(user?.role, user?.email);
 
   const load = useCallback(async () => {
     try {
       const res = await api.get('/visit-followups');
       let list = Array.isArray(res.data) ? res.data : [];
-      if (!managerView) {
+      if (!supervisorView) {
         const myId = (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
         if (myId) {
           // Page through all of this employee's leads (top performers have 700+),
@@ -43,7 +43,7 @@ export default function FollowUpsPage() {
     } finally {
       setLoading(false);
     }
-  }, [managerView, user]);
+  }, [supervisorView, user]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -51,7 +51,7 @@ export default function FollowUpsPage() {
     <View style={{ flex: 1 }}>
       <TopBar
         title="Follow Ups"
-        subtitle={managerView ? 'All team follow-ups with employee name' : 'Your scheduled follow-ups'}
+        subtitle={supervisorView ? 'All team follow-ups with employee name' : 'Your scheduled follow-ups'}
         rightAction={
           <Pressable onPress={load} style={[styles.refresh, { borderColor: colors.border, backgroundColor: colors.surfaceAlt }]}>
             <Ionicons name="refresh" size={18} color={colors.primary} />
@@ -74,7 +74,7 @@ export default function FollowUpsPage() {
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={[styles.lead, { color: colors.text }]}>{item.lead_name || 'Lead'}</Text>
-                {managerView && item.employee_name ? (
+                {supervisorView && item.employee_name ? (
                   <Text style={[styles.emp, { color: colors.primary }]}>{item.employee_name}</Text>
                 ) : null}
                 <Text style={[styles.meta, { color: colors.textMuted }]}>

@@ -1,4 +1,4 @@
-/** Parse manager custom selection: "10" = first 10, "40-50" = positions 40–50 (1-based). */
+/** Parse the Assign Leads (admin / Team Lead) custom selection: "10" = first 10, "40-50" = positions 40–50 (1-based). */
 export function parseCustomLeadSelection(input: string, total: number): { indices: number[]; error?: string } {
   const raw = String(input || '').trim();
   if (!raw) {

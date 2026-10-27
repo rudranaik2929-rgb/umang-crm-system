@@ -15,7 +15,7 @@ import { EmployeePerformance } from '../../src/components/EmployeePerformance';
 import { EmployeeMetricModal } from '../../src/components/EmployeeMetricModal';
 import { FollowUpsPanel } from '../../src/components/FollowUpsPanel';
 import { AssignLeadsPanel } from '../../src/components/AssignLeadsPanel';
-import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel, platformLabel } from '../../src/lib/constants';
+import { STAGES, STAGE_COLORS, canSeeRevenue, canAccessOwnerDashboard, canAccessMainDashboard, stageLabel, platformLabel, isTeamLead, regionsLabel } from '../../src/lib/constants';
 import { pipelineStageMatch } from '../../src/lib/leadFormat';
 import { BOOKING_TASKS, DASHBOARD_BOOKING_TASK_KEYS } from '../../src/lib/bookingTasks';
 
@@ -54,7 +54,11 @@ export default function Dashboard() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [panelsReady, setPanelsReady] = useState(!!cached);
   const loadInFlight = React.useRef<Promise<void> | null>(null);
-  const isManager = user?.role === 'manager';
+  const isTeamLeadView = isTeamLead(user?.role);
+  // Team Lead: "Team dashboard · Virar, Vasai" — the backend scopes every number to their team.
+  const teamSubtitle = isTeamLeadView
+    ? `Team dashboard · ${user?.regions?.length ? regionsLabel(user.regions) : (user?.team_lead_name || user?.name || 'your team')}`
+    : '';
   const canLoadDashboard = canAccessMainDashboard(user?.role, user?.email);
   /** Soft = SWR (keep UI, use short GET cache). Force = explicit Refresh (bypass + optional server flush). */
   const load = useCallback(async (opts?: { force?: boolean }) => {
@@ -248,15 +252,15 @@ export default function Dashboard() {
     };
   });
 
-  const showLeadAlerts = isManager || canAccessOwnerDashboard(user?.role, user?.email);
-  const showAssignPanel = isManager || canAccessOwnerDashboard(user?.role, user?.email);
+  const showLeadAlerts = isTeamLeadView || canAccessOwnerDashboard(user?.role, user?.email);
+  const showAssignPanel = isTeamLeadView || canAccessOwnerDashboard(user?.role, user?.email);
 
   return (
     <View style={{ flex: 1, backgroundColor: colors.background }}>
       <NewLeadPopup enabled={showLeadAlerts} />
       <TopBar
         title="Dashboard"
-        subtitle={isManager ? 'Team pipeline, assignments and performance' : 'Pipeline, revenue and team performance snapshot'}
+        subtitle={isTeamLeadView ? teamSubtitle : 'Pipeline, revenue and team performance snapshot'}
         rightAction={
           <Pressable
             onPress={refreshDashboard}
@@ -383,7 +387,7 @@ export default function Dashboard() {
               <View>
                 <Text style={[styles.panelTitle, { color: colors.text }]}>Assign Leads</Text>
                 <Text style={[styles.panelSub, { color: colors.textMuted }]}>
-                  {isManager ? 'Assign enquiries to your team · open full workspace' : 'Team assignment snapshot · open full workspace'}
+                  {isTeamLeadView ? 'Assign enquiries to your team · open full workspace' : 'Team assignment snapshot · open full workspace'}
                 </Text>
               </View>
               <Pressable onPress={() => router.push('/(app)/assign-leads' as any)}>

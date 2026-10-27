@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, Image, ScrollView, useWindowDimensio
 import { usePathname, useRouter } from 'expo-router';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
-import { visibleNavFor, ROLES } from '../lib/constants';
+import { visibleNavFor, roleLabel, isTeamLead, regionsLabel } from '../lib/constants';
 import { NARROW_BREAKPOINT, SIDEBAR_WIDTH_COLLAPSED, SIDEBAR_WIDTH_EXPANDED, SIDEBAR_WIDTH_MOBILE } from '../layout/SidebarLayoutContext';
 import { Ionicons } from '@expo/vector-icons';
 
@@ -23,6 +23,8 @@ const ICON_MAP: Record<string, any> = {
   tracking: 'map-outline',
   integrations: 'git-network-outline',
   notifications: 'notifications-outline',
+  teams: 'git-merge-outline',
+  export: 'download-outline',
 };
 
 interface Props {
@@ -42,8 +44,13 @@ export function Sidebar({ collapsed, onToggle }: Props) {
     ? SIDEBAR_WIDTH_MOBILE
     : (effectiveCollapsed ? SIDEBAR_WIDTH_COLLAPSED : SIDEBAR_WIDTH_EXPANDED);
 
-  const role = ROLES.find((r) => r.key === user?.role);
   const items = visibleNavFor(user?.role, user?.email, user?.allowed_pages);
+  // "Team Lead · Virar, Vasai" / "Telecaller · Team Rohit" — who you work for.
+  const roleLine = isTeamLead(user?.role)
+    ? `${roleLabel(user?.role)} · ${regionsLabel(user?.regions)}`
+    : user?.team_lead_name
+      ? `${roleLabel(user?.role)} · Team ${user.team_lead_name}`
+      : roleLabel(user?.role);
 
   return (
     <View style={[styles.wrap, {
@@ -146,7 +153,7 @@ export function Sidebar({ collapsed, onToggle }: Props) {
               {user?.name || 'Guest'}
             </Text>
             <Text numberOfLines={1} style={[styles.userRole, { color: colors.textMuted }]}>
-              {role?.label || 'Member'}
+              {roleLine}
             </Text>
           </View>
         )}

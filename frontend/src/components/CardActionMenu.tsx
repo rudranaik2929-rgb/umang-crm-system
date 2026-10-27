@@ -7,7 +7,8 @@ type CardActionMenuProps = {
   isStarred?: boolean;
   onEdit: () => void;
   onToggleStar: () => void;
-  onDelete: () => void;
+  /** Omit to hide Delete (e.g. users who may not delete leads). */
+  onDelete?: () => void;
   testIDPrefix: string;
 };
 
@@ -74,15 +75,19 @@ export function CardActionMenu({
             <Ionicons name={isStarred ? 'star' : 'star-outline'} size={15} color={colors.warning} />
             <Text style={[styles.itemText, { color: colors.text }]}>{isStarred ? 'Unstar' : 'Star'}</Text>
           </Pressable>
-          <View style={[styles.divider, { backgroundColor: colors.borderSoft }]} />
-          <Pressable
-            testID={`${testIDPrefix}-delete`}
-            onPress={(event: any) => run(event, onDelete)}
-            style={({ hovered }: any) => [styles.item, { backgroundColor: hovered ? colors.negative + '10' : 'transparent' }]}
-          >
-            <Ionicons name="trash-outline" size={15} color={colors.negative} />
-            <Text style={[styles.itemText, { color: colors.negative }]}>Delete</Text>
-          </Pressable>
+          {onDelete ? (
+            <>
+              <View style={[styles.divider, { backgroundColor: colors.borderSoft }]} />
+              <Pressable
+                testID={`${testIDPrefix}-delete`}
+                onPress={(event: any) => run(event, onDelete)}
+                style={({ hovered }: any) => [styles.item, { backgroundColor: hovered ? colors.negative + '10' : 'transparent' }]}
+              >
+                <Ionicons name="trash-outline" size={15} color={colors.negative} />
+                <Text style={[styles.itemText, { color: colors.negative }]}>Delete</Text>
+              </Pressable>
+            </>
+          ) : null}
         </View>
       ) : null}
     </View>

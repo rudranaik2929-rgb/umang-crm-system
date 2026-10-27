@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, Pressable, Modal, TextInput, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
-import { roleLabel } from '../lib/constants';
+import { roleLabel, regionsLabel } from '../lib/constants';
 import { SearchableSelect } from './SearchableSelect';
 import {
   parseInquiryStatusFilter,
@@ -15,13 +15,72 @@ export type AssignWorkspaceFilters = {
   assigned_to: string;
   q: string;
   location: string;
+  /** Admin only: 'all' | 'admin_pool' | '<team lead employee_id>'. Ignored for a Team Lead. */
+  team: string;
+  /** 'all' | 'pool' (waiting in team pool, no employee) | 'assigned' (with employees). */
+  team_view: string;
+  /** Region name or id; '' = all regions. */
+  region: string;
 };
+
+export const DEFAULT_ASSIGN_FILTERS: AssignWorkspaceFilters = {
+  inquiry_status: 'all',
+  source: 'all',
+  assigned_to: 'all',
+  q: '',
+  location: '',
+  team: 'all',
+  team_view: 'all',
+  region: '',
+};
+
+/** Normalise any partial filters into the full shape sent to /leads/assign-workspace. */
+export function normalizeAssignFilters(next: Partial<AssignWorkspaceFilters>): AssignWorkspaceFilters {
+  return {
+    inquiry_status: next.inquiry_status || 'all',
+    source: next.source || 'all',
+    assigned_to: next.assigned_to || 'all',
+    q: next.q?.trim() || '',
+    location: next.location?.trim() || '',
+    team: (next.team || 'all').trim() || 'all',
+    team_view: next.team_view || 'all',
+    region: next.region?.trim() || '',
+  };
+}
+
+/** True when nothing narrows the list (the cached snapshot is only for this view). */
+export function isDefaultAssignFilters(f: AssignWorkspaceFilters): boolean {
+  return (f.inquiry_status || 'all') === 'all'
+    && (f.source || 'all') === 'all'
+    && (f.assigned_to || 'all') === 'all'
+    && !f.q?.trim()
+    && !f.location?.trim()
+    && (f.team || 'all') === 'all'
+    && (f.team_view || 'all') === 'all'
+    && !f.region?.trim();
+}
+
+export const TEAM_VIEW_OPTIONS = [
+  { key: 'all', label: 'All' },
+  { key: 'pool', label: 'Waiting in team pool (no employee)' },
+  { key: 'assigned', label: 'With employees' },
+];
+
+export function teamViewLabel(key?: string) {
+  return TEAM_VIEW_OPTIONS.find((o) => o.key === key)?.label || key || '';
+}
 
 type Props = {
   visible: boolean;
   filters: AssignWorkspaceFilters;
-  facets?: { inquiry_status?: Record<string, number>; source?: Record<string, number> };
+  facets?: { inquiry_status?: Record<string, number>; source?: Record<string, number>; team?: any } | null;
   employees: any[];
+  /** Team Leads from /leads/assign-workspace (admin gets all of them). */
+  teamLeads?: any[];
+  /** Regions from GET /regions. */
+  regions?: any[];
+  /** Admin view: shows the Team select (a Team Lead only ever sees their own team). */
+  showTeamFilter?: boolean;
   onClose: () => void;
   onApply: (filters: AssignWorkspaceFilters) => void;
 };
@@ -167,7 +226,9 @@ function InquiryStatusMultiSelect({
   );
 }
 
-export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, onClose, onApply }: Props) {
+export function AssignLeadsAdvancedModal({
+  visible, filters, facets, employees, teamLeads = [], regions = [], showTeamFilter = false, onClose, onApply,
+}: Props) {
   const { colors } = useTheme();
   const [draft, setDraft] = useState<AssignWorkspaceFilters>(filters);
 
@@ -206,6 +267,38 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
         })),
     ],
     [employees],
+  );
+
+  const teamOptions = useMemo(() => {
+    const teams = facets?.team?.teams || {};
+    return [
+      { key: 'all', label: 'All teams' },
+      { key: 'admin_pool', label: 'Admin pool', count: facets?.team?.admin_pool },
+      ...teamLeads
+        .filter((tl) => tl && tl.employee_id)
+        .map((tl) => ({
+          key: String(tl.employee_id),
+          label: `Team Lead · ${tl.name || tl.email || 'Team Lead'}`,
+          sublabel: regionsLabel(tl.regions),
+          count: teams?.[tl.employee_id]?.total,
+        })),
+    ];
+  }, [teamLeads, facets]);
+
+  const regionOptions = useMemo(
+    () => [
+      { key: '', label: 'All regions' },
+      ...regions
+        .filter((r) => r && r.name && r.active !== false)
+        .map((r) => ({
+          key: String(r.name),
+          label: String(r.name),
+          sublabel: Array.isArray(r.team_leads) && r.team_leads.length
+            ? `Team Lead: ${r.team_leads.join(', ')}`
+            : undefined,
+        })),
+    ],
+    [regions],
   );
 
   return (
@@ -267,15 +360,47 @@ export function AssignLeadsAdvancedModal({ visible, filters, facets, employees, 
               />
             </View>
 
+            <View style={styles.filterRow}>
+              {showTeamFilter ? (
+                <SearchableSelect
+                  label="TEAM"
+                  value={draft.team || 'all'}
+                  options={teamOptions}
+                  onChange={(team) => setDraft((d) => ({ ...d, team: team || 'all' }))}
+                  placeholder="All teams"
+                  testID="filter-team"
+                />
+              ) : null}
+              <SearchableSelect
+                label="SHOW"
+                value={draft.team_view || 'all'}
+                options={TEAM_VIEW_OPTIONS}
+                onChange={(team_view) => setDraft((d) => ({ ...d, team_view: team_view || 'all' }))}
+                placeholder="All"
+                testID="filter-team-view"
+              />
+              <SearchableSelect
+                label="REGION"
+                value={draft.region || ''}
+                options={regionOptions}
+                onChange={(region) => setDraft((d) => ({ ...d, region: region || '' }))}
+                placeholder="All regions"
+                testID="filter-region"
+              />
+            </View>
+
             <Text style={{ color: colors.textMuted, fontSize: 11, lineHeight: 16 }}>
               Pick an employee to see only their leads — the counts above change to
               that person&apos;s numbers, and switch again when you choose someone else.
+              {showTeamFilter
+                ? " Team narrows to the admin pool or one Team Lead's leads; Show splits a team into leads still waiting in its pool and leads already with employees."
+                : " Show splits your team's leads into those still waiting in your pool and those already with employees."}
             </Text>
           </View>
 
           <View style={styles.actions}>
             <Pressable
-              onPress={() => onApply({ inquiry_status: 'all', source: 'all', assigned_to: 'all', q: '', location: '' })}
+              onPress={() => onApply({ ...DEFAULT_ASSIGN_FILTERS })}
               style={[styles.btnGhost, { borderColor: colors.border }]}
             >
               <Text style={{ color: colors.textMuted, fontWeight: '600' }}>Clear all</Text>

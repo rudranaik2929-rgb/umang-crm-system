@@ -43,7 +43,8 @@ TYPE_TO_PREF: Dict[str, str] = {
     TYPE_SYSTEM: "system_alerts",
 }
 
-MANAGER_ROLES = ("admin", "manager")
+# Supervisors: admins (whole company) and Team Leads (their own team). "manager" is the pre-migration name.
+MANAGER_ROLES = ("admin", "team_lead", "manager")
 
 # Merge rapid assign actions into one in-app + push row (e.g. 3 dropdown assigns → 1 notification).
 ASSIGNMENT_MERGE_WINDOW_SEC = 300
@@ -57,6 +58,13 @@ _gen_id: Optional[Callable] = None
 _now_utc: Optional[Callable] = None
 _session_cache: Optional[Dict[str, Any]] = None
 _resolve_receiver: Optional[Callable[[str], Optional[str]]] = None
+_lead_team_lead_resolver: Optional[Callable[[Dict[str, Any]], Optional[str]]] = None
+
+
+def set_lead_team_lead_resolver(fn: Callable[[Dict[str, Any]], Optional[str]]) -> None:
+    """legacy_core injects the lead -> Team Lead ownership rule (see app/team_scope.py)."""
+    global _lead_team_lead_resolver
+    _lead_team_lead_resolver = fn
 
 
 def configure(
@@ -119,10 +127,10 @@ def _new_id(prefix: str = "ntf") -> str:
     return _gen_id(prefix) if _gen_id else f"{prefix}_{int(datetime.now().timestamp() * 1000)}"
 
 
-def list_manager_recipient_ids() -> List[str]:
-    """Employee IDs for admin + manager roles (notification receivers)."""
+def list_admin_recipient_ids() -> List[str]:
+    """Employee IDs of active administrators (company-wide notification receivers)."""
     rows = _sb_select("employees", {
-        "role": "in.(admin,manager)",
+        "role": "eq.admin",
         "active": "eq.true",
         "select": "employee_id,user_id",
     }) or []
@@ -132,6 +140,27 @@ def list_manager_recipient_ids() -> List[str]:
             if candidate and candidate not in ids:
                 ids.append(candidate)
     return ids
+
+
+def list_lead_supervisor_ids(lead: Optional[Dict[str, Any]]) -> List[str]:
+    """Admins + the Team Lead who owns this lead (admin-pool leads: admins only)."""
+    ids = list_admin_recipient_ids()
+    team_lead_id = None
+    if lead and _lead_team_lead_resolver:
+        try:
+            team_lead_id = _lead_team_lead_resolver(lead)
+        except Exception:  # pragma: no cover - never break a notification
+            logger.exception("team lead resolution failed for notification")
+    if team_lead_id:
+        receiver = _canonical_receiver(team_lead_id)
+        if receiver and receiver not in ids:
+            ids.append(receiver)
+    return ids
+
+
+def list_manager_recipient_ids(lead: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Back-compat name: supervisors for a lead (admins + owning Team Lead)."""
+    return list_lead_supervisor_ids(lead)
 
 
 def get_user_preferences(user_id: str) -> Dict[str, bool]:
@@ -417,7 +446,7 @@ def notify_bulk_leads_assigned(
     if not receiver_id or count < 1:
         return None
 
-    assigner = (manager_name or "Manager").strip() or "Manager"
+    assigner = (manager_name or "Admin").strip() or "Admin"
 
     existing = _find_mergeable_assignment(receiver_id, sender_id)
     if existing and existing.get("notification_id"):
@@ -496,7 +525,7 @@ def notify_lead_updated_for_managers(
 ) -> None:
     name = lead.get("name") or "Customer"
     msg = f"Employee:\n{employee_name}\n\nCustomer:\n{name}\n\nStatus:\n{status_label}"
-    for mgr_id in list_manager_recipient_ids():
+    for mgr_id in list_lead_supervisor_ids(lead):
         create_notification(
             mgr_id,
             "Lead Updated",
@@ -525,7 +554,7 @@ def notify_note_added(
         if assignee:
             create_notification(
                 assignee,
-                "Manager Comment",
+                "Team Lead Comment" if author_role in ("team_lead", "manager") else "Admin Comment",
                 f"{author_name} commented on {name}:\n{preview}",
                 lead_id=lead_id,
                 type_=TYPE_MANAGER_COMMENT,
@@ -533,7 +562,7 @@ def notify_note_added(
                 priority="high",
             )
     else:
-        for mgr_id in list_manager_recipient_ids():
+        for mgr_id in list_lead_supervisor_ids(lead):
             create_notification(
                 mgr_id,
                 "New Note Added",
@@ -557,7 +586,8 @@ def notify_integration_lead(source: str, lead: Dict[str, Any]) -> None:
         return
     name = lead.get("name") or "New Lead"
     msg = f"Customer:\n{name}\n\nTap to assign."
-    for mgr_id in list_manager_recipient_ids():
+    # New leads land in the admin pool, so only administrators are told.
+    for mgr_id in list_admin_recipient_ids():
         create_notification(
             mgr_id,
             title,
@@ -584,7 +614,7 @@ def notify_follow_up_reminder(employee_id: str, lead: Dict[str, Any], time_label
 def notify_follow_up_overdue(lead: Dict[str, Any], employee_name: str) -> None:
     name = lead.get("name") or "Customer"
     msg = f"Employee missed follow-up.\n\nEmployee: {employee_name}\nCustomer: {name}"
-    for mgr_id in list_manager_recipient_ids():
+    for mgr_id in list_lead_supervisor_ids(lead):
         create_notification(
             mgr_id,
             "Follow-up Overdue",
@@ -605,7 +635,7 @@ def notify_lead_closed(lead: Dict[str, Any], employee_name: str, won: bool = Tru
         title = "Lead Lost"
         msg = f"Customer: {name}\nReason: {reason or 'Not specified'}"
         ntype = TYPE_LEAD_LOST
-    for mgr_id in list_manager_recipient_ids():
+    for mgr_id in list_lead_supervisor_ids(lead):
         create_notification(
             mgr_id,
             title,

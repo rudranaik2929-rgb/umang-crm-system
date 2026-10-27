@@ -3,6 +3,7 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { BOOKING_TASKS } from '../lib/bookingTasks';
+import { normalizeRole } from '../lib/constants';
 
 type EmployeePerformanceProps = {
   employees: any[];
@@ -11,7 +12,7 @@ type EmployeePerformanceProps = {
 
 const ROLE_LABELS: Record<string, string> = {
   admin: 'Admin',
-  manager: 'Manager',
+  team_lead: 'Team Lead',
   telecaller: 'Telecaller',
   site_visit: 'Sales Executive',
   sales_executive: 'Sales Executive',
@@ -83,14 +84,15 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
             const roleMetrics = metricsForRole(employee.role);
             const roleColorMap: Record<string, string> = {
               admin: colors.primary,
-              manager: colors.accent,
+              team_lead: colors.accent,
               telecaller: colors.info,
               site_visit: '#0EA5E9',
               booking: colors.warning,
               loan: '#7C3AED',
               marketing: '#EC4899',
             };
-            const roleColor = roleColorMap[employee.role] || colors.primary;
+            const roleKey = normalizeRole(employee.role);
+            const roleColor = roleColorMap[roleKey] || colors.primary;
 
             return (
               <View
@@ -117,7 +119,7 @@ export function EmployeePerformance({ employees, onMetricPress }: EmployeePerfor
                       <Text style={{ color: colors.text, fontSize: 14, fontWeight: '700' }} numberOfLines={1}>{employee.name}</Text>
                       <View style={[styles.roleChip, { backgroundColor: roleColor + '20', borderColor: roleColor + '50' }]}>
                         <Text style={{ color: roleColor, fontSize: 10, fontWeight: '700', letterSpacing: 0.6 }}>
-                          {(ROLE_LABELS[employee.role] || employee.role || 'Member').toUpperCase()}
+                          {(ROLE_LABELS[roleKey] || employee.role || 'Member').toUpperCase()}
                         </Text>
                       </View>
                     </View>

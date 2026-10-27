@@ -112,7 +112,7 @@ export function broadcastDataChanged() {
     notifyLiveDataChanged();
 }
 
-const LIVE_GET_PREFIXES = ['/stats', '/leads', '/employees', '/activities', '/bookings', '/loans', '/visits', '/notifications'];
+const LIVE_GET_PREFIXES = ['/stats', '/leads', '/employees', '/activities', '/bookings', '/loans', '/visits', '/notifications', '/teams', '/regions', '/exports'];
 const BUNDLE_GET_PATHS = new Set(['/stats/dashboard-bundle', '/stats/me-bundle']);
 
 function isLiveGetUrl(url: string) {
@@ -450,17 +450,55 @@ export async function downloadLeadsExcel(params?: Record<string, string>): Promi
         throw new Error('Excel download is only available on the web app.');
     }
     const res = await api.get('/leads/export', { params: params || {}, responseType: 'blob', timeout: 120000 });
+    saveBlobResponse(res, `leads_export_${Date.now()}.xlsx`);
+}
+
+function saveBlobResponse(res: any, fallbackName: string): void {
     const blob = res.data as Blob;
     const url = window.URL.createObjectURL(blob);
     const anchor = document.createElement('a');
     const contentDisp = res.headers?.['content-disposition'] || '';
     const match = /filename="?([^";]+)"?/.exec(contentDisp);
     anchor.href = url;
-    anchor.download = match?.[1] || `leads_export_${Date.now()}.xlsx`;
+    anchor.download = match?.[1] || fallbackName;
     document.body.appendChild(anchor);
     anchor.click();
     anchor.remove();
     window.URL.revokeObjectURL(url);
+}
+
+export interface MonthlyExportResult {
+    exportId: string | null;
+    /** false = the file downloaded but could not be saved to Supabase Storage. */
+    stored: boolean;
+    rows: number;
+}
+
+/** Build + download one month's lead export (Leads, Daily Summary, By Team sheets).
+ *  The backend also stores the file in Supabase Storage for the Export history. Web-only. */
+export async function downloadMonthlyLeadsExport(month: string): Promise<MonthlyExportResult> {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+        throw new Error('Excel download is only available on the web app.');
+    }
+    const res = await api.post('/exports/leads', { month }, { responseType: 'blob', timeout: 300000 });
+    saveBlobResponse(res, `leads_${month}.xlsx`);
+    return {
+        exportId: res.headers?.['x-export-id'] || null,
+        stored: String(res.headers?.['x-export-stored'] || '').toLowerCase() === 'true',
+        rows: Number(res.headers?.['x-export-rows'] || 0),
+    };
+}
+
+/** Re-download an export stored earlier (Export history). Web-only. */
+export async function downloadStoredLeadsExport(exportId: string): Promise<void> {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+        throw new Error('Excel download is only available on the web app.');
+    }
+    const res = await api.get(`/exports/leads/history/${encodeURIComponent(exportId)}/download`, {
+        responseType: 'blob',
+        timeout: 120000,
+    });
+    saveBlobResponse(res, `leads_export_${exportId}.xlsx`);
 }
 
 /**

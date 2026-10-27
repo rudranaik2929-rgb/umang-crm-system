@@ -58,7 +58,8 @@ SUPABASE_KEY = (
 )
 
 STAGES = ["new", "assigned", "positive", "site_visit", "booking", "loan", "registration", "closed"]
-ROLES = ["admin", "manager", "telecaller", "site_visit", "sales_executive", "booking", "loan", "marketing"]
+# "team_lead" replaced the single "manager" role (old rows are normalised to team_lead).
+ROLES = ["admin", "team_lead", "telecaller", "site_visit", "sales_executive", "booking", "loan", "marketing"]
 
 INTERAKT_API_KEY = os.environ.get("INTERAKT_API_KEY", "")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")

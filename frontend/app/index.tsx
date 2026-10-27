@@ -73,7 +73,7 @@ export default function Index() {
         setLoginStatus(null);
       } else if (result.status === 'invalid') {
         setLoginStatus(null);
-        alert('Invalid email or password. Use the login created by your manager.');
+        alert('Invalid email or password. Use the login created by your Team Lead or administrator.');
       } else {
         setLoginStatus('Could not start sign-in. Please try again in a moment.');
       }
@@ -92,7 +92,7 @@ export default function Index() {
             setShiftVisible(true);
           } else {
             setLoginStatus(null);
-            alert('Invalid email or password. Use the login created by your manager.');
+            alert('Invalid email or password. Use the login created by your Team Lead or administrator.');
           }
         } catch (directErr: any) {
           setLoginStatus(directErr?.message || 'Could not sign in.');
@@ -183,7 +183,7 @@ export default function Index() {
         completeLogin(result.user);
       } else if (result.status === 'invalid') {
         setShiftVisible(false);
-        alert('Invalid email or password. Use the login created by your manager.');
+        alert('Invalid email or password. Use the login created by your Team Lead or administrator.');
       } else if (result.status === 'shift_required') {
         alert(result.message || 'Could not shift session. Try again.');
       } else {
@@ -272,7 +272,7 @@ export default function Index() {
           <Text style={[styles.subhead, { color: colors.textSecondary, marginBottom: 20 }]}>
             {otpStep
               ? `For security, a 6-digit login code was sent to the administrator email${sentTo ? ` (${sentTo})` : ''}. Get the code from the administrator and enter it below.`
-              : 'Enter the email and password provided by your manager. A one-time code is then sent to the administrator email before you are signed in.'}
+              : 'Enter the email and password provided by your Team Lead or administrator. A one-time code is then sent to the administrator email before you are signed in.'}
           </Text>
           {loginStatus ? (
             <Text style={{ color: colors.textMuted, fontSize: 12, marginBottom: 8 }}>

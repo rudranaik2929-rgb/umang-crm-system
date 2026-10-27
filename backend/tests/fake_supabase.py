@@ -187,6 +187,15 @@ def _matches(row: Dict[str, Any], params: Dict[str, Any]) -> bool:
             if not _match_or(row, str(value)):
                 return False
             continue
+        if key == "and":
+            body = str(value).strip()
+            if body.startswith("(") and body.endswith(")"):
+                body = body[1:-1]
+            for part in _split_top_level(body):
+                col, _, expr = part.partition(".")
+                if not _match_condition(row, col.strip(), expr.strip()):
+                    return False
+            continue
         if not _match_condition(row, key, str(value)):
             return False
     return True
@@ -248,6 +257,14 @@ def _query(table_name: str, params: Optional[dict]) -> List[Dict[str, Any]]:
 # --------------------------------------------------------------------------
 
 def fake_sb_select(table_name: str, params: Optional[dict] = None) -> list:
+    return _query(table_name, params)
+
+
+def fake_sb_select_strict(table_name: str, params: Optional[dict] = None) -> list:
+    """Strict reader: a missing table is an error, never an empty result."""
+    with _lock:
+        if table_name in _missing_tables:
+            raise core.SupabaseReadError(f"{table_name}: HTTP 404 relation does not exist")
     return _query(table_name, params)
 
 
@@ -346,6 +363,7 @@ def fake_sb_columns_exist(table_name: str, columns: List[str], ttl_sec: int = 30
 # Names in app/legacy_core.py's flat namespace, thanks to the star-import.
 _SB_FUNCTIONS = {
     "sb_select": fake_sb_select,
+    "sb_select_strict": fake_sb_select_strict,
     "sb_select_parallel": fake_sb_select_parallel,
     "sb_select_in": fake_sb_select_in,
     "sb_insert": fake_sb_insert,
@@ -368,6 +386,13 @@ def install(monkeypatch) -> None:
     """
     for name, impl in _SB_FUNCTIONS.items():
         monkeypatch.setattr(core, name, impl)
+    # app.team_scope imports its readers directly (no star-import), so route
+    # its team directory / column probes at the fake as well.
+    from app import team_scope
+
+    monkeypatch.setattr(team_scope, "sb_select", fake_sb_select)
+    monkeypatch.setattr(team_scope, "sb_columns_exist", fake_sb_columns_exist)
+    team_scope.invalidate_team_directory()
     silence_notifications(monkeypatch)
 
 
@@ -400,6 +425,8 @@ def silence_notifications(monkeypatch) -> None:
 def reset_runtime_caches() -> None:
     """Drop every process-local cache so tests cannot leak state into each other."""
     core.flush_all_runtime_caches()
+    core.invalidate_regions_cache()
+    core.set_request_team_scope(None)
     core.SESSION_CACHE.update({k: [] for k in core.SESSION_CACHE})
     for cache in (
         getattr(core, "_employees_cache", None),

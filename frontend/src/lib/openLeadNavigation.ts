@@ -1,4 +1,4 @@
-import { defaultRouteFor } from './constants';
+import { defaultRouteFor, isSupervisor, normalizeRole } from './constants';
 
 /** Best page to open a lead from a notification tap (mobile-first). */
 export function leadRouteForRole(
@@ -6,10 +6,11 @@ export function leadRouteForRole(
   email?: string | null,
   allowedPages?: string[] | null,
 ): string {
-  const r = (role || '').toLowerCase();
+  const r = normalizeRole(role);
   if (r === 'telecaller') return '/(app)/telecaller';
   if (r === 'sales_executive' || r === 'site_visit') return '/(app)/sales-executive';
-  if (r === 'manager' || r === 'admin') return '/(app)/assign-leads';
+  // Admins and Team Leads hand leads out from Assign Leads.
+  if (isSupervisor(r, email)) return '/(app)/assign-leads';
   return defaultRouteFor(role, email, allowedPages);
 }
 

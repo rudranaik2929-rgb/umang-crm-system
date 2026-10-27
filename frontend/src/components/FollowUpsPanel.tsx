@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
 import { api, getSnapshot, setSnapshot } from '../lib/api';
-import { isAdmin } from '../lib/constants';
+import { isSupervisor } from '../lib/constants';
 import { leadToFollowUpCard } from '../lib/leadFollowUp';
 import { PanelRefreshButton } from './PanelRefreshButton';
 
@@ -30,14 +30,14 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, as
   const [total, setTotal] = useState(cached?.total ?? 0);
   const [loading, setLoading] = useState(!cached);
 
-  const managerView = showEmployeeName ?? (isAdmin(user?.role) || user?.role === 'manager');
+  const supervisorView = showEmployeeName ?? isSupervisor(user?.role, user?.email);
 
   const load = useCallback(async (silent = false) => {
     if (!silent && items.length === 0) setLoading(true);
     try {
       const myId = assignedTo || (user as any)?.acting_as_employee_id || (user as any)?.employee_id;
       const params: Record<string, any> = { bucket: 'follow_up', limit: 500 };
-      if (!managerView && myId) {
+      if (!supervisorView && myId) {
         params.assigned_to = myId;
       }
       const res = await api.get('/leads/filtered', { params });
@@ -50,7 +50,7 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, as
     } finally {
       setLoading(false);
     }
-  }, [managerView, user, assignedTo, items.length]);
+  }, [supervisorView, user, assignedTo, items.length]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -74,7 +74,7 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, as
         <Text style={{ color: colors.textSecondary, fontSize: compact ? 11 : 13, flex: 1 }}>
           {compact
             ? `${total} scheduled`
-            : managerView ? `Team follow-ups (${total})` : `Your follow-ups (${total})`}
+            : supervisorView ? `Team follow-ups (${total})` : `Your follow-ups (${total})`}
         </Text>
         <PanelRefreshButton onPress={() => load(true)} loading={loading} testID="follow-ups-refresh" />
       </View>
@@ -101,7 +101,7 @@ export function FollowUpsPanel({ compact = false, maxItems, showEmployeeName, as
             <Text style={[styles.boxName, { color: colors.text }]} numberOfLines={1}>
               {item.lead_name || 'Lead'}
             </Text>
-            {managerView && item.employee_name ? (
+            {supervisorView && item.employee_name ? (
               <Text style={[styles.boxEmp, { color: colors.primary }]} numberOfLines={1}>
                 {item.employee_name}
               </Text>

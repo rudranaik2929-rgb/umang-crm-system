@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Pressable, Modal, ScrollView } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, AccentColor, ACCENT_THEMES } from '../theme/ThemeContext';
 import { useAuth } from '../auth/AuthContext';
-import { ROLES, roleLabel, defaultRouteFor } from '../lib/constants';
+import { ROLES, roleLabel, defaultRouteFor, isAdminRole, isSupervisor } from '../lib/constants';
 import { api, clearSnapshots, clearGetCache } from '../lib/api';
 import { ExportLeadsModal } from './ExportLeadsModal';
 import { useRouter, usePathname } from 'expo-router';
@@ -36,7 +36,10 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
   
   const isAdminOrOwner = user?.role === 'admin' || user?.email === 'htshpatil13@gmail.com';
   const isBookingEmployee = user?.role === 'booking';
-  const canImportLeads = user?.role === 'admin' || user?.role === 'manager';
+  // New leads land in the admin pool, so importing is admin-only.
+  const canImportLeads = isAdminRole(user?.role, user?.email);
+  // Admins export every lead; a Team Lead's export is limited to their team by the backend.
+  const canExportLeads = isSupervisor(user?.role, user?.email);
 
   const downloadLeads = async () => {
     setExportLeadsVisible(true);
@@ -150,22 +153,22 @@ export function TopBar({ title, subtitle, rightAction }: Props) {
         )}
 
         {canImportLeads ? (
-          <>
-            <Pressable
-              onPress={() => setImportLeadsVisible(true)}
-              testID="topbar-import-leads"
-              style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
-            >
-              <Ionicons name="cloud-upload-outline" size={18} color={colors.accent} />
-            </Pressable>
-            <Pressable
-              onPress={downloadLeads}
-              testID="topbar-download-leads"
-              style={[styles.iconBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '15' }]}
-            >
-              <Ionicons name="download-outline" size={18} color={colors.primary} />
-            </Pressable>
-          </>
+          <Pressable
+            onPress={() => setImportLeadsVisible(true)}
+            testID="topbar-import-leads"
+            style={[styles.iconBtn, { borderColor: colors.accent, backgroundColor: colors.accent + '15' }]}
+          >
+            <Ionicons name="cloud-upload-outline" size={18} color={colors.accent} />
+          </Pressable>
+        ) : null}
+        {canExportLeads ? (
+          <Pressable
+            onPress={downloadLeads}
+            testID="topbar-download-leads"
+            style={[styles.iconBtn, { borderColor: colors.primary, backgroundColor: colors.primary + '15' }]}
+          >
+            <Ionicons name="download-outline" size={18} color={colors.primary} />
+          </Pressable>
         ) : null}
 
         {isBookingEmployee ? (

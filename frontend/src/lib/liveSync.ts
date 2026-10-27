@@ -26,7 +26,7 @@ export function notifyLiveDataChanged() {
   }
 }
 
-/** Subscribe to same-tab and cross-tab data changes (employee → manager). */
+/** Subscribe to same-tab and cross-tab data changes (employee → Team Lead / admin). */
 export function subscribeLiveDataChanged(listener: Listener) {
   listeners.add(listener);
 

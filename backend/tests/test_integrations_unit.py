@@ -40,6 +40,14 @@ def _install_fake_supabase(monkeypatch):
     return inserted
 
 
+
+def _stub_team_scope(monkeypatch):
+    """Tests that stub sb_select by hand must also stub the team directory reads."""
+    from app import team_scope
+    monkeypatch.setattr(team_scope, "sb_select", lambda table, params=None: [])
+    monkeypatch.setattr(team_scope, "sb_columns_exist", lambda *a, **k: False)
+    team_scope.invalidate_team_directory()
+
 def test_housing_sync_skips_stale_leads(monkeypatch):
     inserted = _install_fake_supabase(monkeypatch)
     monkeypatch.setattr(main, "HOUSING_PROFILE_ID", "2548773")
@@ -291,6 +299,8 @@ def test_leads_by_platform_groups_manual_housing_meta(monkeypatch):
         {"lead_id": "l5", "source": "Facebook", "status": "active", "external_lead_id": "444444444444", "updated_at": now},
     ], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []})
     monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
+    monkeypatch.setattr(main, "sb_select_strict", lambda table, params=None: [])
+    _stub_team_scope(monkeypatch)
 
     client = TestClient(main.app)
     # Endpoint requires auth - patch get_current_user
@@ -325,6 +335,8 @@ def test_list_leads_by_platform_housing(monkeypatch):
         {"lead_id": "m1", "source": "manual_entry", "name": "Manual", "phone": "+912", "status": "active", "stage": "new", "updated_at": now},
     ], "bookings": [], "visits": [], "followups": [], "loans": [], "activities": [], "customers": [], "notifications": []})
     monkeypatch.setattr(main, "sb_select", lambda table, params=None: [])
+    monkeypatch.setattr(main, "sb_select_strict", lambda table, params=None: [])
+    _stub_team_scope(monkeypatch)
 
     class FakeUser:
         user_id = "u1"

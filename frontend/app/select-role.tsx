@@ -11,6 +11,7 @@ export default function SelectRole() {
   const { user, setRole, loading } = useAuth();
   const router = useRouter();
   const [pending, setPending] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     if (!loading && !user) router.replace('/' as any);
@@ -19,8 +20,16 @@ export default function SelectRole() {
 
   const choose = async (r: string) => {
     setPending(r);
-    await setRole(r);
-    router.replace(defaultRouteFor(r, user?.email) as any);
+    setError(null);
+    try {
+      await setRole(r);
+      router.replace(defaultRouteFor(r, user?.email) as any);
+    } catch (e: any) {
+      // POST /auth/set-role is admin-only — show why and let the user pick again.
+      const detail = e?.response?.data?.detail;
+      setError(typeof detail === 'string' ? detail : e?.message || 'Could not change role.');
+      setPending(null);
+    }
   };
 
   return (
@@ -31,6 +40,12 @@ export default function SelectRole() {
         <Text style={[styles.subtitle, { color: colors.textSecondary }]}>
           You can switch roles anytime from the top bar — perfect for the demo where you act as every department.
         </Text>
+
+        {error ? (
+          <Text testID="select-role-error" style={{ color: colors.negative, fontSize: 13, fontWeight: '600', marginTop: 14 }}>
+            {error}
+          </Text>
+        ) : null}
 
         <View style={styles.grid}>
           {ROLES.map((r) => (

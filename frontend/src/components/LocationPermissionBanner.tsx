@@ -23,7 +23,7 @@ export function LocationPermissionBanner({ status, onRequest }: Props) {
           {status === 'checking' ? 'Requesting GPS access…' : 'GPS access needed for employee tracking'}
         </Text>
         <Text style={[styles.sub, { color: colors.textMuted }]}>
-          Allow location when prompted so your manager can see you on the Employee Tracking map while you work.
+          Allow location when prompted so your Team Lead can see you on the Employee Tracking map while you work.
         </Text>
       </View>
       {status === 'denied' ? (

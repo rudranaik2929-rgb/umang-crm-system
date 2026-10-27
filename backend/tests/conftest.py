@@ -68,14 +68,34 @@ def no_network(monkeypatch):
     """
     import socket
 
+    real_connect = socket.socket.connect
+    real_connect_ex = socket.socket.connect_ex
+    loopback = {"127.0.0.1", "::1", "localhost"}
+
+    def _is_loopback(address) -> bool:
+        # On Windows asyncio builds its event-loop self-pipe with
+        # socket.socketpair(), which connects over loopback. That is not
+        # network access, so it must stay allowed.
+        return isinstance(address, tuple) and bool(address) and address[0] in loopback
+
     def _blocked(*args, **kwargs):
         raise RuntimeError(
             "Blocked outbound network call during tests — a helper was not "
             "patched against the in-memory Supabase fake."
         )
 
-    monkeypatch.setattr(socket.socket, "connect", _blocked)
-    monkeypatch.setattr(socket.socket, "connect_ex", _blocked)
+    def _connect(sock, address):
+        if _is_loopback(address):
+            return real_connect(sock, address)
+        _blocked()
+
+    def _connect_ex(sock, address):
+        if _is_loopback(address):
+            return real_connect_ex(sock, address)
+        _blocked()
+
+    monkeypatch.setattr(socket.socket, "connect", _connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", _connect_ex)
     monkeypatch.setattr(socket, "create_connection", _blocked)
 
 

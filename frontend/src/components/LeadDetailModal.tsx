@@ -8,7 +8,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { api, broadcastDataChanged } from '../lib/api';
 import { WorkflowStatusBadge } from './Badge';
-import { STAGES, isAdmin, canMoveLeadToBrokerPool } from '../lib/constants';
+import { STAGES, canMoveLeadToBrokerPool, canDeleteLeads, isSupervisor, isAdminRole, normalizeRole, roleLabel } from '../lib/constants';
+import { useAuth } from '../auth/AuthContext';
 import {
   CALL_STATUS_OPTIONS,
   NOT_INTERESTED_OPTIONS,
@@ -34,8 +35,16 @@ interface Props {
   onGoFollowUps?: () => void;
 }
 
-export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole, overlayZIndex = 10000, onGoFollowUps }: Props) {
+export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole: rawUserRole, overlayZIndex = 10000, onGoFollowUps }: Props) {
   const { colors } = useTheme();
+  const { user: authUser } = useAuth();
+  // Old saved "team lead" role keys are normalized (see normalizeRole).
+  const userRole = normalizeRole(rawUserRole);
+  // Deleting a lead is admin-only; Team Leads mark leads not-interested instead.
+  const canDelete = canDeleteLeads(userRole, authUser?.email);
+  // Admins assign to anyone; a Team Lead only gets their own team from GET /employees.
+  const canAssignEmployee = isSupervisor(userRole, authUser?.email);
+  const viewerIsAdmin = isAdminRole(userRole, authUser?.email);
   const router = useRouter();
   const { width: sidebarWidth } = useSidebarLayout();
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
@@ -383,8 +392,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const assignToEmployee = async (employeeId: string, employeeName: string) => {
     if (!leadId) return;
     setBusy('assign');
+    setActionError(null);
     try {
-      const payload: any = { assigned_to: employeeId, stage: 'assigned', lead_type: 'standard' };
+      // No `stage` here: the backend moves only new leads to "assigned"; later-stage
+      // leads (site visit / booking / loan) keep their stage.
+      const payload: any = { assigned_to: employeeId, lead_type: 'standard' };
       const parsedBrokerage = parseFloat(brokerageAmount);
       if (!Number.isNaN(parsedBrokerage) && parsedBrokerage > 0) {
         payload.brokerage_amount = parsedBrokerage;
@@ -401,6 +413,11 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
       await load(true);
       onChanged?.();
       broadcastDataChanged();
+    } catch (e: any) {
+      // e.g. 403 "You can only assign leads to employees in your own team."
+      setShowAssignDropdown(false);
+      const detail = e?.response?.data?.detail;
+      setActionError(typeof detail === 'string' ? detail : e?.message || `Could not assign to ${employeeName}.`);
     } finally {
       setBusy(null);
     }
@@ -430,11 +447,15 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
   const moveToBrokerPool = async () => {
     if (!leadId) return;
     setBusy('broker');
+    setActionError(null);
     try {
       await api.post(`/leads/${leadId}/to-broker`);
       await load(true);
       onChanged?.();
       broadcastDataChanged();
+    } catch (e: any) {
+      const detail = e?.response?.data?.detail;
+      setActionError(typeof detail === 'string' ? detail : e?.message || 'Could not move lead to the broker pool.');
     } finally {
       setBusy(null);
     }
@@ -524,7 +545,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
     setActionMessage(null);
     const notesPayload = buildRemarksPayload(detailForm.notes, preferredProperty);
     try {
-      // Dedicated remarks route — any employee/manager/admin, no assignee required.
+      // Dedicated remarks route — any employee / Team Lead / admin, no assignee required.
       await api.patch(`/leads/${leadId}/remarks`, { notes: notesPayload });
       remarksDirtyRef.current = false;
       setActionMessage('Remarks saved.');
@@ -592,10 +613,24 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   </View>
                   <View style={{ flexDirection: 'row', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
                     <WorkflowStatusBadge lead={lead} />
+                    {lead.team_lead_name || (canAssignEmployee && 'team_lead_id' in lead) ? (
+                      <View
+                        testID="lead-team-chip"
+                        style={{
+                          flexDirection: 'row', alignItems: 'center', gap: 4, paddingHorizontal: 8, height: 22,
+                          borderRadius: 999, borderWidth: 1, borderColor: colors.border, backgroundColor: colors.surfaceAlt,
+                        }}
+                      >
+                        <Ionicons name="people-outline" size={12} color={colors.textSecondary} />
+                        <Text style={{ color: colors.textSecondary, fontSize: 11, fontWeight: '600' }}>
+                          {lead.team_lead_name ? `Team: ${lead.team_lead_name}` : 'Admin pool'}
+                        </Text>
+                      </View>
+                    ) : null}
                   </View>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                  {isAdmin(userRole) && (
+                  {canDelete && (
                     <Pressable
                       testID="lead-delete-btn"
                       onPress={() => setShowDeleteConfirm(true)}
@@ -684,8 +719,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                   )}
                 </View>
 
-                {/* Assign to Employee — Admin only */}
-                {isAdmin(userRole) && (
+                {/* Assign to Employee — admin (anyone) or Team Lead (own team only) */}
+                {canAssignEmployee && (
                   <View style={styles.block}>
                     <Text style={[styles.blockTitle, { color: '#8B5CF6' }]}>
                       {lead.stage === 'broker' ? 'ACTIVATE FROM BROKER POOL' : 'ASSIGN TO EMPLOYEE'}
@@ -763,6 +798,8 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                           if (!q) return true;
                           return String(emp.name || '').toLowerCase().includes(q)
                             || String(emp.role || '').toLowerCase().includes(q)
+                            || roleLabel(emp.role).toLowerCase().includes(q)
+                            || String(emp.team_lead_name || '').toLowerCase().includes(q)
                             || String(emp.department || '').toLowerCase().includes(q);
                         }).map((emp: any) => (
                           <Pressable
@@ -780,7 +817,13 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             </View>
                             <View style={{ flex: 1 }}>
                               <Text style={{ color: colors.text, fontSize: 13, fontWeight: '500' }}>{emp.name}</Text>
-                              <Text style={{ color: colors.textMuted, fontSize: 11 }}>{emp.role} · {emp.department || emp.role}</Text>
+                              <Text style={{ color: colors.textMuted, fontSize: 11 }}>
+                                {roleLabel(emp.role)} · {viewerIsAdmin
+                                  ? (normalizeRole(emp.role) === 'team_lead'
+                                    ? 'Leads own team'
+                                    : (emp.team_lead_name ? `Team: ${emp.team_lead_name}` : 'No team'))
+                                  : (emp.department || roleLabel(emp.role))}
+                              </Text>
                             </View>
                             {emp.employee_id === lead.assigned_to && (
                               <Ionicons name="checkmark-circle" size={18} color="#8B5CF6" />
@@ -909,7 +952,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                 <View style={styles.block}>
                   <Text style={[styles.blockTitle, { color: colors.textSecondary }]}>REMARKS / NOTES</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                    Any team member can edit — telecaller, sales, booking, manager
+                    Any team member can edit — telecaller, sales, booking, Team Lead
                   </Text>
                   <EditableMultiline
                     testID="lead-remarks-input"
@@ -947,7 +990,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                     {editingNoteId ? 'EDIT CALL / VISIT NOTE' : 'ADD CALL / VISIT NOTE'}
                   </Text>
                   <Text style={{ color: colors.textMuted, fontSize: 11, marginTop: 2 }}>
-                    Type or edit anytime · any employee or manager · tap timeline note to switch
+                    Type or edit anytime · any employee or Team Lead · tap timeline note to switch
                   </Text>
                   <EditableMultiline
                     testID="lead-note-input"
@@ -1082,7 +1125,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             busy={busy === 'follow_up'}
                             color="#F59E0B"
                           />
-                          {(userRole === 'admin' || userRole === 'manager' || userRole === 'telecaller' || userRole === 'sales_executive' || userRole === 'site_visit') && (
+                          {(userRole === 'admin' || userRole === 'team_lead' || userRole === 'telecaller' || userRole === 'sales_executive' || userRole === 'site_visit') && (
                             <SubActionBtn
                               label="Assign Site Visitor"
                               sub={
@@ -1200,7 +1243,7 @@ export function LeadDetailModal({ leadId, visible, onClose, onChanged, userRole,
                             busy={busy === 'follow_up'}
                             color={colors.info}
                           />
-                          {(userRole === 'admin' || userRole === 'manager' || userRole === 'sales_executive' || userRole === 'site_visit') ? (
+                          {(userRole === 'admin' || userRole === 'team_lead' || userRole === 'sales_executive' || userRole === 'site_visit') ? (
                             <>
                               <SubActionBtn 
                                 label="Ready for Booking" 

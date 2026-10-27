@@ -8,7 +8,7 @@ import { Badge } from '../../src/components/Badge';
 import { CardActionMenu } from '../../src/components/CardActionMenu';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/auth/AuthContext';
-import { canViewBookingFinance, canAddBookingManualLead } from '../../src/lib/constants';
+import { canViewBookingFinance, canAddBookingManualLead, isSupervisor, normalizeRole } from '../../src/lib/constants';
 import { SearchableSelect } from '../../src/components/SearchableSelect';
 import { RegistrationReceiptModal } from '../../src/components/RegistrationReceiptModal';
 import { AddBookingLeadModal } from '../../src/components/AddBookingLeadModal';
@@ -35,7 +35,7 @@ function leadInBookingQueue(lead: any) {
 
 /** Booking team sees all records — hot leads stay assigned to telecaller. */
 function seesAllBookings(role?: string | null) {
-  return role === 'admin' || role === 'manager' || role === 'booking';
+  return isSupervisor(role) || normalizeRole(role) === 'booking';
 }
 
 const AGREEMENT_COLOR: Record<string, string> = { pending: '#D97706', signed: '#059669', cancelled: '#E11D48' };

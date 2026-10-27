@@ -18,8 +18,12 @@ Public Enquiry -> Telecaller -> Site Visit -> Booking -> Loan -> Closed
 
 Main users:
 
-- Admin: sees everything, employees, analytics, tracking, all leads.
-- Manager: management view with reduced revenue visibility.
+- Admin: sees everything, employees, analytics, tracking, all leads. Every new
+  lead lands in the admin pool; the admin routes it to a Team Lead.
+- Team Lead (formerly the single "Manager"): any number of them, each covering
+  regions (Virar, Vasai, Nallasopara, Nagpur, ...) and leading their own
+  employees. Sees and assigns only their own team's leads. Full design and API:
+  [`docs/TEAM_LEADS.md`](./docs/TEAM_LEADS.md).
 - Telecaller: works new/assigned leads.
 - Site visit team: schedules/completes visits.
 - Booking team: manages token, agreement, brokerage, registration states.
@@ -181,6 +185,16 @@ Main backend route groups:
 - Templates/campaigns: `/api/templates`, `/api/campaigns`
 - Stats/activity: `/api/stats/dashboard`, `/api/stats/dashboard/graph`, `/api/stats/leads-by-source`, `/api/stats/me`, `/api/stats/employees`, `/api/activities`
 
+Team Lead hierarchy (see `docs/TEAM_LEADS.md`):
+
+```text
+backend/app/team_scope.py     # Lead ownership rule (admin pool -> team lead -> employee)
+                              # and per-request team scoping for Team Lead logins
+legacy_core.py sections:      # ---- Teams, Regions & Lead Exports ----
+                              # /teams/*, /regions, /exports/leads/*
+supabase/TEAM_LEADS_AND_EXPORTS.sql   # run once (also inside SCHEMA_MASTER.sql)
+```
+
 ## 6. Frontend Code Map
 
 Frontend routing is file-based through Expo Router.
@@ -212,6 +226,8 @@ frontend/app/(app)/visits.tsx
 frontend/app/(app)/bookings.tsx
 frontend/app/(app)/loans.tsx
 frontend/app/(app)/employees.tsx
+frontend/app/(app)/teams.tsx            # Teams & Regions (admin): team leads, members, transfer, regions
+frontend/app/(app)/export-leads.tsx     # Export Leads: monthly per-day counts + Excel + stored history
 frontend/app/(app)/negative-leads.tsx
 frontend/app/(app)/whatsapp.tsx
 ```
