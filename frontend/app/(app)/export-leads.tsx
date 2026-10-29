@@ -5,9 +5,10 @@ import { TopBar } from '../../src/components/TopBar';
 import { StatCard } from '../../src/components/StatCard';
 import { EmptyState } from '../../src/components/EmptyState';
 import { Badge } from '../../src/components/Badge';
+import { DatePickerField, formatDateLabel, todayIsoDate } from '../../src/components/DatePickerField';
 import { useTheme } from '../../src/theme/ThemeContext';
 import { useAuth } from '../../src/auth/AuthContext';
-import { api, downloadMonthlyLeadsExport, downloadStoredLeadsExport } from '../../src/lib/api';
+import { api, downloadLeadsExcel, downloadMonthlyLeadsExport, downloadStoredLeadsExport } from '../../src/lib/api';
 import { isAdminRole, isSupervisor, isTeamLead } from '../../src/lib/constants';
 
 // ---- API shapes (docs/TEAM_LEADS.md §4 "Lead exports") ----
@@ -159,6 +160,9 @@ export default function ExportLeadsScreen() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
+  const [customExporting, setCustomExporting] = useState(false);
   const [notice, setNotice] = useState<ExportNotice>(null);
   const [historyBusy, setHistoryBusy] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
@@ -222,6 +226,39 @@ export default function ExportLeadsScreen() {
     } catch (e: any) {
       setNotice({ kind: 'error', text: await errorDetail(e, 'Export failed.') });
     } finally { setExporting(false); }
+  };
+
+  const runCustomExport = async (allData = false) => {
+    if (customExporting) return;
+    if (!isWeb) {
+      setNotice({ kind: 'warn', text: 'Excel download works on the web app. Open the CRM in a browser to export.' });
+      return;
+    }
+    if (!allData && customFrom && customTo && customFrom > customTo) {
+      setNotice({ kind: 'error', text: 'From date must be on or before the To date.' });
+      return;
+    }
+
+    setCustomExporting(true);
+    setNotice(null);
+    try {
+      const params: Record<string, string> = {};
+      if (!allData) {
+        if (customFrom) params.date_from = customFrom;
+        if (customTo) params.date_to = customTo;
+        else if (customFrom) params.date_to = todayIsoDate();
+      }
+
+      await downloadLeadsExcel(allData ? {} : params);
+      const rangeText = allData || (!customFrom && !customTo)
+        ? 'All data'
+        : `${formatDateLabel(customFrom) || 'Start'} → ${formatDateLabel(customTo) || 'Today'}`;
+      setNotice({ kind: 'ok', text: allData ? 'Downloaded all leads to Excel.' : `Downloaded custom range ${rangeText}.` });
+      setCustomFrom('');
+      setCustomTo('');
+    } catch (e: any) {
+      setNotice({ kind: 'error', text: await errorDetail(e, 'Custom export failed.') });
+    } finally { setCustomExporting(false); }
   };
 
   const downloadHistory = async (row: HistoryRow) => {
@@ -329,6 +366,57 @@ export default function ExportLeadsScreen() {
           <Pressable onPress={() => load(month)} hitSlop={10} accessibilityLabel="Refresh" testID="export-refresh">
             <Ionicons name="refresh" size={18} color={colors.primary} />
           </Pressable>
+        </View>
+
+        <View style={[styles.rangeCard, { borderColor: colors.border, backgroundColor: colors.surface }]}> 
+          <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, marginBottom: 12 }}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.cardTitle, { color: colors.text }]}>Custom date range</Text>
+              <Text style={{ color: colors.textMuted, fontSize: 12, marginTop: 2 }}>
+                {customFrom || customTo ? `${formatDateLabel(customFrom) || 'Start'} → ${formatDateLabel(customTo) || 'Today'}` : 'Download any date range or all data'}
+              </Text>
+            </View>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 12, flexWrap: 'wrap' }}>
+            <View style={{ flex: 1, minWidth: 180 }}>
+              <DatePickerField
+                label="FROM DATE"
+                value={customFrom}
+                onChange={setCustomFrom}
+                colors={colors}
+                testID="export-custom-from"
+              />
+            </View>
+            <View style={{ flex: 1, minWidth: 180 }}>
+              <DatePickerField
+                label="TO DATE"
+                value={customTo}
+                onChange={setCustomTo}
+                colors={colors}
+                testID="export-custom-to"
+              />
+            </View>
+          </View>
+
+          <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginTop: 12 }}>
+            <Pressable
+              onPress={() => runCustomExport(false)}
+              disabled={customExporting}
+              style={[styles.primary, { backgroundColor: colors.primary, opacity: customExporting ? 0.7 : 1 }]}
+            >
+              {customExporting ? <ActivityIndicator size="small" color="#fff" /> : <Ionicons name="calendar-outline" size={14} color="#fff" />}
+              <Text style={styles.primaryText}>{customExporting ? 'Preparing Excel…' : 'Export selected range'}</Text>
+            </Pressable>
+            <Pressable
+              onPress={() => runCustomExport(true)}
+              disabled={customExporting}
+              style={[styles.outlineBtnSm, { borderColor: colors.primary, opacity: customExporting ? 0.7 : 1 }]}
+            >
+              <Ionicons name="folder-open-outline" size={14} color={colors.primary} />
+              <Text style={{ color: colors.primary, fontWeight: '600', fontSize: 12 }}>All data</Text>
+            </Pressable>
+          </View>
         </View>
 
         {notice ? (
@@ -633,6 +721,7 @@ const styles = StyleSheet.create({
   platformTile: { flexGrow: 1, flexBasis: 150, borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12, gap: 6 },
   dot: { width: 8, height: 8, borderRadius: 4 },
   note: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 10, padding: 12 },
+  rangeCard: { borderWidth: 1, borderRadius: 12, padding: 16 },
   card: { borderWidth: 1, borderRadius: 12, overflow: 'hidden' },
   cardHead: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 12, paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1 },
   cardTitle: { fontSize: 15, fontWeight: '700' },
